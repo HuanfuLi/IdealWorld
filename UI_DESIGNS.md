@@ -1020,3 +1020,430 @@ How the top-level app frame wraps all pages.
 | **Artifacts** | A (File explorer) or B (Accordion) |
 | **Comparison** | Single design (no choice needed) |
 | **Settings** | Single design (no choice needed) |
+
+---
+
+## 12. Figma Make — Complete UI Generation Prompt
+
+The following prompt is designed for Figma Make (or similar AI UI generation tools) to produce a full, high-fidelity design system and screen set for Ideal World. Copy the entire block below into the Figma Make prompt field.
+
+---
+
+### Prompt
+
+```
+Design a complete desktop web application called "Ideal World" — a multi-agent society simulation platform. The user designs hypothetical societies, watches AI agents simulate them, and reviews the results. The app runs locally and is accessed via browser at 1440px+ width.
+
+===== VISUAL STYLE =====
+
+Theme: Dark mode primary with a sophisticated, analytical feel — like a mission control dashboard crossed with a research notebook. Think Bloomberg Terminal meets Notion.
+
+Color palette:
+- Background: very dark blue-gray (#0F1117)
+- Surface/card: slightly lighter blue-gray (#1A1D27)
+- Surface elevated (modals, dropdowns): (#232736)
+- Border: subtle gray (#2E3347)
+- Primary accent: warm amber/gold (#F0A030) — used for buttons, active states, progress bars
+- Secondary accent: soft teal (#3ECFAF) — used for health indicators, success states
+- Text primary: off-white (#E8E9ED)
+- Text secondary: muted gray (#8B8FA3)
+- Text on accent: dark (#1A1D27)
+- Danger/death: muted red (#E05252)
+- Warning: amber (#E0A030)
+- Agent status colors: green (#3ECF8E) for healthy, yellow (#F0C030) for struggling, red (#E05252) for critical, gray (#555) for dead
+
+Typography:
+- Headings: Inter or Geist Sans, semibold
+- Body: Inter or Geist Sans, regular, 14px base
+- Monospace (stats, data): JetBrains Mono or Geist Mono
+- Chat messages: 15px for readability
+
+Border radius: 8px for cards, 6px for inputs, 20px for chips/badges
+Spacing: 8px base grid
+
+General rules:
+- Clean, spacious layouts with generous padding (24px on panels)
+- Cards have subtle 1px borders, no heavy shadows
+- Interactive elements have hover states (slight brightness increase)
+- Amber accent for primary actions, outline style for secondary actions
+- Icons: Lucide icon set (outlined, 20px default)
+
+===== GLOBAL SHELL =====
+
+The app uses a collapsible left sidebar navigation:
+
+Collapsed state (default, 48px wide):
+- Top: app logo diamond icon (◆) in amber
+- Below: icon-only nav items stacked vertically — Home (house), Settings (gear)
+- Separator line
+- When inside a session: numbered stage indicators (①②③④⑤) plus a document icon (📄 for artifacts)
+- Active stage has amber background highlight
+- Hover on any icon shows a tooltip with the label
+
+Expanded state (220px wide, triggered by hovering or clicking the logo):
+- Logo + "Ideal World" text header
+- Full text labels next to icons: "Home", "Settings"
+- Session section with session name in bold
+- Stage list with names: "Idea Input", "Brainstorm", "Design", "Simulation", "Reflection", "Review", "Artifacts"
+- Active stage has amber left border + bold text
+- Quick stats at bottom: "47 alive · Iter 12/20"
+
+Main content area fills remaining width. No top navbar — the sidebar handles all navigation.
+
+===== SCREEN 1: HOME PAGE =====
+
+Route: /
+
+Header area:
+- Large title "Your Societies" (24px, semibold) left-aligned
+- Right side: two buttons — "+ New Session" (amber filled) and "Compare Sessions" (outline, disabled if <2 completed sessions)
+
+Below: responsive card grid (3 columns at 1440px, 2 at 1024px).
+
+Each session card:
+- Card background: surface color with 1px border
+- Top: session name (18px, semibold, white)
+- Below name: seed idea text (14px, secondary color, 2 lines max, truncated with ellipsis)
+- Bottom row: three info pills — "47 agents" · "20 iterations" · stage badge
+- Stage badge is a colored chip: "Completed" (green), "Simulating 8/15" (amber), "Designing" (teal)
+- Date below the pills in secondary text
+- Hover state: border brightens to amber
+- Overflow menu (⋮) top-right of card: Resume, Export, Delete (red text)
+
+Last card in grid is a dashed-border "+ New Session" placeholder card with a large + icon in the center.
+
+Empty state (no sessions): centered illustration (abstract wireframe city), heading "No societies yet", subtext "Create your first society simulation", prominent "+ New Session" button.
+
+===== SCREEN 2: IDEA INPUT (Stage 0) =====
+
+Route: /session/new
+
+Centered layout, max-width 640px, vertically centered on page.
+
+- App logo (◆) at top, large (40px)
+- Heading: "Describe the society you want to simulate." (20px, semibold)
+- Subtext: "Be as detailed or as brief as you like. We'll flesh it out together." (14px, secondary)
+- Large textarea: 640px wide, 160px tall, surface background, 1px border, placeholder text in secondary color
+- Below textarea: character count "4/10 characters" (secondary text, turns amber when valid)
+- Below that: 4 clickable example chips in a 2×2 grid:
+  - "Communism — shared resources, central council"
+  - "Libertarian — no government, free market"
+  - "AI Technocracy — machines make policy"
+  - "Medieval Feudal — lords, knights, peasants"
+  Each chip: surface-elevated background, 1px border, 6px radius, hover brightens border to amber. Clicking fills the textarea.
+- Submit button: "Begin Brainstorming →" (amber filled, full width of textarea, disabled and dimmed when <10 chars)
+
+===== SCREEN 3: BRAINSTORMING CHAT (Stage 1A) =====
+
+Route: /session/:id/brainstorm
+
+Full-width chat layout:
+
+Chat area (scrollable, vertically fills the space between header and input):
+- Messages alternate between Central Agent (left-aligned) and User (right-aligned)
+- Central Agent messages: small robot icon (🤖) + "Central Agent" label in teal above the bubble. Bubble background: surface color, left-aligned, max-width 80%.
+- User messages: "You" label above bubble. Bubble background: amber at 15% opacity, right-aligned, max-width 70%.
+- Markdown rendering inside bubbles (numbered lists, bold, etc.)
+- Timestamps in secondary text below each bubble
+
+Bottom bar (fixed):
+- Input area: full-width textarea (auto-grows to 3 lines max), surface background, 1px border
+- Right of input: "Send" button (amber, icon only — arrow-up icon)
+- When Central Agent has suggested proceeding: "Start Design →" button appears to the right of Send (amber filled, slightly larger)
+
+Below the input (always visible):
+- Completeness checklist as a horizontal bar of mini-badges:
+  "✅ Governance  ✅ Economy  ◻ Legal  ◻ Culture  ◻ Conflict  ◻ Environment  ◻ External"
+  Completed items: teal text + checkmark. Incomplete: secondary text + empty box.
+  This bar is 12px font, compact.
+
+If user clicks "Start Design" before all checklist items are complete, show a modal:
+- Title: "Are you sure?"
+- Body: "The Central Agent hasn't covered all topics yet. Proceeding may result in a less detailed society."
+- Buttons: "Go Back" (outline) and "Proceed Anyway" (amber)
+
+===== SCREEN 4: DESIGN REVIEW (Stage 1B generating) =====
+
+Route: /session/:id/design
+
+While generating, show a progress page:
+- Centered, max-width 800px
+- Heading: "Designing your society..."
+- Vertical stepper with 5 steps:
+  1. "Creating society overview" — ✅ completed (teal)
+  2. "Drafting law document" — ⏳ in progress (amber, pulsing)
+  3. "Planning agent roles" — ◻ pending (gray)
+  4. "Writing agent backgrounds" — ◻ pending
+  5. "Assigning initial stats" — ◻ pending
+- Below the current step: a subtle loading animation (amber dots pulsing)
+- Each completed step shows a brief one-line summary in secondary text
+
+===== SCREEN 5: DESIGN REVIEW (Stage 1B complete) + REFINEMENT (Stage 1C) =====
+
+Route: /session/:id/design (review) then /session/:id/refine
+
+Side-by-side layout: documents left (55%), refinement chat right (45%).
+
+Left panel — tabbed document viewer:
+- Three tabs at top: "Overview", "Agent Roster", "Law Document"
+- Active tab: amber underline, white text. Inactive: secondary text.
+- Tab content fills the panel, scrollable independently.
+
+  Overview tab:
+  - Rendered markdown of society overview
+  - Time scale callout box at top: "⏱ Each iteration = 1 month" in a teal-bordered card
+
+  Agent Roster tab:
+  - Header: "Agent Roster (47 agents)" with a search input (🔍) right-aligned
+  - Table with columns: Name, Role, Background (truncated, hover to see full), W (wealth), H (health), Ha (happiness)
+  - Stats columns show numbers with color coding: green for >66, yellow for 34-66, red for <34
+  - Rows have subtle hover highlight
+  - Pagination at bottom: "Page 1 of 5  [<] [1] [2] [3] [>]"
+
+  Law Document tab:
+  - Rendered markdown of the law document
+  - Section headings, numbered articles, clear structure
+
+Right panel — refinement chat:
+- Header: "Refine Your Design" with a subtle divider
+- Chat area (same style as brainstorming chat but in a narrower column)
+- Initial message from Central Agent: "Here's your society. Ask me to make changes — for example, 'change Li Wei to a merchant' or 'add 10 more farmers.' When you're ready, set iterations and start."
+- Input at bottom of right panel
+
+Below both panels (full width):
+- Divider line
+- Row with: checkbox "☑ I have reviewed the society design" + number input "Iterations: [10]" (labeled, 1-100) + "Start Simulation →" button (amber, disabled until checkbox checked)
+
+===== SCREEN 6: SIMULATION DASHBOARD (Stage 2) =====
+
+Route: /session/:id/simulate
+
+Two-column layout: live narrative feed left (55%), dashboard panels right (45%).
+
+Top bar (full width):
+- "Iteration 12 of 20" label (18px, semibold)
+- Progress bar: full width, amber fill, percentage label
+- Right side: "~8 min remaining" estimate + [⏸ Pause] button (outline) + [⏹ Abort] button (outline, red text)
+
+Left column — Live Feed:
+- Scrollable list of iteration summary cards, newest at top
+- Each card:
+  - Header: "Iteration 12" (semibold) + timestamp (secondary)
+  - Body: narrative text (markdown rendered, 14px)
+  - "Key events" section at bottom: bulleted list, slightly smaller text
+  - Card background: surface, 1px border, 8px radius
+  - Cards separated by 12px gaps
+  - Latest card has a subtle amber left border to indicate "most recent"
+
+Right column — Dashboard panels (stacked):
+
+Panel 1 — Statistics (3 mini line charts in a row):
+  - Wealth trend (amber line), Health trend (teal line), Happiness trend (purple line)
+  - Each chart: 200×100px, dark background, thin axis lines, current value as large number below
+  - X-axis: iteration numbers. Y-axis: 0-100.
+  - Below charts: "Avg W: 52 · Avg H: 71 · Avg Ha: 58" in a single row
+
+Panel 2 — Agent Grid:
+  - Header: "Agents (47 alive · 2 dead · 1 incapacitated)"
+  - Grid of small tiles (6-8 per row), each tile:
+    - 60×50px, surface background
+    - Circle indicator (10px): green/yellow/red/gray based on composite health
+    - Agent name (12px, truncated)
+    - On hover: tooltip with "Li Wei · Farmer · W:40 H:80 Ha:60"
+  - Dead agents at the end, grayed out with a ⚫ indicator
+  - Clicking an agent opens a slide-over panel from the right:
+    - Agent name, role, background
+    - Stats over time (mini chart)
+    - Iteration-by-iteration log: "Iter 1: Intended... → Resolved..."
+
+Panel 3 — Lifecycle Events:
+  - Compact log, most recent at top:
+    - "Iter 12: Hu Qiang fined 15 wealth for smuggling"
+    - "Iter 9: Qian Bo died — prolonged illness"
+    - "Iter 7: Hu Qiang role changed: Farmer → Trader"
+  - Each event has a colored icon: skull for death (red), baby for birth (teal), arrows for role change (amber)
+
+===== SCREEN 7: REFLECTION SUMMARY (Stage 3) =====
+
+Route: /session/:id/reflect
+
+Two-panel split: evaluation report left (50%), agent reflections right (50%).
+
+Left panel — Society Evaluation:
+- Heading: "Society Evaluation" (20px, semibold)
+- Rendered markdown report with sections:
+  - "Overall Verdict" — 2-3 paragraph summary
+  - "Strengths" — bulleted list with teal bullet markers
+  - "Weaknesses" — bulleted list with red bullet markers
+  - "Consensus Points" / "Points of Contention" / "Perspective Shifts" / "Emergent Insights"
+- At bottom: final statistics row — 4 stat cards:
+  - "Wealth: 50→48" with a red down-arrow
+  - "Health: 75→68" with a red down-arrow
+  - "Happiness: 60→62" with a green up-arrow
+  - "Gini: 0.31" with a neutral indicator
+
+Right panel — Agent Reflections:
+- Header: "Agent Reflections (47)" with a search input and a role filter dropdown
+- Scrollable list of agent reflection cards:
+  - Each card: agent name (bold) + role (secondary) + status indicator
+  - Two tabs within each card: "Personal" (Pass 1) and "Post-Briefing" (Pass 2)
+  - Card body: rendered text of the active pass (14px, max 6 lines, expandable)
+  - Collapsed by default — click to expand full text
+  - Summary line when collapsed: first sentence of the reflection in italics
+
+Bottom bar (full width):
+- Two buttons: "Review Agents →" (amber filled) and "View Artifacts" (outline)
+
+===== SCREEN 8: AGENT REVIEW & Q&A (Stage 4) =====
+
+Route: /session/:id/review
+
+Sidebar + chat layout:
+
+Left sidebar (240px):
+- Header: "Select an Agent"
+- Search input at top
+
+- Section: "Central Agent" — single item, teal accent, robot icon
+- Section: "Alive (45)" — scrollable list of agents
+  - Each item: status dot (green/yellow/red) + agent name + role in secondary text
+  - Active agent: amber left border + bold name
+  - Hover: background brightens
+- Section: "Dead (2)" — at bottom, separated by divider
+  - Each item: gray dot + agent name (strikethrough style or dimmed) + role
+
+Right area — Chat:
+- Header bar: agent avatar circle (colored by status) + "Li Wei" (18px bold) + "Farmer" (secondary) + stats "W:40 H:80 Ha:60"
+- Chat area: same bubble style as brainstorming (agent on left, user on right)
+- Agent bubbles use the agent's status color at 10% opacity as background
+- Input at bottom: textarea + Send button
+
+Bottom-right: "End Session ✓" button (outline, positioned below the chat input)
+
+===== SCREEN 9: ARTIFACTS PAGE =====
+
+Route: /session/:id/artifacts
+
+File explorer layout:
+
+Left panel (250px) — Document Tree:
+- Header: "Documents" with a search icon
+- Tree structure grouped by stage:
+  - "▼ Stage 1 — Design" (collapsible group header, semibold)
+    - 📄 Brainstorming Transcript
+    - 📄 Society Overview
+    - 📄 Agent Roster
+    - 📄 Virtual Law Document
+    - 📄 Refinement Transcript
+  - "▶ Stage 2 — Simulation" (collapsed)
+    - 20 iteration summaries + Final Report
+  - "▶ Stage 3 — Reflections"
+    - Agent reflections (grouped) + Society Evaluation
+  - "▶ Stage 4 — Q&A"
+    - Q&A transcripts per agent
+- Selected item: amber text + amber left border
+- Icons: document icon (📄) for each item
+
+Right panel — Viewer:
+- Header: document title (18px, semibold) + "Generated at: Stage 1B" (secondary)
+- Toolbar: [📋 Copy] [📥 Export ▼] buttons right-aligned. Export dropdown: "Markdown", "PDF"
+- Body: full markdown rendering with proper heading hierarchy, tables, lists
+- Scrollable independently from the tree
+
+Search overlay (triggered by 🔍 in tree header):
+- Full-text search input at top of tree panel
+- Results highlight matching documents, with match count badges
+
+===== SCREEN 10: CROSS-SESSION COMPARISON =====
+
+Route: /compare
+
+Top section — Session Selector:
+- Heading: "Compare Societies" (20px, semibold)
+- Checklist of completed sessions, each row:
+  - Checkbox + session name + seed idea (truncated) + "47 agents, 20 iterations"
+  - Incomplete sessions shown but disabled with "In progress" label
+- "Generate Comparison →" button (amber, disabled until 2+ selected)
+
+Middle section — Comparison Report (appears after generation):
+- Side-by-side stat table:
+  - Column per session, rows: Avg Wealth, Avg Health, Avg Happiness, Gini, Deaths, Survival %
+  - Highest value in each row highlighted with teal
+  - Lowest value in each row highlighted with red (subtle background)
+- Analysis text below: rendered markdown report
+- "Read full analysis ▼" expand toggle
+
+Bottom section — Follow-up Chat:
+- Compact chat interface (same components as other chats)
+- "Ask about the comparison..." placeholder
+
+===== SCREEN 11: SETTINGS =====
+
+Route: /settings
+
+Centered layout, max-width 720px.
+
+- Heading: "Settings" (24px, semibold)
+
+Section: "LLM Provider"
+- Three radio cards (full width, stacked):
+  - "Local LLM (LM Studio / Ollama)" — icon: computer. Subtext: "Free, private, runs on your GPU"
+  - "Claude API (Anthropic)" — icon: sparkles. Subtext: "Cloud-hosted, requires API key"
+  - "OpenAI-Compatible API" — icon: plug. Subtext: "Any provider with OpenAI-compatible endpoint"
+  Selected card: amber border. Unselected: default border.
+
+Section: "Provider Settings" (changes based on selection):
+  For Claude:
+  - API Key: password input with show/hide toggle
+  For Local:
+  - Endpoint URL: text input, default "http://localhost:1234/v1"
+  - Note: "Concurrency limited to 1 for local LLMs. 100 agents × 20 iterations ≈ 3 hours."
+
+Section: "Model Configuration"
+- Two dropdowns side by side:
+  - "Central Agent Model": dropdown of available models
+  - "Citizen Agent Model": dropdown of available models
+
+Section: "Performance"
+- "Max Concurrent Requests": number input (1-50)
+
+Action bar:
+- "Test Connection" button (outline) — shows result inline: "✅ Connected" (teal) or "❌ Failed: connection refused" (red)
+- "Save Settings" button (amber filled)
+
+===== ADDITIONAL COMPONENTS =====
+
+Confirm Dialog:
+- Centered modal overlay with dark backdrop (50% opacity)
+- Card: 400px wide, surface-elevated background
+- Title (semibold), body text, two buttons: Cancel (outline) + Confirm (amber or red for destructive)
+
+Loading states:
+- Skeleton shimmer effect on cards and text blocks while loading
+- Spinner: three amber dots pulsing in sequence
+
+Toast notifications:
+- Bottom-right corner, auto-dismiss after 5 seconds
+- Success: teal left border. Error: red left border. Info: amber left border.
+- Text + optional action link
+
+Empty states:
+- Centered in the content area
+- Subtle illustration or large icon (64px, secondary color)
+- Heading + subtext + optional action button
+
+===== RESPONSIVE BEHAVIOR =====
+
+The app is designed for desktop (1440px+). At narrower widths:
+- 1024-1440px: sidebar always collapsed, card grids go to 2 columns
+- Below 1024px: show a "Best viewed on desktop" banner. Layout still functional but not optimized.
+- All split panels at narrow widths: stack vertically (left panel on top, right below)
+
+===== DESIGN SYSTEM DELIVERABLES =====
+
+Please generate:
+1. A complete color and typography token sheet
+2. A component library page showing: buttons (filled, outline, disabled, danger), inputs (text, number, textarea, dropdown, checkbox, radio card), cards, badges/chips, chat bubbles, stat indicators, chart placeholders, modals, toasts
+3. All 11 screens listed above as full-fidelity desktop mockups at 1440×900px
+4. One additional screen: the agent slide-over panel (shown when clicking an agent in the simulation dashboard)
+```
