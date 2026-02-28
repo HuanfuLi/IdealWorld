@@ -38,20 +38,24 @@ This document describes the complete end-to-end user flow for Ideal World, a mul
                       │  → Ends with "Start Design"│
                       │  → Central Agent designs   │
                       │    agents, roles, law doc   │
+                      │  → User refines via chat   │
                       │  → User enters iteration # │
                       └────────────┬─────────────┘
                                    │
                       ┌────────────▼─────────────┐
                       │  STAGE 2: Simulation       │
-                      │  N iterations of agent     │
-                      │  actions + state summaries  │
+                      │  N iterations of:          │
+                      │  1. Agent intent phase      │
+                      │  2. Central Agent resolves  │
+                      │     + assigns stats         │
+                      │  3. State summary           │
                       └────────────┬─────────────┘
                                    │
                       ┌────────────▼─────────────┐
                       │  STAGE 3: Reflection       │
-                      │  Each agent reflects →     │
-                      │  Central Agent summarizes   │
-                      │  pros/cons of the society   │
+                      │  Pass 1: Personal-only     │
+                      │  Pass 2: Post-briefing     │
+                      │  Central Agent evaluates    │
                       └────────────┬─────────────┘
                                    │
                       ┌────────────▼─────────────┐
@@ -82,7 +86,7 @@ When the user opens the application, they see the **Home Page** containing:
 | **New Session Button** | Starts a fresh session beginning at Stage 0. |
 | **Resume Button** (per session) | Returns the user to wherever they left off in that session. If the session is fully completed (past Stage 3), the user enters Stage 4 (Agent Review) directly. |
 | **Compare Sessions Button** | Enabled when 2+ completed sessions exist. Initiates the cross-session comparison flow (see Section 9). |
-| **Delete Session Button** (per session) | Removes a session from local storage after confirmation. |
+| **Delete Session Button** (per session) | Removes a session from the database after confirmation. |
 
 ### 2.2 Session State
 
@@ -90,7 +94,7 @@ Every session has a persisted state object that tracks:
 
 - Unique session ID
 - Session name (auto-generated or user-provided)
-- Current stage (`0`, `1-brainstorm`, `1-design`, `2`, `3`, `4-review`, `completed`)
+- Current stage (`0`, `1-brainstorm`, `1-design`, `1-refine`, `2`, `3`, `4-review`, `completed`)
 - All generated documents (see Artifacts Page, Section 8)
 - All agent definitions and their data
 - Conversation history for each stage
@@ -122,7 +126,7 @@ Every session has a persisted state object that tracks:
 
 ## 4. Stage 1 — Society Brainstorming & Design
 
-Stage 1 has two distinct phases: **Brainstorming** (interactive conversation) and **Design** (automated generation).
+Stage 1 has three distinct phases: **Brainstorming** (interactive conversation), **Design** (automated generation), and **Refinement** (chat-based editing).
 
 ### 4.1 Phase A — Brainstorming (Interactive Conversation)
 
@@ -172,7 +176,17 @@ Stage 1 has two distinct phases: **Brainstorming** (interactive conversation) an
 1. After the user clicks **Start Design**, the chat shows a progress indicator: *"Designing your society..."*
 2. The Central Agent generates the following artifacts (displayed progressively as they are created):
 
-   **a. Agent Roster**
+   **a. Society Overview Document**
+   - A summary document describing the society at a high level: its philosophy, structure, key dynamics, and what the simulation aims to explore.
+   - Includes the **time scale**: the Central Agent determines how much in-world time each iteration represents (e.g., "1 iteration = 1 month") based on the society type and scale. This is stated clearly in the overview.
+
+   **b. Virtual Law Document**
+   - A comprehensive document that serves as the "constitution" or "law of the land" for the simulated society.
+   - Covers: governance rules, economic rules, social norms, penalties for violations, rights and obligations of each role, resource distribution mechanisms, and any special mechanics.
+   - Includes the **time scale** prominently so all agents share the same temporal frame.
+   - Written in clear, structured prose. This document is shared with every agent during simulation.
+
+   **c. Agent Roster**
    - Total number of agents (determined by the Central Agent based on the society's needs, typically 20–150).
    - Each agent has:
      - **Name:** A contextually appropriate name.
@@ -182,39 +196,50 @@ Stage 1 has two distinct phases: **Brainstorming** (interactive conversation) an
      - **Initial Health:** A numeric value (0–100 scale) representing physical well-being.
      - **Initial Happiness:** A numeric value (0–100 scale) representing psychological well-being.
 
-   **b. Virtual Law Document**
-   - A comprehensive document that serves as the "constitution" or "law of the land" for the simulated society.
-   - Covers: governance rules, economic rules, social norms, penalties for violations, rights and obligations of each role, resource distribution mechanisms, and any special mechanics.
-   - Written in clear, structured prose. This document is shared with every agent during simulation.
-
-   **c. Society Overview Document**
-   - A summary document describing the society at a high level: its philosophy, structure, key dynamics, and what the simulation aims to explore.
-
 3. Once generation completes, all documents are displayed for the user to review. The user sees:
    - The Society Overview at the top.
    - The full Agent Roster in a browsable table/list.
    - The Virtual Law Document in a scrollable panel.
-4. Below the generated content, a **number input** appears: *"How many iterations should the simulation run?"* with a default value of 10 and a range of 1–100.
-5. The user enters the desired iteration count and clicks **"Start Simulation"**.
+4. The system transitions to **Phase C — Refinement**.
+
+### 4.3 Phase C — Design Refinement (Chat-Based Editing)
+
+**Purpose:** The user can iteratively edit the generated design by chatting with the Central Agent before starting the simulation.
+
+#### User Experience
+
+1. After the design is displayed, a **refinement chat** appears below the generated content. The Central Agent says:
+
+   > *"Here's the society I've designed. You can ask me to make changes — for example, 'change Agent 5 to a merchant,' 'add 10 more farmers,' 'rewrite the trade section of the law,' or 'make the society more egalitarian.' When you're satisfied, set the number of iterations and click Start Simulation."*
+
+2. The user can request changes via natural language. The Central Agent regenerates only the affected parts:
+   - Changing a single agent's role/background: regenerates that agent's entry.
+   - Adding/removing agents: updates the roster and adjusts the overview if needed.
+   - Modifying the law: rewrites the relevant section.
+   - Broad changes ("make it more authoritarian"): may trigger regeneration of multiple documents.
+
+3. After each change, the updated documents are re-rendered in the review panels above.
+
+4. When satisfied, the user enters the **iteration count** (number input, default 10, range 1–100) and clicks **"Start Simulation"**.
 
 #### Validation
 
-- The user must review (scroll through) the generated content before the "Start Simulation" button becomes active, or at minimum acknowledge the design by clicking a confirmation checkbox: *"I have reviewed the society design."*
+- The user must confirm readiness by clicking a checkbox: *"I have reviewed the society design."*
 - The iteration count must be between 1 and 100.
 
 ---
 
 ## 5. Stage 2 — Simulation
 
-**Purpose:** The society runs for N iterations. In each iteration, every agent reads their personal state and the shared context, then acts. The Central Agent summarizes each iteration.
+**Purpose:** The society runs for N iterations. Each iteration uses a two-phase model: agents declare intentions, then the Central Agent resolves outcomes and assigns stats.
 
 ### 5.1 Iteration Loop
 
 For each iteration `i` (from 1 to N):
 
-#### Step A — Agent Action Phase
+#### Step A — Agent Intent Phase
 
-Each agent independently receives the following context and produces a response:
+Each agent independently receives context and produces **intentions** (not outcomes):
 
 **Agent Input (Iteration 1):**
 | Input | Description |
@@ -224,36 +249,45 @@ Each agent independently receives the following context and produces a response:
 | Current Health | Their numeric health value. |
 | Current Happiness | Their numeric happiness value. |
 | Virtual Law Document | The full law of the society. |
-| Instruction | *"Based on your background and the current state of the society, describe what actions you take in this period to improve your life. Consider your relationships with others, your economic activities, your engagement with governance, and any other relevant behaviors. Also state how your actions affect your wealth, health, and happiness (provide updated numbers)."* |
+| Time Scale | How much in-world time this iteration represents (e.g., "1 month"). |
+| Instruction | *"Based on your background and the current state of the society, describe what you INTEND to do in this period. State your goals, who you want to interact with, what activities you plan to pursue, and what you hope to achieve. Do NOT assign yourself new stat numbers — the Central Agent will determine outcomes based on all agents' actions."* |
 
 **Agent Input (Iteration 2+):**
 All of the above, plus:
 | Input | Description |
 |---|---|
-| Previous Iteration State Summary | The Central Agent's summary of what happened in the previous iteration. |
+| Previous Iteration State Summary | The Central Agent's summary of what happened in the previous iteration (including the agent's own resolved outcomes from last time). |
 
-**Agent Output:**
+**Agent Output (Intentions):**
 Each agent produces a structured response containing:
-- **Actions taken:** A narrative description of what they did during this iteration.
-- **Interactions:** Who they interacted with and how.
-- **Updated Wealth:** New wealth value (with justification for change).
-- **Updated Health:** New health value (with justification for change).
-- **Updated Happiness:** New happiness value (with justification for change).
-- **Internal thoughts:** What the agent is thinking or feeling (private, not shared with other agents but visible to user and Central Agent).
+- **Intended actions:** What they plan to do during this period.
+- **Desired interactions:** Who they want to interact with, and what kind of interaction (trade, collaborate, compete, petition, etc.).
+- **Goals:** What they hope to achieve in this period.
+- **Internal thoughts:** What the agent is thinking or feeling (private — not shared with other agents but visible to user and Central Agent).
 
-#### Step B — Central Agent Summary Phase
+#### Step B — Central Agent Resolution Phase
 
-After all agents have responded, the Central Agent receives all agent outputs and produces:
+After all agents have submitted their intentions, the Central Agent receives all intent declarations and performs **conflict resolution and outcome determination**:
 
-- **Iteration State Summary:** A detailed narrative of what happened during this iteration, including:
-  - Major events and trends.
-  - Notable individual actions and their ripple effects.
-  - Economic changes (aggregate wealth movement).
-  - Social dynamics (alliances, conflicts, cooperation).
-  - Law adherence and violations.
-  - Health and happiness trends across the population.
-  - Any emergent behaviors or unexpected outcomes.
-- **Statistics snapshot:** Aggregate numbers — average wealth, health, happiness; min/max values; distribution changes.
+1. **Match interactions:** If Agent A wants to trade with Agent B and Agent B wants to trade with Agent A, the trade happens. If Agent A wants to trade with Agent B but Agent B is busy with Agent C, the Central Agent narrates the outcome (A is rebuffed, or waits, etc.).
+2. **Resolve conflicts:** If Agent A wants to steal from Agent B while Agent B is trying to petition the government, the Central Agent determines what happens based on both agents' capabilities, the law, and narrative logic.
+3. **Assign stat changes:** The Central Agent determines each agent's new wealth, health, and happiness based on the resolved outcomes. This prevents self-inflation — agents never set their own numbers.
+4. **Manage lifecycle events:**
+   - **Death:** If an agent's health has been at 0 for 2+ consecutive iterations, the Central Agent may declare them dead. Dead agents are removed from future iterations.
+   - **Birth/immigration:** If the society's narrative calls for it (population drop, new roles needed), the Central Agent may introduce new agents with appropriate backgrounds.
+   - **Role change:** If an agent's actions over several iterations suggest a role shift (a farmer who has been trading for 5 iterations becomes a merchant), the Central Agent can update their role.
+5. **Produce the Iteration State Summary:** A detailed narrative including:
+   - Major events and trends.
+   - Notable individual actions and their ripple effects.
+   - How interactions were resolved (who traded with whom, who fought, who cooperated).
+   - Economic changes (aggregate wealth movement).
+   - Social dynamics (alliances, conflicts, cooperation).
+   - Law adherence and violations.
+   - Health and happiness trends across the population.
+   - Any lifecycle events (deaths, births, role changes).
+   - Any emergent behaviors or unexpected outcomes.
+   - **Per-agent stat updates** (each agent's new wealth, health, happiness with reasoning).
+6. **Statistics snapshot:** Aggregate numbers — average wealth, health, happiness; min/max values; distribution changes; population count.
 
 This summary becomes the "state record" for iteration `i` and is persisted.
 
@@ -262,9 +296,9 @@ This summary becomes the "state record" for iteration `i` and is persisted.
 1. The UI shows a **simulation dashboard** with:
    - A **progress bar** showing current iteration out of total.
    - A **live feed** that streams the Central Agent's iteration summaries as they complete.
-   - A **statistics panel** showing graphs of aggregate wealth, health, and happiness over completed iterations.
-   - An **agent grid** showing all agents with color-coded indicators for their current wealth/health/happiness.
-2. The user can click on any agent in the grid to see their individual action log for completed iterations.
+   - A **statistics panel** showing graphs of aggregate wealth, health, and happiness over completed iterations, plus population count.
+   - An **agent grid** showing all agents with color-coded indicators for their current wealth/health/happiness. Dead agents are grayed out. New agents appear with a highlight.
+2. The user can click on any agent in the grid to see their individual intent log and resolved outcomes for completed iterations.
 3. The user **cannot intervene** during the simulation — it runs to completion. However, they can pause the simulation and choose to abort (with confirmation), which saves progress up to the last completed iteration.
 4. If the user leaves mid-simulation (closes browser/tab), the session is saved at the last completed iteration. When they return, they can resume from where they left off.
 
@@ -277,6 +311,7 @@ When all N iterations are complete:
    - How the society evolved from its initial state to its final state.
    - Key turning points and inflection moments.
    - Overall trends in wealth, health, and happiness.
+   - Population changes (deaths, births, role shifts) and their impact.
    - Which roles/groups thrived and which struggled.
    - Emergent social phenomena (e.g., black markets, revolutions, cooperation patterns).
    - Whether the society's founding principles held up under pressure.
@@ -287,45 +322,62 @@ When all N iterations are complete:
 
 ## 6. Stage 3 — Reflection & Summary
 
-**Purpose:** Each agent reflects on the entire simulation, and the Central Agent synthesizes all reflections into a society-wide evaluation.
+**Purpose:** Each agent reflects on the entire simulation in two passes, and the Central Agent synthesizes all reflections into a society-wide evaluation.
 
-### 6.1 Individual Agent Reflections
+### 6.1 Individual Agent Reflections — Pass 1 (Personal Only)
 
-Each agent receives:
+Each agent receives **only their own experience** (not the Central Agent's Final State Report):
 
 | Input | Description |
 |---|---|
 | Background (System Prompt) | Their personal background. |
 | Final Wealth, Health, Happiness | Their ending stats. |
-| Final State Report | The Central Agent's full trajectory summary. |
-| Their own action log | Everything they did across all iterations. |
-| Instruction | *"The simulation is complete. Reflect on your experience: How did you fare in this society? Why did you behave the way you did? What worked for you and what didn't? What do you think of this form of society — its strengths, its flaws, and whether it is fair? Be honest and speak from your perspective."* |
+| Their own intent + outcome log | Everything they intended and what actually happened across all iterations. |
+| Instruction | *"The simulation is complete. Reflect on your experience using ONLY what you personally experienced. How did you fare? Why did you behave the way you did? What worked and what didn't? What do you think of this society — its strengths, its flaws, and whether it is fair? Be honest and speak from your own perspective."* |
 
-Each agent produces a **Reflection Document** containing:
+Each agent produces a **Personal Reflection** containing:
 - Personal outcome assessment (did they thrive or struggle, and why).
 - Behavioral justification (why they made the choices they made).
-- Critique of the society's structure (what was fair/unfair, what worked/failed).
-- Suggestions for improvement (what changes would make the society better).
+- Critique of the society's structure from their personal vantage point.
+- Suggestions for improvement.
 - Emotional response (how they "felt" about living in this society).
 
-### 6.2 Central Agent — Society Evaluation
+### 6.2 Individual Agent Reflections — Pass 2 (Post-Briefing)
 
-After all agent reflections are collected, the Central Agent produces the **Society Evaluation Report**:
+After Pass 1, each agent receives the **Final State Report** and can add a post-briefing addendum:
+
+| Input | Description |
+|---|---|
+| Their Pass 1 reflection | What they already wrote. |
+| Final State Report | The Central Agent's full trajectory summary. |
+| Instruction | *"You've now seen the full picture of what happened in the society beyond your personal experience. Does this change your perspective? Add any additional thoughts — were there things happening that you didn't know about? Do you feel differently about the society now that you see the bigger picture?"* |
+
+Each agent produces a **Post-Briefing Addendum** containing:
+- Reactions to information they didn't have during the simulation.
+- Revised opinions (if any) about the fairness or effectiveness of the society.
+- New insights gained from seeing the macro view.
+
+Both the Personal Reflection and Post-Briefing Addendum are stored as separate documents.
+
+### 6.3 Central Agent — Society Evaluation
+
+After all agent reflections (both passes) are collected, the Central Agent produces the **Society Evaluation Report**:
 
 - **Overall verdict:** A balanced assessment of the simulated society.
 - **Pros from agents' perspectives:** What agents liked, grouped by themes. Includes which roles/demographics saw benefits and why.
 - **Cons from agents' perspectives:** What agents criticized, grouped by themes. Includes which roles/demographics suffered and why.
 - **Consensus points:** Where most agents agreed.
 - **Points of contention:** Where agents disagreed strongly (often along role/class lines).
+- **Perspective shifts:** How agents' views changed between Pass 1 (personal-only) and Pass 2 (post-briefing). Notes cases where seeing the full picture reinforced or reversed an agent's initial opinion.
 - **Emergent insights:** Unexpected lessons from the simulation.
 - **Comparison to real-world analogues:** If applicable, how the simulated outcomes compare to historical examples.
 
-### 6.3 User Experience
+### 6.4 User Experience
 
 1. The user sees a summary page with:
    - The Society Evaluation Report prominently displayed.
-   - A list of all agents with links to their individual reflections.
-   - Key statistics and visualizations (final distribution of wealth/health/happiness, trajectory charts).
+   - A list of all agents with links to their individual reflections (both passes).
+   - Key statistics and visualizations (final distribution of wealth/health/happiness, trajectory charts, population changes).
 2. After reading, the user can proceed to Stage 4 by clicking **"Review Agents"** or go directly to the Artifacts Page.
 
 ---
@@ -336,16 +388,17 @@ After all agent reflections are collected, the Central Agent produces the **Soci
 
 ### 7.1 User Experience
 
-1. The interface shows an **agent selection panel** listing all agents (with the Central Agent at the top).
+1. The interface shows an **agent selection panel** listing all agents (with the Central Agent at the top). Dead agents are listed separately at the bottom with a marker.
 2. The user selects an agent to chat with. A chat window opens.
 3. The selected agent responds in character, using:
    - Their original background/personality.
-   - Their memory of all actions they took during the simulation.
-   - Their reflection document.
+   - Their memory of all intents and resolved outcomes during the simulation.
+   - Both passes of their reflection document.
    - The Final State Report and Society Evaluation (for context).
 4. Example questions a user might ask:
    - To a farmer: *"Why did you start trading illegally in iteration 5?"*
    - To a bureaucrat: *"Do you think the resource distribution was fair?"*
+   - To a dead agent: *"What could have saved you?"*
    - To the Central Agent: *"Which agent had the most influence on the society's direction?"*
 5. The user can switch between agents freely. Conversation history with each agent is preserved.
 6. When the user is done, they click **"End Session"**. The session state is updated to `completed` and saved.
@@ -369,15 +422,17 @@ Each session's Artifacts Page contains the following documents, organized chrono
 | # | Document | Generated At | Description |
 |---|---|---|---|
 | 1 | **Brainstorming Transcript** | Stage 1A | Full conversation between user and Central Agent during brainstorming. |
-| 2 | **Society Overview** | Stage 1B | High-level description of the designed society. |
+| 2 | **Society Overview** | Stage 1B | High-level description of the designed society, including time scale. |
 | 3 | **Agent Roster** | Stage 1B | Complete list of all agents with their names, roles, backgrounds, and initial stats. |
 | 4 | **Virtual Law Document** | Stage 1B | The constitution/rulebook shared with all agents. |
-| 5 | **Iteration State Summaries** (×N) | Stage 2 | One summary per iteration, each with narrative and statistics. |
-| 6 | **Final State Report** | Stage 2 (end) | Comprehensive trajectory and outcome summary. |
-| 7 | **Agent Reflections** (×number of agents) | Stage 3 | Each agent's personal reflection on the simulation. |
-| 8 | **Society Evaluation Report** | Stage 3 | Central Agent's synthesis of all reflections with pros/cons. |
-| 9 | **Q&A Transcripts** (×agents questioned) | Stage 4 | Conversation logs from the review phase. |
-| 10 | **Cross-Session Comparison** (if applicable) | Post-session | Comparison analysis across multiple sessions. |
+| 5 | **Refinement Transcript** | Stage 1C | Conversation log of design changes made during refinement. |
+| 6 | **Iteration State Summaries** (×N) | Stage 2 | One summary per iteration, each with narrative, resolved interactions, stat assignments, lifecycle events, and statistics. |
+| 7 | **Final State Report** | Stage 2 (end) | Comprehensive trajectory and outcome summary. |
+| 8 | **Agent Personal Reflections** (×agents) | Stage 3 | Each agent's Pass 1 personal-only reflection. |
+| 9 | **Agent Post-Briefing Addenda** (×agents) | Stage 3 | Each agent's Pass 2 reaction to the Final State Report. |
+| 10 | **Society Evaluation Report** | Stage 3 | Central Agent's synthesis of all reflections with pros/cons and perspective shifts. |
+| 11 | **Q&A Transcripts** (×agents questioned) | Stage 4 | Conversation logs from the review phase. |
+| 12 | **Cross-Session Comparison** (if applicable) | Post-session | Comparison analysis across multiple sessions. |
 
 ### 8.2 User Experience
 
@@ -396,13 +451,15 @@ Each session's Artifacts Page contains the following documents, organized chrono
 
 1. From the Home Page, the user clicks **"Compare Sessions"**.
 2. The user selects 2 or more completed sessions from a checklist.
-3. The Central Agent reads the **Final State Reports** and **Society Evaluation Reports** from each selected session.
+3. The Central Agent reads the **Final State Reports**, **Society Evaluation Reports**, and **aggregate statistics** from each selected session.
 4. The Central Agent generates a **Cross-Session Comparison Report** containing:
    - Side-by-side summary of each society's design and outcomes.
    - Which society produced the highest average wealth, health, and happiness.
    - Which society had the most equitable distribution of outcomes.
+   - Population dynamics comparison (survival rates, role changes).
    - Common patterns across societies (e.g., certain roles always struggle).
    - Trade-offs between different societal models (e.g., equality vs. productivity).
+   - How agents' perspective shifts (Pass 1 vs. Pass 2) differed across societies.
    - The Central Agent's synthesized analysis of what design elements correlated with positive or negative outcomes.
 5. The report is displayed and saved. The user can ask follow-up questions to the Central Agent in a chat interface.
 6. The comparison report is also accessible from the Artifacts Page of each involved session.
@@ -418,20 +475,21 @@ Each session's Artifacts Page contains the following documents, organized chrono
 
 ### 10.1 Storage
 
-- All session data is stored in **browser local storage** (for the web application) or **local filesystem** (for desktop/CLI versions).
-- Each session is stored as a self-contained JSON object keyed by session ID.
-- Storage includes all documents, agent states, conversation histories, and metadata.
+- All session data is stored in a **local SQLite database** managed by the backend server.
+- The backend runs locally on the user's machine and exposes a web UI accessible via browser.
+- Each session is stored as structured relational data (not a single JSON blob), enabling efficient queries and partial loading.
+- No data is sent to any remote server — all processing and storage happens locally (except LLM API calls, which can also be local via LM Studio).
 
 ### 10.2 Session Lifecycle
 
 ```
-Created → Brainstorming → Designing → Simulating → Reflecting → Reviewing → Completed
-   │           │               │            │            │            │           │
-   │           └───── Can resume from any of these stages ────────────┘           │
-   │                                                                              │
-   └─────────── Can be deleted at any time ──────────────────────────────────────┘
-                                                                                  │
-                                                           Can re-enter for Q&A ──┘
+Created → Brainstorming → Designing → Refining → Simulating → Reflecting → Reviewing → Completed
+   │           │               │          │           │            │            │           │
+   │           └──────── Can resume from any of these stages ──────────────────┘           │
+   │                                                                                       │
+   └──────────── Can be deleted at any time ──────────────────────────────────────────────┘
+                                                                                           │
+                                                                    Can re-enter for Q&A ──┘
 ```
 
 ### 10.3 Auto-Save
@@ -439,13 +497,15 @@ Created → Brainstorming → Designing → Simulating → Reflecting → Review
 - The session is auto-saved after every significant state change:
   - After each brainstorming message exchange.
   - After the design phase completes.
-  - After each simulation iteration completes.
-  - After reflections are generated.
+  - After each refinement change.
+  - After each simulation iteration completes (both agent intents and Central Agent resolution).
+  - After reflections are generated (each pass).
   - After each Q&A message exchange.
 - If the user closes the browser mid-operation, they can resume from the last saved checkpoint.
 
-### 10.4 Storage Limits
+### 10.4 Storage Characteristics
 
-- Local storage has a typical limit of 5–10 MB per origin. For sessions with many agents and iterations, data may need to be compressed or offloaded to IndexedDB.
-- A warning is shown if storage usage exceeds 80% of the estimated limit.
-- The user can export sessions to file (JSON) and delete them locally to free space, then re-import later.
+- **SQLite** is used as the local database, providing ACID transactions and efficient querying without a separate database server process.
+- Iteration records and agent action logs are stored in separate tables, enabling lazy loading without deserializing entire sessions.
+- Session export produces a self-contained JSON file for portability. Sessions can be re-imported from these files.
+- There is no practical size limit — SQLite handles databases up to 281 TB.
