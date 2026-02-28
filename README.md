@@ -1,4 +1,13 @@
-# Ideal World - The Society Simulator (Work in Progress)
+# [LEGACY] Ideal World - The Society Simulator
+
+> **This README is legacy documentation from the original project concept. The project has been redesigned as a multi-agent society simulation platform. Please refer to the following documents for the current design:**
+>
+> - **[USER_FLOW.md](./USER_FLOW.md)** — Complete user flow and interaction design
+> - **[PROJECT_DESIGN.md](./PROJECT_DESIGN.md)** — Full technical architecture and project design
+>
+> *The content below is preserved for historical reference only.*
+
+---
 
 **Ideal World** is a computational social science project. It combines Computer Science and Political Science to model historical dynamics and simulate potential futures.
 
