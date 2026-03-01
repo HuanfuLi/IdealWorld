@@ -78,6 +78,20 @@ export const iterationRepo = {
     return rows.map(rowToIteration);
   },
 
+  /** Full iteration data including statistics and lifecycle events (for restoring UI state) */
+  async listBySessionFull(sessionId: string): Promise<Array<Iteration & { statistics: IterationStats; lifecycleEvents: unknown[] }>> {
+    const rows = await db
+      .select()
+      .from(iterations)
+      .where(eq(iterations.sessionId, sessionId))
+      .orderBy(asc(iterations.iterationNumber));
+    return rows.map(row => ({
+      ...rowToIteration(row),
+      statistics: JSON.parse(row.statistics || '{}') as IterationStats,
+      lifecycleEvents: JSON.parse(row.lifecycleEvents || '[]') as unknown[],
+    }));
+  },
+
   async getWithActions(iterationId: string): Promise<Iteration & { actions: AgentAction[] }> {
     const [row] = await db.select().from(iterations).where(eq(iterations.id, iterationId));
     if (!row) throw new Error(`Iteration ${iterationId} not found`);

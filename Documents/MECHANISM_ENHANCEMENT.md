@@ -7,78 +7,85 @@ This enhancement plan breaks down the complex architectural and scientific upgra
 
 ---
 
-## Phase 1: Storage and Persistence Optimization
+## Phase 1: Storage and Persistence Optimization ✅ DONE
 **Goal:** Eliminate SQLite I/O bottlenecks and `SQLITE_BUSY` errors during high-frequency simulation iterations.
 **Context:** Current individual `INSERT` statements per agent action cause severe lock contention.
 
-### Actionable Steps
-1. **Enable WAL Mode & PRAGMA Tuning:**
-   - Modify the SQLite connection initialization in `server/src/db/index.ts`.
-   - Enable Write-Ahead Logging: `PRAGMA journal_mode = WAL;`.
-   - Tune synchronous settings: `PRAGMA synchronous = NORMAL;`.
-   - Increase cache size and set a busy timeout: `PRAGMA cache_size = -20000; PRAGMA busy_timeout = 5000;`.
-2. **Implement Batch Operations:**
-   - Refactor `applyStatChanges` and `applyLifecycleEvents` inside `server/src/orchestration/simulationRunner.ts` (or the respective DB Repos).
-   - Use Drizzle ORM's transaction or explicit batching (`db.batch()`) to aggregate all 150+ agent state updates and intention logs into a single physical write per iteration.
-3. **Application-Level Memory Queue for Logs:**
-   - Introduce an in-memory queue for non-critical logs (e.g., chat histories and raw intent strings).
-   - Create an asynchronous flusher in a new file `server/src/db/asyncLogFlusher.ts` that consumes the queue based on a time window (e.g., every 500ms) or bulk threshold to flush data without blocking the main simulation loop.
+### Implementation Summary
+1. **WAL Mode & PRAGMA Tuning** (`server/src/db/index.ts`):
+   - `PRAGMA synchronous = NORMAL` — reduces fsync calls while WAL provides durability.
+   - `PRAGMA cache_size = -20000` — 20 MB page cache for faster reads.
+   - `PRAGMA busy_timeout = 5000` — waits up to 5 s on lock contention.
+2. **Batch Operations** (`server/src/db/repos/agentRepo.ts`, `server/src/orchestration/simulationRunner.ts`):
+   - Added `agentRepo.bulkUpdateStats()` and `agentRepo.bulkMarkDead()` — prepared-statement transactions for N agents.
+   - Refactored `simulationRunner.ts` to execute all stat updates + deaths in a single `sqlite.transaction()`.
+3. **Async Log Flusher** (`server/src/db/asyncLogFlusher.ts`):
+   - In-memory queue for non-critical inserts (agent intents, resolved actions).
+   - Groups queued rows by table, reuses prepared statements, flushes every 500 ms or at 200-row threshold.
+   - Drains synchronously on simulation end/abort.
 
 ---
 
-## Phase 2: React 19 UI & SSE Rendering Optimization
+## Phase 2: React 19 UI & SSE Rendering Optimization ✅ DONE
 **Goal:** Resolve severe frontend rendering blocks caused by high-frequency SSE updates from the backend state stream.
 **Context:** State cascades trigger massive DOM diffs, freezing the browser.
 
-### Actionable Steps
-1. **Double-Buffering & rAF Debouncing:**
-   - Refactor the SSE listener in `web/src/api/client.ts` or the central Zustand store (`simulationStore.ts`).
-   - Instead of updating Zustand state immediately upon receiving an SSE event, push the event payload into a mutable `useRef` array (the buffer).
-   - Implement a `requestAnimationFrame` (rAF) loop that flushes this buffer periodically (e.g., matching the 60Hz display refresh rate) and performs a single bulk `set` operation on the Zustand store.
-2. **Zustand Selective Rendering (Shallow Subscriptions):**
-   - Audit `simulationStore.ts`. Ensure components use `useShallow` when subscribing to specific attributes (e.g., a single agent's health vs. the entire agent list).
-3. **Virtual Lists for Logs & Agent Grids:**
-   - Install `@tanstack/react-virtual`.
-   - Refactor the Live Feed component and the Agent Grid component in `web/src/pages/SimulationPage.tsx` to use virtualized scrolling. Only render the ~20 DOM nodes currently visible in the viewport.
+### Implementation Summary
+1. **Double-Buffering & rAF Debouncing** (`web/src/stores/simulationStore.ts`):
+   - SSE events pushed into a mutable buffer array instead of per-event `set()`.
+   - `requestAnimationFrame` loop flushes all accumulated events in a single Zustand `set()` call (~60fps).
+2. **Zustand Selective Rendering** (`web/src/pages/Simulation.tsx`):
+   - Added `useShallow` from `zustand/react/shallow` for shallow-equality store subscription.
+3. **Virtual Lists** (`web/src/pages/Simulation.tsx`):
+   - Installed `@tanstack/react-virtual`.
+   - Live Feed and Lifecycle Events lists use `useVirtualizer` with dynamic row measurement and overscan.
 
 ---
 
-## Phase 3: Architecting the Neuro-Symbolic Engine
+## Phase 3: Architecting the Neuro-Symbolic Engine ✅ DONE
 **Goal:** Shift from pure LLM-dictated outcomes to a hybrid system where hard math governs economics, and LLMs govern psychology.
-**Context:** Currently, the Central Agent determines wealth/health arbitrarily.
+**Context:** Previously, the Central Agent determined wealth/health arbitrarily via LLM output.
 
-### Actionable Steps
-1. **Build the Symbolic Economic Engine:**
-   - Create `server/src/mechanics/physicsEngine.ts`.
-   - Define strict, deterministic formulas for resource consumption per iteration (e.g., baseline calorie/health drain), standard wages based on roles, and basic trade math.
-2. **De-couple LLM from Stat Calculation:**
-   - Modify `simulationRunner.ts`. The Central Agent LLM no longer arbitrarily outputs `wealthDelta` or `healthDelta`.
-   - Instead, the LLM outputs a *decision action* (e.g., "Trade 5 apples for 10 coins", or "Strike").
-   - Feed this decision into `physicsEngine.ts` to calculate the exact numeric changes mathematically.
+### Implementation Summary
+1. **Symbolic Economic Engine** (`server/src/mechanics/physicsEngine.ts`):
+   - 9 action codes: `WORK | TRADE | REST | STRIKE | STEAL | HELP | INVEST | CONSUME | NONE`
+   - `server/src/mechanics/actionCodes.ts` — type + `normalizeActionCode()` validator
+   - Deterministic `resolveAction()` computes exact deltas for wealth, health, happiness, cortisol, dopamine
+   - Role-based income: Leader/Governor/Merchant → +8, Artisan/Worker → +5, Scholar/Healer → +4, other → +3
+   - Trade/steal calculations factor in partner's wealth
+   - All deltas clamped to [-30, +30], final stats clamped to [0, 100]
+2. **De-coupled LLM from Stat Calculation:**
+   - `simulationRunner.ts` refactored: LLM outputs action codes (via intent prompts); physics engine computes all numeric deltas
+   - `buildResolutionPrompt()` and `buildGroupResolutionMessages()` no longer ask LLM for `wealthDelta`/`healthDelta`/`happinessDelta`
+   - `parseResolution()` and `parseGroupResolution()` set delta fields to 0 (physics engine provides actuals)
+   - `parseAgentIntent()` now extracts `actionCode` and `actionTarget` from LLM output
 3. **Neurobiological Variables (Stress & Joy):**
-   - Add hidden neurobiological attributes (`cortisol`/stress, `dopamine`/satisfaction) to the `AgentStats` schema.
-   - When the `physicsEngine` registers wealth drops below a survival line, aggressively increment `cortisol`.
-   - Pass these hidden variables into the LLM system prompt. E.g., if `cortisol` > 80%, the prompt injects: *"You are under extreme biological stress and survival panic. You are highly prone to aggression, rule-breaking, or uprising."*
+   - `AgentStats` extended with `cortisol: number` (0-100) and `dopamine: number` (0-100)
+   - No DB migration needed — stats are JSON blobs; `parseStats()` adds defaults (cortisol: 20, dopamine: 50)
+   - `agentRepo.updateStats()` and `bulkUpdateStats()` accept cortisol/dopamine
+   - Automatic adjustments per iteration: health baseline -2, cortisol auto-escalation when wealth < 20 or health < 30, dopamine decay -3
+   - Stress modifiers injected into intent prompts: cortisol > 80 → "extreme biological stress"; cortisol > 60 → "significant pressure"
 
 ---
 
-## Phase 4: HMAS Map-Reduce & Cost Optimization
+## Phase 4: HMAS Map-Reduce & Cost Optimization ✅ DONE
 **Goal:** Handle 150+ agents without blowing up the context window or API budget.
 **Context:** Passing 150 agent intents directly to the Central Agent via one prompt causes context collapse and extreme token cost.
 
-### Actionable Steps
-1. **Dynamic Clustering (Social Distance Algorithm):**
-   - Implement an algorithm in `server/src/orchestration/clustering.ts` that performs agglomerative hierarchical clustering on the agent roster. Group the 150 agents into ~10 "districts" based on roles or interaction history (max 15 agents per cluster).
-2. **Map Stage: Local Coordinators:**
-   - Create a `CoordinatorAgent` logic layer.
-   - For each iteration, dispatch the 10 clusters in parallel to a cheaper LLM model (e.g., Claude 3.5 Haiku or a Local Llama-3 8B).
-   - The Coordinator's task is strictly local conflict resolution and summarizing the 15 agent intents into a condensed regional synopsis.
-3. **Reduce Stage: Central Orchestrator:**
-   - The Central Agent (using GPT-4o or Claude 3.5 Sonnet) now only receives 10 condensed regional synopses instead of 150 raw intents. It processes macro-trends, global law enforcement, and inter-district conflicts.
-4. **Prompt Caching Implementation:**
-   - Structure all agent LLM prompts in `server/src/llm/prompts.ts` strictly following the Prompt Caching rule:
-     - **Static Prefix:** World rules, laws, JSON schemas.
-     - **Dynamic Suffix:** Current round history, agent specific status.
+### Implementation Summary
+1. **Role-Based Clustering** (`server/src/orchestration/clustering.ts`):
+   - `clusterByRole(agents, maxPerCluster)` groups same-role agents together (max 15 per cluster)
+   - Algorithm: group by role → sort by size → greedily fill clusters → overflow into mixed clusters
+   - Replaces the naive `chunk()` function in the map-reduce path
+2. **Map Stage: Cheaper Model for Group Coordinators:**
+   - Group resolution calls now use `citizenAgentModel` (cheaper) instead of `centralAgentModel`
+   - Only the merge (reduce) step retains `centralAgentModel` for society-wide narrative synthesis
+3. **Prompt Caching Implementation** (`server/src/llm/types.ts`, `server/src/llm/anthropic.ts`, `server/src/llm/openai.ts`):
+   - `LLMMessage.content` extended to `string | ContentBlock[]`
+   - `ContentBlock`: `{ type: 'text', text: string, cache_control?: { type: 'ephemeral' } }`
+   - `buildIntentPrompt()` and `buildGroupResolutionMessages()` split into static prefix (cacheable, with `cache_control: ephemeral`) + dynamic suffix
+   - Anthropic provider passes `ContentBlock[]` directly as the system parameter array with cache_control
+   - OpenAI/local providers flatten `ContentBlock[]` to a single string (backward compatible)
 
 ---
 

@@ -1,6 +1,12 @@
+export interface ContentBlock {
+  type: 'text';
+  text: string;
+  cache_control?: { type: 'ephemeral' };
+}
+
 export interface LLMMessage {
   role: 'user' | 'assistant' | 'system';
-  content: string;
+  content: string | ContentBlock[];
 }
 
 export interface LLMOptions {

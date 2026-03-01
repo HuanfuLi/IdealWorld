@@ -88,21 +88,27 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
   loadHistory: async (sessionId: string) => {
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/iterations`);
+      const res = await fetch(`/api/sessions/${sessionId}/iterations?full=true`);
       if (!res.ok) return;
-      const iters = await res.json() as Iteration[];
+      const iters = await res.json() as Array<Iteration & { statistics?: IterationStats; lifecycleEvents?: LifecycleEvent[] }>;
       if (iters.length === 0) return;
 
       const feed: IterationFeed[] = iters.map(it => ({
         number: it.number,
         narrativeSummary: it.narrativeSummary,
-        lifecycleEvents: [],
-        stats: null,
+        lifecycleEvents: (it.lifecycleEvents ?? []) as LifecycleEvent[],
+        stats: it.statistics ?? null,
       }));
+
+      const statsHistory: IterationStats[] = iters
+        .filter(it => it.statistics)
+        .map(it => it.statistics!);
 
       set({
         feed,
+        statsHistory,
         currentIteration: iters[iters.length - 1].number,
+        totalIterations: iters.length,
       });
     } catch { /* ignore */ }
   },

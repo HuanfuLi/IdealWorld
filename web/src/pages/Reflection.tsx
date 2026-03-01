@@ -1,9 +1,17 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { FileText, ArrowRight, TrendingDown, TrendingUp, Minus, Loader2, AlertCircle, CheckCircle } from 'lucide-react';
+import { FileText, ArrowRight, TrendingDown, TrendingUp, Minus, Loader2, AlertCircle, CheckCircle, ChevronDown, ChevronUp, BarChart2 } from 'lucide-react';
 import { useReflectionStore } from '../stores/reflectionStore';
 import { useSimulationStore } from '../stores/simulationStore';
 import { useSessionDetailStore } from '../stores/sessionDetailStore';
+import { LineChart } from '../components/LineChart';
+import type { IterationStats } from '@idealworld/shared';
+
+interface AgentStatsHistory {
+  name: string;
+  role: string;
+  history: Array<{ iter: number; wealth: number; health: number; happiness: number }>;
+}
 
 function StatDelta({ initial, final }: { initial: number; final: number }) {
   const delta = final - initial;
@@ -28,7 +36,15 @@ const Reflection = () => {
   } = useReflectionStore();
 
   const { session, loadSession } = useSessionDetailStore();
-  const { agents: simAgents } = useSimulationStore();
+  const { agents: simAgents, statsHistory: simStatsHistory } = useSimulationStore();
+
+  // Society-wide stats for trend graph
+  const [societyStats, setSocietyStats] = useState<IterationStats[]>([]);
+  // Per-agent stats history
+  const [agentStatsMap, setAgentStatsMap] = useState<Record<string, AgentStatsHistory>>({});
+  const [agentStatsLoaded, setAgentStatsLoaded] = useState(false);
+  // Which agent cards have expanded stats
+  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
 
   // Use agents from simulation store if reflection store hasn't loaded yet
   const displayAgents = agents.length > 0 ? agents : simAgents;
@@ -39,7 +55,29 @@ const Reflection = () => {
     loadAgents(id);
     loadSession(id);
     loadReflections(id);
+    loadSocietyStats(id);
   }, [id]);
+
+  const loadSocietyStats = async (sessionId: string) => {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/iterations?full=true`);
+      if (!res.ok) return;
+      const iters = await res.json() as Array<{ statistics?: IterationStats }>;
+      const stats = iters.filter(it => it.statistics).map(it => it.statistics!);
+      setSocietyStats(stats);
+    } catch { /* ignore */ }
+  };
+
+  const loadAgentStats = async (sessionId: string) => {
+    if (agentStatsLoaded) return;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/iterations/agent-stats`);
+      if (!res.ok) return;
+      const data = await res.json() as { agents: Record<string, AgentStatsHistory> };
+      setAgentStatsMap(data.agents);
+      setAgentStatsLoaded(true);
+    } catch { /* ignore */ }
+  };
 
   // Auto-start reflection if stage is 'reflecting' (just came from simulation)
   useEffect(() => {
@@ -50,7 +88,6 @@ const Reflection = () => {
         sseCleanupRef.current = cleanup;
       });
     } else if (session.stage === 'reflection-complete' || session.stage === 'reviewing' || session.stage === 'completed') {
-      // Load existing data
       loadReflections(id);
     }
   }, [session?.stage]);
@@ -61,12 +98,8 @@ const Reflection = () => {
     };
   }, []);
 
-  // Compute initial vs final stats
-  const getAgentStats = (agentId: string) => {
-    const agent = displayAgents.find(a => a.id === agentId);
-    if (!agent) return null;
-    return { initial: agent.initialStats, final: agent.currentStats };
-  };
+  // Use simStatsHistory as fallback for society stats
+  const displayStats = societyStats.length > 0 ? societyStats : simStatsHistory;
 
   const citizenAgents = displayAgents.filter(a => !a.isCentralAgent);
   const aliveCount = citizenAgents.filter(a => a.isAlive).length;
@@ -80,6 +113,16 @@ const Reflection = () => {
       : Math.round(citizenAgents.reduce((s, a) => s + a.currentStats[key], 0) / citizenAgents.length);
 
   const reflectionEntries = Object.entries(agentReflections);
+
+  const toggleAgentExpand = (agentId: string) => {
+    if (!agentStatsLoaded && id) loadAgentStats(id);
+    setExpandedAgents(prev => {
+      const next = new Set(prev);
+      if (next.has(agentId)) next.delete(agentId);
+      else next.add(agentId);
+      return next;
+    });
+  };
 
   return (
     <div className="animate-fade-in" style={{ height: 'calc(100vh - 4rem)', display: 'flex', flexDirection: 'column' }}>
@@ -185,6 +228,26 @@ const Reflection = () => {
                   </div>
                 </div>
 
+                {/* Society Trend Graph */}
+                {displayStats.length > 1 && (
+                  <>
+                    <h3 style={{ color: 'var(--color-bright)', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <BarChart2 size={18} style={{ color: 'var(--primary)' }} /> Society Trend
+                    </h3>
+                    <div style={{ background: 'var(--panel-alpha-05)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--glass-border)', marginBottom: '2rem' }}>
+                      <LineChart
+                        series={[
+                          { label: 'Wealth', color: '#f59e0b', data: displayStats.map(s => s.avgWealth) },
+                          { label: 'Health', color: '#10b981', data: displayStats.map(s => s.avgHealth) },
+                          { label: 'Happiness', color: '#6366f1', data: displayStats.map(s => s.avgHappiness) },
+                        ]}
+                        xLabels={displayStats.map(s => String(s.iterationNumber))}
+                        height={200}
+                      />
+                    </div>
+                  </>
+                )}
+
                 <h3 style={{ color: 'var(--color-bright)', marginBottom: '0.75rem' }}>Analysis</h3>
                 <p style={{ whiteSpace: 'pre-wrap' }}>{evaluation.analysis}</p>
               </>
@@ -219,12 +282,63 @@ const Reflection = () => {
               const agent = displayAgents.find(a => a.id === agentId);
               const agentName = agent?.name ?? agentId;
               const agentRole = agent?.role ?? '';
+              const isExpanded = expandedAgents.has(agentId);
+              const agentHistory = agentStatsMap[agentId]?.history;
+
               return (
                 <div key={agentId} style={{ padding: '1rem', background: 'var(--panel-alpha-02)', border: '1px solid var(--glass-border)', borderRadius: '12px' }}>
+                  {/* Header with name and expand button */}
                   <div style={{ color: 'var(--color-bright)', fontWeight: 'bold', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     {agentName}
                     {agentRole && <span className="badge badge-neutral" style={{ fontWeight: 'normal' }}>{agentRole}</span>}
                     {agent && !agent.isAlive && <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>†</span>}
+                    <button
+                      onClick={() => toggleAgentExpand(agentId)}
+                      style={{
+                        marginLeft: 'auto',
+                        background: 'none',
+                        border: '1px solid var(--glass-border)',
+                        borderRadius: '6px',
+                        padding: '0.2rem 0.5rem',
+                        color: 'var(--text-dim)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.25rem',
+                        fontSize: '0.75rem',
+                      }}
+                      title="Toggle agent statistics"
+                    >
+                      <BarChart2 size={12} />
+                      {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                    </button>
+                  </div>
+
+                  {/* Expandable stats graph */}
+                  <div style={{
+                    overflow: 'hidden',
+                    transition: 'max-height 0.3s ease-in-out, opacity 0.3s ease-in-out',
+                    maxHeight: isExpanded ? '220px' : '0',
+                    opacity: isExpanded ? 1 : 0,
+                  }}>
+                    {isExpanded && agentHistory && agentHistory.length > 1 ? (
+                      <div style={{ background: 'var(--panel-alpha-05)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--glass-border)', marginBottom: '0.75rem' }}>
+                        <LineChart
+                          series={[
+                            { label: 'Wealth', color: '#f59e0b', data: agentHistory.map(h => h.wealth) },
+                            { label: 'Health', color: '#10b981', data: agentHistory.map(h => h.health) },
+                            { label: 'Happiness', color: '#6366f1', data: agentHistory.map(h => h.happiness) },
+                          ]}
+                          xLabels={agentHistory.map(h => String(h.iter))}
+                          height={160}
+                        />
+                      </div>
+                    ) : isExpanded ? (
+                      <div style={{ padding: '0.75rem', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
+                        <Loader2 size={14} style={{ animation: 'spin 1s linear infinite', display: 'inline', marginRight: '0.5rem' }} />
+                        Loading stats…
+                      </div>
+                    ) : null}
                   </div>
 
                   {data.pass1 && (

@@ -1,4 +1,4 @@
-import type { LLMMessage } from './types.js';
+import type { LLMMessage, ContentBlock } from './types.js';
 import type { Agent, ChatMessage, Session, ComparisonResult, BrainstormChecklist } from '@idealworld/shared';
 
 export function buildBrainstormMessages(
@@ -184,14 +184,8 @@ export function buildIntentPrompt(
   previousSummary: string | null,
   iterationNumber: number
 ): LLMMessage[] {
-  const systemPrompt = `You are ${agent.name}, a ${agent.role} in a simulated society based on: "${session.idea}"
-
-Background: ${agent.background}
-
-Your current status:
-- Wealth: ${agent.currentStats.wealth}/100
-- Health: ${agent.currentStats.health}/100
-- Happiness: ${agent.currentStats.happiness}/100
+  // Static prefix: identical across all agent calls in an iteration → cacheable
+  const staticPrefix = `You are a citizen in a simulated society based on: "${session.idea}"
 
 Society overview (excerpt):
 ${session.societyOverview?.slice(0, 500) ?? '(no overview)'}
@@ -201,16 +195,56 @@ ${session.law?.slice(0, 400) ?? '(no laws)'}
 
 Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
 
-${previousSummary ? `What happened last iteration:\n${previousSummary.slice(0, 600)}` : 'This is the first iteration.'}
+You must choose ONE action code from: WORK, TRADE, REST, STRIKE, STEAL, HELP, INVEST, CONSUME.
 
 You MUST respond with ONLY valid JSON (no markdown, no preamble):
 {
-  "intent": "string - what you intend to do this iteration (1-3 sentences, first person)",
-  "reasoning": "string - your internal reasoning (1-2 sentences)"
-}`;
+  "actionCode": "WORK|TRADE|REST|STRIKE|STEAL|HELP|INVEST|CONSUME",
+  "actionTarget": "target agent name or null",
+  "intent": "what you intend to do this iteration (1-3 sentences, first person)",
+  "reasoning": "your internal reasoning (1-2 sentences)"
+}
+
+Action meanings:
+- WORK: perform your occupation for income
+- TRADE: exchange goods/services with another agent (set actionTarget)
+- REST: take time off to recover health and reduce stress
+- STRIKE: refuse to work, protest conditions
+- STEAL: take from another agent illegally (set actionTarget)
+- HELP: assist another agent at personal cost (set actionTarget)
+- INVEST: spend wealth now for future returns
+- CONSUME: spend wealth on personal comfort and health`;
+
+  // Dynamic suffix: agent-specific, changes every call
+  const cortisol = agent.currentStats.cortisol ?? 20;
+  const dopamine = agent.currentStats.dopamine ?? 50;
+
+  let stressModifier = '';
+  if (cortisol > 80) {
+    stressModifier = '\n\nYou are under extreme biological stress. Survival instincts dominate. You may act desperately.';
+  } else if (cortisol > 60) {
+    stressModifier = '\n\nYou feel significant pressure. You are more willing to take risks or drastic action.';
+  }
+
+  const dynamicSuffix = `Your identity: ${agent.name}, a ${agent.role}
+Background: ${agent.background}
+
+Your current status:
+- Wealth: ${agent.currentStats.wealth}/100
+- Health: ${agent.currentStats.health}/100
+- Happiness: ${agent.currentStats.happiness}/100
+- Stress level: ${cortisol > 60 ? 'HIGH' : cortisol > 40 ? 'moderate' : 'low'}
+- Satisfaction: ${dopamine > 60 ? 'content' : dopamine > 30 ? 'neutral' : 'dissatisfied'}
+
+${previousSummary ? `What happened last iteration:\n${previousSummary.slice(0, 600)}` : 'This is the first iteration.'}${stressModifier}`;
+
+  const systemContent: ContentBlock[] = [
+    { type: 'text', text: staticPrefix, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: dynamicSuffix },
+  ];
 
   return [
-    { role: 'system', content: systemPrompt },
+    { role: 'system', content: systemContent },
     { role: 'user', content: `Iteration ${iterationNumber}: What will you do?` },
   ];
 }
@@ -220,6 +254,8 @@ export interface AgentIntent {
   agentName: string;
   intent: string;
   reasoning: string;
+  actionCode?: string;
+  actionTarget?: string | null;
 }
 
 export function buildResolutionPrompt(
@@ -231,7 +267,7 @@ export function buildResolutionPrompt(
 ): LLMMessage[] {
   const agentList = intents.map(ai => {
     const agent = agents.find(a => a.id === ai.agentId);
-    const stats = agent?.currentStats ?? { wealth: 50, health: 70, happiness: 60 };
+    const stats = agent?.currentStats ?? { wealth: 50, health: 70, happiness: 60, cortisol: 20, dopamine: 50 };
     return `- ${ai.agentName} (${agent?.role ?? 'unknown'}): "${ai.intent}"
   Stats: W=${stats.wealth} H=${stats.health} Hap=${stats.happiness}`;
   }).join('\n');
@@ -254,6 +290,8 @@ Resolve all agent intentions simultaneously, considering:
 - Resource constraints and economic effects
 - Realistic cause-and-effect chains
 
+NOTE: Stat deltas (wealth/health/happiness changes) are computed by a deterministic physics engine. You only need to provide narrative outcomes.
+
 You MUST respond with ONLY valid JSON (no markdown, no preamble):
 {
   "narrativeSummary": "string - 3-5 sentence story of what happened this iteration",
@@ -261,9 +299,6 @@ You MUST respond with ONLY valid JSON (no markdown, no preamble):
     {
       "agentId": "string",
       "outcome": "string - what happened to this agent (1-2 sentences)",
-      "wealthDelta": 0,
-      "healthDelta": 0,
-      "happinessDelta": 0,
       "died": false,
       "newRole": null
     }
@@ -275,8 +310,7 @@ You MUST respond with ONLY valid JSON (no markdown, no preamble):
 
 Rules:
 - Include one entry in agentOutcomes for every agent listed in the intentions
-- Deltas must be integers between -30 and +30; be realistic, not extreme
-- died: true only if the agent's health would drop to 0 or they face fatal circumstances
+- died: true only if the agent faces fatal circumstances (e.g. violent conflict, severe illness)
 - lifecycleEvents: only include deaths and role changes that actually occur
 - For role changes use type "role_change" with detail "from X to Y: reason"`;
 
@@ -592,26 +626,19 @@ export function buildGroupResolutionMessages(
 ): LLMMessage[] {
   const groupList = groupIntents.map(ai => {
     const agent = groupAgents.find(a => a.id === ai.agentId);
-    const stats = agent?.currentStats ?? { wealth: 50, health: 70, happiness: 60 };
+    const stats = agent?.currentStats ?? { wealth: 50, health: 70, happiness: 60, cortisol: 20, dopamine: 50 };
     return `- ${ai.agentName} (${agent?.role ?? 'unknown'}): "${ai.intent}"
   Stats: W=${stats.wealth} H=${stats.health} Hap=${stats.happiness}`;
   }).join('\n');
 
-  const systemPrompt = `You are the Central Agent resolving iteration ${iterationNumber} of a society simulation.
-You are handling a sub-group of ${groupAgents.length} agents.
+  // Static prefix: identical across all group resolution calls → cacheable
+  const staticPrefix = `You are a coordinator resolving a sub-group of agents in a society simulation.
 
 Society: "${session.idea}"
 Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
 Laws (excerpt): ${session.law?.slice(0, 400) ?? '(no laws)'}
-${previousSummary ? `\nPrevious iteration summary:\n${previousSummary.slice(0, 400)}` : ''}
 
-Your sub-group's intentions:
-${groupList}
-
-All other agents' intentions (for cross-group awareness):
-${allIntentsBrief.slice(0, 800)}
-
-Resolve the outcomes ONLY for the agents in your sub-group. Consider cross-group interactions briefly.
+NOTE: Stat deltas are computed by a deterministic physics engine. You only provide narrative outcomes.
 
 Respond with ONLY valid JSON (no markdown, no preamble):
 {
@@ -620,9 +647,6 @@ Respond with ONLY valid JSON (no markdown, no preamble):
     {
       "agentId": "string",
       "outcome": "string - what happened (1-2 sentences)",
-      "wealthDelta": 0,
-      "healthDelta": 0,
-      "happinessDelta": 0,
       "died": false,
       "newRole": null
     }
@@ -632,11 +656,26 @@ Respond with ONLY valid JSON (no markdown, no preamble):
 
 Rules:
 - Include an entry for EVERY agent in your sub-group
-- Deltas must be integers between -30 and +30
+- died: true only for fatal circumstances
 - lifecycleEvents: only deaths and role changes for your sub-group`;
 
+  // Dynamic suffix: group-specific data
+  const dynamicSuffix = `Iteration ${iterationNumber}. Sub-group of ${groupAgents.length} agents.
+${previousSummary ? `\nPrevious iteration summary:\n${previousSummary.slice(0, 400)}` : ''}
+
+Your sub-group's intentions:
+${groupList}
+
+All other agents' intentions (for cross-group awareness):
+${allIntentsBrief.slice(0, 800)}`;
+
+  const systemContent: ContentBlock[] = [
+    { type: 'text', text: staticPrefix, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: dynamicSuffix },
+  ];
+
   return [
-    { role: 'system', content: systemPrompt },
+    { role: 'system', content: systemContent },
     { role: 'user', content: `Resolve iteration ${iterationNumber} for this sub-group.` },
   ];
 }

@@ -8,7 +8,18 @@ import { agents } from '../schema.js';
 import type { Agent, AgentStats } from '@idealworld/shared';
 
 function parseStats(raw: string): AgentStats {
-  try { return JSON.parse(raw); } catch { return { wealth: 50, health: 70, happiness: 60 }; }
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      wealth: parsed.wealth ?? 50,
+      health: parsed.health ?? 70,
+      happiness: parsed.happiness ?? 60,
+      cortisol: parsed.cortisol ?? 20,
+      dopamine: parsed.dopamine ?? 50,
+    };
+  } catch {
+    return { wealth: 50, health: 70, happiness: 60, cortisol: 20, dopamine: 50 };
+  }
 }
 
 function rowToAgent(row: typeof agents.$inferSelect): Agent {
@@ -68,12 +79,14 @@ export const agentRepo = {
    * Update an agent's current stats after an iteration resolves.
    * Clamps values to [0, 100].
    */
-  async updateStats(id: string, wealth: number, health: number, happiness: number): Promise<Agent> {
+  async updateStats(id: string, wealth: number, health: number, happiness: number, cortisol: number = 20, dopamine: number = 50): Promise<Agent> {
     const clamp = (v: number) => Math.min(100, Math.max(0, Math.round(v)));
     const stats: AgentStats = {
       wealth: clamp(wealth),
       health: clamp(health),
       happiness: clamp(happiness),
+      cortisol: clamp(cortisol),
+      dopamine: clamp(dopamine),
     };
     await db
       .update(agents)
@@ -95,7 +108,7 @@ export const agentRepo = {
    * Much faster than individual UPDATE statements when agent count is high.
    */
   async bulkUpdateStats(
-    updates: Array<{ id: string; wealth: number; health: number; happiness: number }>
+    updates: Array<{ id: string; wealth: number; health: number; happiness: number; cortisol?: number; dopamine?: number }>
   ): Promise<void> {
     if (updates.length === 0) return;
     const clamp = (v: number) => Math.min(100, Math.max(0, Math.round(v)));
@@ -108,6 +121,8 @@ export const agentRepo = {
           wealth: clamp(u.wealth),
           health: clamp(u.health),
           happiness: clamp(u.happiness),
+          cortisol: clamp(u.cortisol ?? 20),
+          dopamine: clamp(u.dopamine ?? 50),
         };
         stmt.run(JSON.stringify(stats), u.id);
       }

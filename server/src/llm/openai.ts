@@ -14,7 +14,10 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const response = await this.client.chat.completions.create({
       model: options.model ?? this.defaultModel,
       max_tokens: options.maxTokens ?? 4096,
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
+      messages: messages.map(m => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : m.content.map(b => b.text).join('\n'),
+      })),
     });
 
     return response.choices[0]?.message?.content ?? '';
@@ -24,7 +27,10 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const stream = await this.client.chat.completions.create({
       model: options.model ?? this.defaultModel,
       max_tokens: options.maxTokens ?? 4096,
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
+      messages: messages.map(m => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : m.content.map(b => b.text).join('\n'),
+      })),
       stream: true,
     });
 

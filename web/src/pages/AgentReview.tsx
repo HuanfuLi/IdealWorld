@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Send, CheckCircle, Loader2 } from 'lucide-react';
+import { Send, CheckCircle, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { useReflectionStore } from '../stores/reflectionStore';
 import { useSessionDetailStore } from '../stores/sessionDetailStore';
 import type { Agent } from '@idealworld/shared';
@@ -234,12 +234,9 @@ const AgentReview = () => {
                 </div>
               </div>
 
-              {/* Reflection summary strip */}
+              {/* Expandable reflection strip */}
               {activeReflection?.pass1 && (
-                <div style={{ padding: '0.75rem 2rem', borderBottom: '1px solid var(--glass-border)', background: 'var(--panel-alpha-02)', fontSize: '0.85rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                  <span style={{ color: 'var(--primary)', fontSize: '0.75rem', textTransform: 'uppercase', marginRight: '0.5rem', fontStyle: 'normal' }}>Reflected:</span>
-                  "{activeReflection.pass1.slice(0, 150)}{activeReflection.pass1.length > 150 ? '…' : ''}"
-                </div>
+                <ReflectionStrip reflection={activeReflection} />
               )}
 
               {/* Chat Messages */}
@@ -329,5 +326,68 @@ const AgentReview = () => {
     </div>
   );
 };
+
+function ReflectionStrip({ reflection }: { reflection: { pass1: string; pass2: string | null } }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div style={{
+      borderBottom: '1px solid var(--glass-border)',
+      background: 'var(--panel-alpha-02)',
+      overflow: 'hidden',
+      transition: 'max-height 0.3s ease-in-out',
+      maxHeight: expanded ? '300px' : '3rem',
+    }}>
+      <div
+        style={{
+          padding: '0.75rem 2rem',
+          fontSize: '0.85rem',
+          color: 'var(--text-muted)',
+          fontStyle: 'italic',
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: '0.5rem',
+          cursor: 'pointer',
+        }}
+        onClick={() => setExpanded(e => !e)}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ color: 'var(--primary)', fontSize: '0.75rem', textTransform: 'uppercase', marginRight: '0.5rem', fontStyle: 'normal' }}>Reflected:</span>
+          {!expanded && (
+            <>"{reflection.pass1.slice(0, 150)}{reflection.pass1.length > 150 ? '…' : ''}"</>
+          )}
+        </div>
+        <button
+          style={{
+            background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer',
+            padding: '0', flexShrink: 0, display: 'flex', alignItems: 'center',
+          }}
+          aria-label={expanded ? 'Collapse reflection' : 'Expand reflection'}
+        >
+          {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
+      </div>
+      {expanded && (
+        <div style={{
+          padding: '0 2rem 0.75rem',
+          maxHeight: '240px',
+          overflowY: 'auto',
+          fontSize: '0.85rem',
+          color: 'var(--text-muted)',
+          fontStyle: 'italic',
+          lineHeight: 1.6,
+        }}>
+          <p style={{ marginBottom: reflection.pass2 ? '0.75rem' : 0 }}>"{reflection.pass1}"</p>
+          {reflection.pass2 && (
+            <>
+              <span style={{ color: 'var(--success)', fontSize: '0.75rem', textTransform: 'uppercase', fontStyle: 'normal' }}>After seeing the full picture:</span>
+              <p style={{ marginTop: '0.25rem' }}>"{reflection.pass2}"</p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default AgentReview;

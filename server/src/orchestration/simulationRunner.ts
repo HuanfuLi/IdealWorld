@@ -38,18 +38,13 @@ import {
 } from '../parsers/simulation.js';
 import { runWithConcurrency } from './concurrencyPool.js';
 import { asyncLogFlusher } from '../db/asyncLogFlusher.js';
+import { resolveAction } from '../mechanics/physicsEngine.js';
+import { type ActionCode } from '../mechanics/actionCodes.js';
+import { clusterByRole } from './clustering.js';
 
 /** Agents per resolution batch when session is large */
 const MAPREDUCE_THRESHOLD = 30;
 const BATCH_SIZE = 15;
-
-function chunk<T>(arr: T[], size: number): T[][] {
-  const groups: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) {
-    groups.push(arr.slice(i, i + size));
-  }
-  return groups;
-}
 
 /** Gini coefficient: 0 = perfect equality, 1 = perfect inequality */
 function gini(values: number[]): number {
@@ -170,9 +165,13 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           const messages = buildIntentPrompt(agent, session, previousSummary, iterNum);
           const raw = await provider.chat(messages, { model: settings.citizenAgentModel });
           const parsed = parseAgentIntent(raw);
-          return { agentId: agent.id, agentName: agent.name, intent: parsed.intent, reasoning: parsed.reasoning };
+          return {
+            agentId: agent.id, agentName: agent.name,
+            intent: parsed.intent, reasoning: parsed.reasoning,
+            actionCode: parsed.actionCode, actionTarget: parsed.actionTarget,
+          };
         } catch {
-          return { agentId: agent.id, agentName: agent.name, intent: `${agent.name} continues their routine.`, reasoning: '' };
+          return { agentId: agent.id, agentName: agent.name, intent: `${agent.name} continues their routine.`, reasoning: '', actionCode: 'NONE', actionTarget: null };
         }
       });
 
@@ -201,16 +200,17 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       let resolution: import('../parsers/simulation.js').ParsedResolution;
 
       if (aliveAgents.length > MAPREDUCE_THRESHOLD) {
-        // ── Map-Reduce path for large sessions ───────────────────────────
+        // ── Map-Reduce path for large sessions (role-based clustering) ──
         const allIntentsBrief = intents
           .map(i => `- ${i.agentName}: ${i.intent.slice(0, 80)}`)
           .join('\n');
 
-        const groups = chunk(aliveAgents, BATCH_SIZE);
+        const groups = clusterByRole(aliveAgents, BATCH_SIZE);
         const groupTasks = groups.map(group => async () => {
           const groupIntents = intents.filter(i => group.some(a => a.id === i.agentId));
           const msgs = buildGroupResolutionMessages(session, group, groupIntents, allIntentsBrief, iterNum, previousSummary);
-          const raw = await provider.chat(msgs, { model: settings.centralAgentModel });
+          // Use citizenAgentModel for group coordinators (cheaper); merge step keeps centralAgentModel
+          const raw = await provider.chat(msgs, { model: settings.citizenAgentModel });
           return parseGroupResolution(raw);
         });
 
@@ -245,28 +245,56 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         lifecycleEvents: resolution.lifecycleEvents,
       });
 
-      // ── Apply outcomes in DB (batched) ──────────────────────────────────
+      // ── Build actionCode map from intents ──────────────────────────────
+      const intentMap = new Map(intents.map(i => [i.agentId, i]));
+
+      // ── Apply physics engine + LLM narrative outcomes ─────────────────
       const outcomeMap = new Map(resolution.agentOutcomes.map(o => [o.agentId, o]));
 
-      const statUpdates: Array<{ id: string; wealth: number; health: number; happiness: number }> = [];
+      const statUpdates: Array<{ id: string; wealth: number; health: number; happiness: number; cortisol: number; dopamine: number }> = [];
       const deaths: Array<{ id: string; iterationNumber: number }> = [];
       const actionRows: Array<typeof resolvedActions.$inferInsert> = [];
 
       for (const agent of aliveAgents) {
         const outcome = outcomeMap.get(agent.id);
-        if (!outcome) continue;
+        const agentIntent = intentMap.get(agent.id);
 
-        const newHealth = agent.currentStats.health + outcome.healthDelta;
-        const shouldDie = outcome.died || newHealth <= 0;
+        // Resolve action code via physics engine
+        const actionCode = (agentIntent?.actionCode ?? 'NONE') as ActionCode;
+
+        // Resolve actionTarget: match target name to agent ID
+        let actionTargetId: string | undefined;
+        if (agentIntent?.actionTarget) {
+          const targetName = agentIntent.actionTarget.toLowerCase();
+          const targetAgent = aliveAgents.find(a => a.name.toLowerCase() === targetName);
+          actionTargetId = targetAgent?.id;
+        }
+
+        const physics = resolveAction({
+          agent,
+          actionCode,
+          actionTarget: actionTargetId,
+          allAgents: aliveAgents,
+        });
+
+        const newWealth = agent.currentStats.wealth + physics.wealthDelta;
+        const newHealth = agent.currentStats.health + physics.healthDelta;
+        const newHappiness = agent.currentStats.happiness + physics.happinessDelta;
+        const newCortisol = (agent.currentStats.cortisol ?? 20) + physics.cortisolDelta;
+        const newDopamine = (agent.currentStats.dopamine ?? 50) + physics.dopamineDelta;
+
+        const shouldDie = (outcome?.died === true) || newHealth <= 0;
 
         if (shouldDie) {
           deaths.push({ id: agent.id, iterationNumber: iterNum });
         } else {
           statUpdates.push({
             id: agent.id,
-            wealth: agent.currentStats.wealth + outcome.wealthDelta,
+            wealth: newWealth,
             health: newHealth,
-            happiness: agent.currentStats.happiness + outcome.happinessDelta,
+            happiness: newHappiness,
+            cortisol: newCortisol,
+            dopamine: newDopamine,
           });
         }
 
@@ -275,12 +303,12 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           sessionId,
           agentId: agent.id,
           iterationId,
-          action: outcome.outcome,
+          action: outcome?.outcome ?? agentIntent?.intent ?? 'No action.',
           outcome: JSON.stringify({
-            text: outcome.outcome,
-            wealthDelta: outcome.wealthDelta,
-            healthDelta: outcome.healthDelta,
-            happinessDelta: outcome.happinessDelta,
+            text: outcome?.outcome ?? agentIntent?.intent ?? 'No action.',
+            wealthDelta: physics.wealthDelta,
+            healthDelta: physics.healthDelta,
+            happinessDelta: physics.happinessDelta,
           }),
           resolvedAt: now,
         });

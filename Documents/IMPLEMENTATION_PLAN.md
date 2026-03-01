@@ -80,6 +80,8 @@ Phase 3: Simulation     → Stage 2 (simulation loop live, ≤30 agents)        
 Phase 4: Reflect+Review → Stages 3–4 (full lifecycle, MVP complete)              ✅ DONE
 Phase 5: Polish         → Stage 1C, artifacts, two-pass reflections, comparison, export/import  ✅ DONE
 Phase 6: Scale          → Map-reduce >30 agents, Gini coefficient, Compare nav   ✅ DONE
+Phase 7: Mechanism Enh. → Neuro-symbolic engine, HMAS clustering, prompt caching  ✅ DONE
+Phase 8: Bug Fixes + UI → Data persistence, Live Feed fix, trend graphs, expandable reflection  ✅ DONE
 ```
 
 **All phases complete.**
@@ -98,6 +100,18 @@ Phase 6: Scale          → Map-reduce >30 agents, Gini coefficient, Compare nav
 | Cross-session comparison + follow-up chat | ✅ Phase 5 |
 | Session export/import | ✅ Phase 5 |
 | Gini coefficient tracking | ✅ Phase 6 |
+| Neuro-symbolic physics engine (deterministic stat deltas) | ✅ Phase 7 |
+| Action codes (WORK/TRADE/REST/STRIKE/STEAL/HELP/INVEST/CONSUME) | ✅ Phase 7 |
+| Cortisol/dopamine hidden neurobiological variables | ✅ Phase 7 |
+| Role-based clustering for map-reduce groups | ✅ Phase 7 |
+| Prompt caching (Anthropic ContentBlock cache_control) | ✅ Phase 7 |
+| Cheaper model for group coordinators (citizenAgentModel) | ✅ Phase 7 |
+| Data persistence on page refresh (full iteration restore) | ✅ Phase 8 |
+| Live Feed text overlap fix (removed virtualizer) | ✅ Phase 8 |
+| Expandable reflection banner in Agent Review | ✅ Phase 8 |
+| Society trend line graph in Reflection screen | ✅ Phase 8 |
+| Per-agent stats line graph in Reflection screen | ✅ Phase 8 |
+| Per-agent stats history API endpoint | ✅ Phase 8 |
 
 ---
 
@@ -139,6 +153,29 @@ Phase 6: Scale          → Map-reduce >30 agents, Gini coefficient, Compare nav
 
 **Key files:** `server/src/orchestration/simulationRunner.ts` (map-reduce path, Gini), `server/src/llm/prompts.ts` (buildGroupResolutionMessages, buildMergeResolutionMessages), `server/src/parsers/simulation.ts` (parseGroupResolution, parseMergeResolution)
 
+### ✅ Phase 7: Mechanism Enhancement — COMPLETE
+
+**Built:** Neuro-symbolic engine separating LLM decisions from deterministic physics; role-based HMAS clustering; Anthropic prompt caching
+
+**Key new files:** `server/src/mechanics/actionCodes.ts`, `server/src/mechanics/physicsEngine.ts`, `server/src/orchestration/clustering.ts`
+
+**Key modified files:** `shared/src/types.ts` (cortisol/dopamine in AgentStats), `server/src/llm/types.ts` (ContentBlock), `server/src/llm/anthropic.ts` (cache_control support), `server/src/llm/openai.ts` (flatten ContentBlock[]), `server/src/llm/prompts.ts` (action codes, stress modifiers, static/dynamic split), `server/src/parsers/simulation.ts` (actionCode extraction, delta removal), `server/src/orchestration/simulationRunner.ts` (physics engine integration, clusterByRole, citizenAgentModel for groups), `server/src/db/repos/agentRepo.ts` (cortisol/dopamine in parseStats/updateStats/bulkUpdateStats)
+
+### ✅ Phase 8: Bug Fixes & UI Features — COMPLETE
+
+**Bugs fixed:**
+- Live Feed text overlap: removed `@tanstack/react-virtual` virtualizer (absolute positioning caused text overlap); replaced with simple `.map()` rendering
+- Data persistence on refresh: `loadHistory()` now fetches `?full=true` to restore feed, statsHistory, totalIterations, and lifecycle events; session stage check marks simulation as complete on revisit; auto-navigation guarded to only trigger during live simulation
+
+**Features added:**
+- Expandable reflection banner in AgentReview: `ReflectionStrip` component with expand/collapse animation (max-height CSS transition), shows full pass1+pass2 in scrollable container
+- Society trend line graph: SVG `LineChart` component (`web/src/components/LineChart.tsx`) with zero dependencies; shows avg W/H/Hap across iterations in Reflection screen
+- Per-agent stats expand: BarChart2 button per agent in Reflection's Agent Reflections panel; lazy-loads per-agent stats history from new API endpoint; animated expand/collapse with per-agent line charts
+
+**Key new files:** `web/src/components/LineChart.tsx`
+
+**Key modified files:** `server/src/routes/iterations.ts` (`?full=true` query, `/agent-stats` endpoint), `server/src/db/repos/iterationRepo.ts` (`listBySessionFull`), `web/src/stores/simulationStore.ts` (full history restore), `web/src/pages/Simulation.tsx` (removed virtualizer, session stage check, auto-nav guard), `web/src/pages/Reflection.tsx` (society trend graph, per-agent expand), `web/src/pages/AgentReview.tsx` (ReflectionStrip component)
+
 ---
 
 ## 5. Interface Specifications
@@ -158,17 +195,28 @@ interface Session {
   updatedAt: string;
 }
 
+interface AgentStats {
+  wealth: number;       // 0–100
+  health: number;       // 0–100
+  happiness: number;    // 0–100
+  cortisol: number;     // 0–100, hidden stress level
+  dopamine: number;     // 0–100, hidden satisfaction
+}
+
 interface Agent {
   id: string;
   sessionId: string;
   name: string;
   role: string;
   background: string;
-  wealth: number;       // 0–100
-  health: number;       // 0–100
-  happiness: number;    // 0–100
+  initialStats: AgentStats;
+  currentStats: AgentStats;
   isAlive: boolean;
   isCentralAgent?: boolean;
+  status: string;
+  type: string;
+  bornAtIteration: number | null;
+  diedAtIteration: number | null;
 }
 
 interface Iteration {
@@ -230,6 +278,8 @@ interface IterationStats {
   minHealth: number;   maxHealth: number;
   minHappiness: number; maxHappiness: number;
   aliveCount: number;  totalCount: number;
+  giniWealth?: number;    // 0=equality, 1=inequality
+  giniHappiness?: number;
 }
 
 interface AppSettings {
@@ -325,9 +375,15 @@ All endpoints prefixed with `/api`. Bodies are JSON.
 ### 5.4 LLM Gateway Interface (`server/llm/gateway.ts`)
 
 ```typescript
+interface ContentBlock {
+  type: 'text';
+  text: string;
+  cache_control?: { type: 'ephemeral' };  // Anthropic prompt caching
+}
+
 interface LLMMessage {
   role: 'system' | 'user' | 'assistant';
-  content: string;
+  content: string | ContentBlock[];  // ContentBlock[] enables prompt caching
 }
 
 interface LLMOptions {
@@ -343,7 +399,7 @@ interface LLMGateway {
 }
 ```
 
-Both `openai-compatible` and `anthropic` providers implement this. The orchestration engine only depends on `LLMGateway`, never a specific provider.
+Both `openai-compatible` and `anthropic` providers implement this. The orchestration engine only depends on `LLMGateway`, never a specific provider. When `content` is a `ContentBlock[]`, the Anthropic provider passes it directly as the system parameter for prompt caching; other providers flatten to a single string.
 
 ### 5.5 Database Repo Interface (`server/db/repos/`)
 

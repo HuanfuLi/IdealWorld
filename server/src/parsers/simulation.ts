@@ -2,10 +2,13 @@
  * C6: Simulation parsers — parse LLM responses for agent intents and resolution (spec §5.6).
  */
 import { parseJSON } from './json.js';
+import { normalizeActionCode, type ActionCode } from '../mechanics/actionCodes.js';
 
 export interface ParsedAgentIntent {
   intent: string;
   reasoning: string;
+  actionCode: ActionCode;
+  actionTarget: string | null;
 }
 
 export interface ParsedAgentOutcome {
@@ -36,12 +39,16 @@ export function parseAgentIntent(text: string): ParsedAgentIntent {
     return {
       intent: String(raw.intent ?? '').trim() || 'No specific intent.',
       reasoning: String(raw.reasoning ?? '').trim(),
+      actionCode: normalizeActionCode(String(raw.actionCode ?? 'NONE')),
+      actionTarget: raw.actionTarget ? String(raw.actionTarget) : null,
     };
   } catch {
     // LLM returned prose — treat the whole text as the intent
     return {
       intent: text.trim().slice(0, 500) || 'No specific intent.',
       reasoning: '',
+      actionCode: 'NONE',
+      actionTarget: null,
     };
   }
 }
@@ -58,12 +65,13 @@ export function parseResolution(text: string): ParsedResolution {
     const narrativeSummary = String(raw.narrativeSummary ?? '').trim() || 'The iteration passed without major events.';
 
     const rawOutcomes = Array.isArray(raw.agentOutcomes) ? raw.agentOutcomes : [];
+    // Stat deltas are now computed by the physics engine, not the LLM
     const agentOutcomes: ParsedAgentOutcome[] = rawOutcomes.map((o: Record<string, unknown>) => ({
       agentId: String(o.agentId ?? ''),
       outcome: String(o.outcome ?? '').trim(),
-      wealthDelta: clampDelta(o.wealthDelta),
-      healthDelta: clampDelta(o.healthDelta),
-      happinessDelta: clampDelta(o.happinessDelta),
+      wealthDelta: 0, // placeholder — physics engine provides actual values
+      healthDelta: 0,
+      happinessDelta: 0,
       died: o.died === true,
       newRole: o.newRole ? String(o.newRole) : null,
     }));
@@ -106,12 +114,13 @@ export function parseGroupResolution(text: string): ParsedGroupResolution {
     const groupSummary = String(raw.groupSummary ?? '').trim() || 'The group continued their activities.';
 
     const rawOutcomes = Array.isArray(raw.agentOutcomes) ? raw.agentOutcomes : [];
+    // Stat deltas are now computed by the physics engine, not the LLM
     const agentOutcomes: ParsedAgentOutcome[] = rawOutcomes.map((o: Record<string, unknown>) => ({
       agentId: String(o.agentId ?? ''),
       outcome: String(o.outcome ?? '').trim(),
-      wealthDelta: clampDelta(o.wealthDelta),
-      healthDelta: clampDelta(o.healthDelta),
-      happinessDelta: clampDelta(o.happinessDelta),
+      wealthDelta: 0, // placeholder — physics engine provides actual values
+      healthDelta: 0,
+      happinessDelta: 0,
       died: o.died === true,
       newRole: o.newRole ? String(o.newRole) : null,
     }));

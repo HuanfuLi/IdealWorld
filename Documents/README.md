@@ -1,73 +1,39 @@
-# React + TypeScript + Vite
+# Ideal World (理想世界)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+**Ideal World** 是一个基于大语言模型（LLM）、本地优先的多智能体社会仿真平台。它通过回合制的意图声明和仲裁机制，让数十数上百个带有独立人格的“平民智能体（Citizen Agents）”在虚拟社会中生活，并由具备全知视角的“中央智能体（Central Agent）”进行微观推演和宏观裁决。
 
-Currently, two official plugins are available:
+## 核心特性
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **大规模多智能体系统 (MAS)**：支持并发推演 150+ 个具备独立记忆与阶级身份的智能体，观察社会财富分配、阶级演化与群体性冲突。
+- **神经符号引擎 (Neuro-Symbolic Engine)**：摆脱纯粹的大语言模型字符拼凑，引入绝对理性的“物理与经济学常数”算法。大模型负责认知和决策，硬核代码层负责计算真实的财富转移与内分泌变量（皮质醇、多巴胺等）。
+- **层次化 Map-Reduce 调度架构**：通过社会拓扑距离进行动态聚簇，并使用“局部协调智能体 (Coordinator Agents)”将平民意图压缩整合送交中央智能体，消灭了指数级上下文膨胀，极大节约了 API 成本和 Rate Limit 风险。
+- **极高性能的高并发数据流转**：
+  - **后端持久层**：基于 SQLite WAL 模式、Drizzle 批量操作事务与异步内存日志队列，彻底解决每个回合上万次微小 I/O 引发的 `SQLITE_BUSY` 死锁。
+  - **前端渲染层**：结合 Server-Sent Events (SSE)、`requestAnimationFrame` 双缓冲防抖拦截以及虚拟长列表渲染（Virtual List），使得 React 19 面临高频大规模的节点状态更新也能保持 60帧 的丝滑滚动体验。
+- **平台无关的智能体网关**：支持无缝对接各大模型 API (Anthropic Claude, OpenAI 等)，同时完美支持接入 LM Studio 或 Ollama 运行本地纯离线的大模型。云端端侧（Cloud-Edge）的混合集群调度可由您自由配置。
 
-## React Compiler
+## 系统架构与推演工作流
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+系统仿真的单回合（Iteration）为“意图 - 裁决”两步走模型：
+1. **意图阶段 (Map/Parallel)**：所有现存平民结合自身履历和压力参数，生成下一步互动的“意图（Intent）”。
+2. **裁决阶段 (Reduce/Serial)**：协调智能体完成局部矛盾的初步浓缩，随后中央智能体处理复杂的阶层矛盾并判定生死与违法行为。最后由底层的**物理符号引擎**敲定最为精准的经济和生存属性数值变动，形成定局。
 
-## Expanding the ESLint configuration
+## 快速上手
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+1. 根目录安装依赖包：
+   ```bash
+   npm install
+   ```
+2. 直接执行开发启动命令（基于 `vite` 代理和 `concurrently` 同时拉起前后端服务）：
+   ```bash
+   npm run dev
+   ```
+3. 在浏览器内进入本地环境，即可体验从点子构思、建立世界观、直到拉开规模化社会仿真的完整流程。
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## 技术规范与文档
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+全套相关的英文研发说明、用户流（User Flow）、深度架构设计（Project Design）、深度功能与学术向增强机制计划表（Mechanism Enhancement）等，均放置在此 `Documents/` 目录中以供查阅。
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## 开源许可情况
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+本项目采用 [MIT 许可证](../LICENSE) 授权。

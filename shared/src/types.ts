@@ -52,6 +52,8 @@ export interface AgentStats {
   wealth: number;
   health: number;
   happiness: number;
+  cortisol: number;    // 0-100, hidden stress level
+  dopamine: number;    // 0-100, hidden satisfaction
 }
 
 export interface Agent {

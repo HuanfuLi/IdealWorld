@@ -3,7 +3,6 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Play, Pause, Square, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle } from 'lucide-react';
 import { useSimulationStore } from '../stores/simulationStore';
 import { useShallow } from 'zustand/react/shallow';
-import { useVirtualizer } from '@tanstack/react-virtual';
 
 const Simulation = () => {
   const navigate = useNavigate();
@@ -30,18 +29,36 @@ const Simulation = () => {
     reset();
     loadAgents(id);
     loadHistory(id);
+    // Connect SSE for live updates; will close gracefully if simulation already done
     const disconnect = connectSSE(id);
     return disconnect;
+  }, [id]);
+
+  // Check session stage to mark complete if simulation is already done (page refresh case)
+  useEffect(() => {
+    if (!id) return;
+    fetch(`/api/sessions/${id}`).then(r => r.json()).then((s: { stage?: string }) => {
+      if (s.stage && s.stage !== 'simulating' && s.stage !== 'simulation-paused') {
+        // Simulation already finished
+        const state = useSimulationStore.getState();
+        if (!state.isRunning && !state.isComplete && state.feed.length > 0) {
+          useSimulationStore.setState({ isComplete: true });
+        }
+      }
+    }).catch(() => {});
   }, [id]);
 
   useEffect(() => {
     feedEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [feed.length]);
 
-  // Navigate to reflection when simulation completes
+  // Navigate to reflection when simulation completes (only during live simulation, not on reload)
+  const wasRunningRef = useRef(false);
   useEffect(() => {
-    if (isComplete && id) {
-      // Small delay to let user see the final message
+    if (isRunning) wasRunningRef.current = true;
+  }, [isRunning]);
+  useEffect(() => {
+    if (isComplete && id && wasRunningRef.current) {
       const t = setTimeout(() => navigate(`/session/${id}/reflection`), 3000);
       return () => clearTimeout(t);
     }
@@ -80,23 +97,7 @@ const Simulation = () => {
     [feed]
   );
 
-  // Virtualizer for the live feed
-  const feedParentRef = useRef<HTMLDivElement>(null);
-  const feedVirtualizer = useVirtualizer({
-    count: reversedFeed.length,
-    getScrollElement: () => feedParentRef.current,
-    estimateSize: () => 100,
-    overscan: 5,
-  });
-
-  // Virtualizer for lifecycle events
-  const lifecycleParentRef = useRef<HTMLDivElement>(null);
-  const lifecycleVirtualizer = useVirtualizer({
-    count: allLifecycleEvents.length,
-    getScrollElement: () => lifecycleParentRef.current,
-    estimateSize: () => 28,
-    overscan: 5,
-  });
+  const feedScrollRef = useRef<HTMLDivElement>(null);
 
   return (
     <div className="animate-fade-in" style={{ height: 'calc(100vh - 4rem)', display: 'flex', flexDirection: 'column' }}>
@@ -169,7 +170,7 @@ const Simulation = () => {
               <Activity size={18} color="var(--primary)" /> Live Feed
             </h3>
           </div>
-          <div ref={feedParentRef} style={{ flex: 1, padding: '1rem', overflowY: 'auto' }}>
+          <div ref={feedScrollRef} style={{ flex: 1, padding: '1rem', overflowY: 'auto' }}>
             {feed.length === 0 && !isRunning && (
               <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', textAlign: 'center', marginTop: '2rem' }}>
                 No iterations yet.
@@ -184,50 +185,31 @@ const Simulation = () => {
                 <p style={{ fontSize: '0.85rem', color: 'var(--text-dim)' }}>Collecting agent intentions…</p>
               </div>
             )}
-            {/* Virtualized feed list */}
-            {reversedFeed.length > 0 && (
-              <div style={{ height: feedVirtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
-                {feedVirtualizer.getVirtualItems().map(virtualRow => {
-                  const entry = reversedFeed[virtualRow.index];
-                  return (
-                    <div
-                      key={entry.number}
-                      data-index={virtualRow.index}
-                      ref={feedVirtualizer.measureElement}
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        width: '100%',
-                        transform: `translateY(${virtualRow.start}px)`,
-                        paddingBottom: '1rem',
-                      }}
-                    >
-                      <div style={{
-                        paddingLeft: '1rem',
-                        borderLeft: `2px solid ${entry.number === currentIteration ? 'var(--primary)' : 'var(--glass-border)'}`,
-                      }}>
-                        <h4 style={{
-                          fontSize: '0.9rem',
-                          color: entry.number === currentIteration ? 'var(--primary)' : 'var(--text-muted)',
-                          marginBottom: '0.5rem',
-                        }}>
-                          Iteration {entry.number}
-                          {entry.stats && (
-                            <span style={{ fontWeight: 'normal', marginLeft: '0.5rem', fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-                              · {entry.stats.aliveCount} alive
-                            </span>
-                          )}
-                        </h4>
-                        <p style={{ fontSize: '0.95rem', lineHeight: 1.5, color: '#e5e7eb' }}>
-                          {entry.narrativeSummary}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
+            {/* Feed list (newest first) */}
+            {reversedFeed.map(entry => (
+              <div key={entry.number} style={{ marginBottom: '1rem' }}>
+                <div style={{
+                  paddingLeft: '1rem',
+                  borderLeft: `2px solid ${entry.number === currentIteration ? 'var(--primary)' : 'var(--glass-border)'}`,
+                }}>
+                  <h4 style={{
+                    fontSize: '0.9rem',
+                    color: entry.number === currentIteration ? 'var(--primary)' : 'var(--text-muted)',
+                    marginBottom: '0.5rem',
+                  }}>
+                    Iteration {entry.number}
+                    {entry.stats && (
+                      <span style={{ fontWeight: 'normal', marginLeft: '0.5rem', fontSize: '0.8rem', color: 'var(--text-dim)' }}>
+                        · {entry.stats.aliveCount} alive
+                      </span>
+                    )}
+                  </h4>
+                  <p style={{ fontSize: '0.95rem', lineHeight: 1.5, color: '#e5e7eb' }}>
+                    {entry.narrativeSummary}
+                  </p>
+                </div>
               </div>
-            )}
+            ))}
             {isComplete && finalReport && (
               <div style={{ paddingLeft: '1rem', borderLeft: '2px solid var(--success)', marginTop: '0.5rem' }}>
                 <h4 style={{ fontSize: '0.9rem', color: 'var(--success)', marginBottom: '0.5rem' }}>Final Report</h4>
@@ -336,35 +318,16 @@ const Simulation = () => {
             {allLifecycleEvents.length === 0 ? (
               <div style={{ fontSize: '0.9rem', color: 'var(--text-dim)' }}>No events yet.</div>
             ) : (
-              <div ref={lifecycleParentRef} style={{ flex: 1, overflowY: 'auto', maxHeight: '300px' }}>
-                <div style={{ height: lifecycleVirtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
-                  {lifecycleVirtualizer.getVirtualItems().map(virtualRow => {
-                    const e = allLifecycleEvents[virtualRow.index];
-                    return (
-                      <div
-                        key={virtualRow.index}
-                        data-index={virtualRow.index}
-                        ref={lifecycleVirtualizer.measureElement}
-                        style={{
-                          position: 'absolute',
-                          top: 0,
-                          left: 0,
-                          width: '100%',
-                          transform: `translateY(${virtualRow.start}px)`,
-                          fontSize: '0.9rem',
-                          color: 'var(--text-dim)',
-                          paddingBottom: '0.5rem',
-                        }}
-                      >
-                        <span style={{ color: 'var(--text-muted)' }}>Iter {e.iterNum}:</span>{' '}
-                        <span style={{ color: e.type === 'death' ? 'var(--danger)' : 'var(--primary)' }}>
-                          {e.type === 'death' ? '💀' : '🔄'}
-                        </span>{' '}
-                        {e.detail}
-                      </div>
-                    );
-                  })}
-                </div>
+              <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                {allLifecycleEvents.map((e, idx) => (
+                  <div key={idx} style={{ fontSize: '0.9rem', color: 'var(--text-dim)', paddingBottom: '0.5rem' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Iter {e.iterNum}:</span>{' '}
+                    <span style={{ color: e.type === 'death' ? 'var(--danger)' : 'var(--primary)' }}>
+                      {e.type === 'death' ? '💀' : '🔄'}
+                    </span>{' '}
+                    {e.detail}
+                  </div>
+                ))}
               </div>
             )}
           </div>
