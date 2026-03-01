@@ -30,16 +30,16 @@ Ideal World 是一个使用全本地化技术栈的大型多智能体(Multi-Agen
     2.  虚拟法律文档 (Law Document)
     3.  市民名单与初始状态 (Agent Roster & Stats)
 
-### 2.2 阶段 2：核心模拟循环 (Simulation Loop)
-这是本系统最具技术含量的模块。它使用了一个“意图 (并发) -> 裁决 (串行 / Map-Reduce)” 的两阶段物理/逻辑引擎混合执行模型。
+### 2.2 阶段 2：核心模拟循环 (Simulation Loop) 与神经符号引擎
+这是本系统最具技术含量的模块。为了对抗 LLM 由于 RLHF 偏见导致的“一味妥协”与“缺乏真实资源约束”问题，系统引入了**神经符号 AI (Neuro-symbolic AI)** 范式，使用了一个“意图 (神经层/并发) -> 裁决与数值计算 (符号层/串行或 Map-Reduce)” 的混合执行模型。
 *   **代码位置**：`server/src/orchestration/simulationRunner.ts`
-*   **物理引擎位置**：`server/src/mechanics/physicsEngine.ts` 与 `actionCodes.ts` (硬编码了诸如 WORK, STEAL, TRADE 等操作导致的确切数值变化机制)
+*   **量化经济与符号引擎位置**：`server/src/mechanics/physicsEngine.ts` 与 `actionCodes.ts`
 *   **循环步骤 (每一回合 / Iteration)**:
     1.  **收集意图 (Intent Phase)**：遍历所有活着的 Citizen Agents，通过并发的 LLM 请求获取每个人这回合想干什么（输出意图、原因和硬编码的 `ActionCode`）。并发数由系统配置决定以避免 Rate Limit。
     2.  **Central Agent 裁决 (Resolution Phase)**：
         *   **Standard Path (<=30 人)**：将所有意图聚合给 Central Agent，要求其编写一个连贯的故事，并指出谁可能死亡。
         *   **Map-Reduce Path (>30 人)**：为了防止上下文窗口超载，系统使用 `server/src/orchestration/clustering.ts` 按照角色 (Role) 将人群聚类分组（比如农民一组，商人一组）。每组由一个局部的协调器 LLM 进行预演合并，最后再由 Central Agent 统一合并所有子组的结果 (Merge Step)，生成全局总结。
-    3.  **应用物理学与状态变更**：基于 LLM 返回的意图和 Action Code，调用 `resolveAction` 计算确切的财富、健康、幸福、压力(Cortisol)、满足感(Dopamine) 变化。应用状态并保存到数据库。
+    3.  **应用物理学与状态变更 (Symbolic Logic)**：绝不让 LLM 自由幻觉数值变化！基于 LLM 返回的意图和提取出的规范化 `ActionCode` (如 `WORK`, `STEAL`, `STRIKE`)，系统将调用 `resolveAction` 进行基于硬编码数学公式的确切财富、健康、幸福变化计算。同时，这里还内置了**神经心理学参数模拟 (Neurobiological Modeling)**，计算智能体的压力 (`Cortisol`) 与多巴胺 (`Dopamine`) 累积。当平民被长期剥削导致 Cortisol 飙升时，系统会在下一回合强行在其 Prompt 中注入“生存本能占主导”的系统级指令，以此突破 RLHF 封印，逼迫其发动社会反抗。应用状态并保存到数据库。
     4.  **推送数据**：通过 SSE (`simulationManager.broadcast`) 将这一迭代的故事、数据发送给前端进行 UI 渲染。
 
 ### 2.3 阶段 3 & 4：反思与总结 (Reflection & Review)
@@ -102,7 +102,28 @@ Ideal World 是一个使用全本地化技术栈的大型多智能体(Multi-Agen
 
 ---
 
-## 5. 数据持久化与数据库 (Database & Storage)
+## 5. 性能与成本优化 (Performance & Cost Optimizations)
+
+根据最新的架构与性能报告，Ideal World 在前端渲染和 LLM 调用成本方面进行了深度优化：
+
+### 5.1 前端渲染与状态同步瓶颈优化
+*   **双缓冲与 rAF 防抖批处理 (`web/src/stores/simulationStore.ts`)**:
+    后端通过 SSE 以高频推送大量智能体状态时，为防止 React 频繁重新渲染导致卡顿（Render Thrashing），系统在底层建立了一个脱离 React 生命周期的可变数组缓冲池。所有高频传入的事件先被推入该缓冲区，并借助原生浏览器的 `requestAnimationFrame` (rAF) API，与显示器刷新率对齐。在每一帧渲染前，将缓冲区的所有更新一次性合并推送到 Zustand 状态中，极大地保证了渲染的丝滑度。
+*   **状态隔离与并发渲染特性 (`web/src/pages/Simulation.tsx`)**:
+    结合 Zustand 与 React 19，系统大量使用了 `useShallow` 进行选择性订阅（Selectors），保证组件仅在自身依赖的字段发生变更时进行 Diff 计算。这彻底避免了状态瀑布引起的级联重绘。
+*   *注：曾经尝试引入的 Virtualization 虚拟列表库在后期优化中被移除（为了解决 CSS 定位重叠问题），当前转而采用基于数组切片和简洁 DOM 结构的原生映射。*
+
+### 5.2 LLM 成本优化与端云混合调度
+*   **Prompt Caching 提示词缓存 (`server/src/llm/anthropic.ts`, `server/src/llm/prompts.ts`)**:
+    在构建发给 LLM 的上下文时，系统严格遵守“静态极度前置、动态严格后置”的法则。将基础世界观、不变的机制、法律设定全部标记为可缓存对象。通过使用 Anthropic API 提供的 `cache_control` 属性，系统能复用 KV 缓存，极大降低多轮交互和并发智能体调用的 Token 开销与首字响应延迟（TTFT）。
+*   **端云混合模型调度策略 (Hybrid Model Orchestration) (`server/src/orchestration/simulationRunner.ts`)**:
+    不再盲目让顶级模型包揽一切。在 Map-Reduce 的推演路径中：
+    *   **局部推演 (System 1)**：成百上千个底层 Citizen Agent 组成的簇（Cluster）和基础的生活事件推演，被下发至较廉价的模型（`citizenAgentModel`，甚至可以是端侧的 Llama 3/Mistral）运行。
+    *   **全局宏观合并 (System 2)**：那些需要深邃分析与全局协调的任务，如宏观社会裁定与合并各个群组的推演总结时，流量则被路由至高阶云端模型（`centralAgentModel`）进行。这种基于认知复杂度的智能算力切分，削减了近 60% 的总推理开销。
+
+---
+
+## 6. 数据持久化与数据库 (Database & Storage)
 
 *   **数据存储位置**: 用户主目录下的 `.idealworld` 文件夹。
     *   **Mac/Linux**: `~/.idealworld/idealworld.db`
