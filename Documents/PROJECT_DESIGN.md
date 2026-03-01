@@ -1330,60 +1330,60 @@ When using local LLMs:
 
 ## 17. Development Phases & Milestones
 
-### Phase 1: Foundation (Weeks 1–3)
+### Phase 1: Foundation ✅ COMPLETE
 
-- [ ] Monorepo scaffolding (Vite + React + TypeScript + Tailwind for frontend, Node.js + Express for backend).
-- [ ] Shared data models and TypeScript interfaces (shared package).
-- [ ] SQLite database setup with Drizzle ORM, all table schemas, migrations.
-- [ ] LLM Gateway module with provider abstraction (local, Claude, OpenAI-compatible).
-- [ ] Settings page and API for LLM provider configuration.
-- [ ] Home Page with session list (empty state, create, delete).
-- [ ] Basic routing structure.
+- [x] Monorepo scaffolding (Vite + React + TypeScript for frontend, Node.js + Express for backend).
+- [x] Shared data models and TypeScript interfaces (shared package).
+- [x] SQLite database setup with Drizzle ORM, all table schemas, migrations.
+- [x] LLM Gateway module with provider abstraction (local, Claude, OpenAI-compatible).
+- [x] Settings page and API for LLM provider configuration.
+- [x] Home Page with session list (empty state, create, delete).
+- [x] Basic routing structure.
 
-### Phase 2: Brainstorming & Design (Weeks 4–7)
+### Phase 2: Brainstorming & Design ✅ COMPLETE
 
-- [ ] Stage 0 — Idea Input page.
-- [ ] Chat interface component (reusable for Stages 1A, 1C, and 4).
-- [ ] Central Agent brainstorming prompt engineering.
-- [ ] Brainstorming completeness checklist logic.
-- [ ] "Start Design" button and override flow.
-- [ ] Central Agent design generation (multi-step prompt chain with time scale).
-- [ ] Design Review page (society overview, agent roster table, law viewer).
-- [ ] Design Refinement page — refinement chat + live-updating design panels.
-- [ ] Iteration count input, confirmation checkbox, and validation.
+- [x] Stage 0 — Idea Input page.
+- [x] Chat interface component (reusable for Stages 1A, 1C, and 4).
+- [x] Central Agent brainstorming prompt engineering.
+- [x] Brainstorming completeness checklist logic.
+- [x] "Start Design" button and override flow.
+- [x] Central Agent design generation (multi-step prompt chain with time scale).
+- [x] Design Review page (society overview, agent roster table, law viewer).
+- [x] Design Refinement page — refinement chat + live-updating design panels.
+- [x] Iteration count input, confirmation checkbox, and validation.
 
-### Phase 3: Simulation Engine (Weeks 8–12)
+### Phase 3: Simulation Engine ✅ COMPLETE
 
-- [ ] Orchestration engine with two-phase intent→resolve model.
-- [ ] Citizen Agent intent prompt construction and response parsing.
-- [ ] Central Agent resolution prompt (direct mode for ≤50 agents).
-- [ ] Hierarchical map-reduce resolution (for >50 agents).
-- [ ] Agent lifecycle management (death, birth, role change).
-- [ ] Simulation Dashboard UI (progress bar, live feed, charts, agent grid, lifecycle log).
-- [ ] SSE streaming from backend to frontend.
-- [ ] Pause/resume/abort simulation with transaction-safe state management.
-- [ ] Iteration data persistence and auto-save.
-- [ ] Final State Report generation with hierarchical arc summarization.
-- [ ] Statistics computation (including Gini coefficient) and charting.
+- [x] Orchestration engine with two-phase intent→resolve model.
+- [x] Citizen Agent intent prompt construction and response parsing.
+- [x] Central Agent resolution prompt (direct mode for ≤50 agents).
+- [x] Hierarchical map-reduce resolution (for >50 agents).
+- [x] Agent lifecycle management (death, birth, role change).
+- [x] Simulation Dashboard UI (progress bar, live feed, charts, agent grid, lifecycle log).
+- [x] SSE streaming from backend to frontend.
+- [x] Pause/resume/abort simulation with transaction-safe state management.
+- [x] Iteration data persistence and auto-save.
+- [x] Final State Report generation with hierarchical arc summarization.
+- [x] Statistics computation (including Gini coefficient) and charting.
 
-### Phase 4: Reflection & Review (Weeks 13–15)
+### Phase 4: Reflection & Review ✅ COMPLETE
 
-- [ ] Agent reflection Pass 1 prompt engineering and execution (personal-only).
-- [ ] Agent reflection Pass 2 prompt engineering and execution (post-briefing).
-- [ ] Society Evaluation Report generation (with perspective shift analysis).
-- [ ] Reflection Page UI (both passes displayed per agent).
-- [ ] Agent Review (Stage 4) — agent selector with dead agent section, per-agent chat.
-- [ ] Review agent prompt construction (includes intent/outcome history, both reflection passes).
-- [ ] "End Session" flow and session completion.
+- [x] Agent reflection Pass 1 prompt engineering and execution (personal-only).
+- [x] Agent reflection Pass 2 prompt engineering and execution (post-briefing).
+- [x] Society Evaluation Report generation (with perspective shift analysis).
+- [x] Reflection Page UI (both passes displayed per agent).
+- [x] Agent Review (Stage 4) — agent selector with dead agent section, per-agent chat.
+- [x] Review agent prompt construction (includes intent/outcome history, both reflection passes).
+- [x] "End Session" flow and session completion.
 
-### Phase 5: Artifacts & Comparison (Weeks 16–17)
+### Phase 5: Artifacts & Comparison 🔄 IN PROGRESS
 
-- [ ] Artifacts Page — document list (12 artifact types), markdown viewer, search, export.
+- [x] Artifacts Page — on-demand assembly from existing tables, grouped document list, markdown viewer, search, copy, export.
 - [ ] Cross-session comparison — session selector, Central Agent comparison prompt.
 - [ ] Comparison Page UI with follow-up chat.
 - [ ] Session export/import (JSON file, full fidelity).
 
-### Phase 6: Polish & Testing (Weeks 18–20)
+### Phase 6: Polish & Testing ⏳ NOT STARTED
 
 - [ ] End-to-end testing (Playwright).
 - [ ] Unit and integration tests for all new logic (intent/resolve, map-reduce, lifecycle, two-pass reflections).
@@ -1392,3 +1392,23 @@ When using local LLMs:
 - [ ] Responsive design and mobile support.
 - [ ] Error states and edge case handling.
 - [ ] Cost estimation display before simulation start (for cloud providers).
+
+---
+
+## 18. Bug Fixes Applied
+
+### Design Overlay Disappearing on Error
+- **Symptom:** After starting design generation, if the LLM returned an error, the design overlay silently disappeared and the user was shown the Brainstorming chat again.
+- **Root causes:**
+  1. `isDesigning` in `Brainstorming.tsx` didn't account for `designProgress.error` — when `active` became false on error the overlay hid.
+  2. `DesignReview.tsx` redirect effect had `loading` used in condition but missing from dependency array `[session?.stage]`.
+  3. `startDesignGeneration`'s `complete` handler called `loadSession(id)` concurrently with `DesignReview`'s own `loadSession`, creating race conditions.
+- **Fixes:** Added `|| !!designProgress.error` to `isDesigning`; added `loading` to effect dependency array; removed redundant `loadSession` call from the `complete` handler.
+
+### Simulation Crashing on Prose LLM Response
+- **Symptom:** Simulation would fail with `parseJSON failed: Agent intentions for this iteration have been fully processed…` — the LLM returning prose instead of JSON for the resolution prompt crashed the entire simulation run.
+- **Fix:** Wrapped `parseAgentIntent` and `parseResolution` in `server/src/parsers/simulation.ts` with try/catch. Fallback: treat the prose text as the `narrativeSummary` and return empty `agentOutcomes` / `lifecycleEvents` so the iteration is skipped rather than crashing.
+
+### Session Nav Highlighting Stale Stage
+- **Symptom:** The left sidebar would highlight the wrong step (e.g., showing "Design" as active while on Simulation), because `SessionNav` read `session.stage` from `sessionDetailStore` which Simulation/Reflection/Review pages don't update.
+- **Fix:** Derived the active nav step from `useLocation()` URL path instead of store state. Used `Math.max(storeProgressIdx, urlProgressIdx)` so nav items remain accessible even when the store is stale. Added active highlight to the Artifacts link.
