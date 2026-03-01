@@ -1,120 +1,309 @@
-import React from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ArrowRight, MessageSquare } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ArrowRight, CheckSquare, Square, MessageSquare, Send, Users, Clock } from 'lucide-react';
+import { useCompareStore } from '../stores/compareStore';
+import type { SessionMetadata, ComparisonDimension } from '@idealworld/shared';
+
+const stageBadge: Record<string, { label: string; cls: string }> = {
+  'completed':           { label: '✓ Completed', cls: 'badge-success' },
+  'reviewing':           { label: 'Reviewing', cls: 'badge-info' },
+  'reflection-complete': { label: 'Reflected', cls: 'badge-info' },
+};
+
+function ScoreBar({ score, color }: { score: number; color: string }) {
+  return (
+    <div style={{ flex: 1, background: 'var(--panel-alpha-05)', borderRadius: '4px', overflow: 'hidden', height: '8px' }}>
+      <div style={{ width: `${score}%`, height: '100%', background: color, borderRadius: '4px', transition: 'width 0.5s ease' }} />
+    </div>
+  );
+}
+
+function DimensionRow({ dim, idx }: { dim: ComparisonDimension; idx: number }) {
+  const [open, setOpen] = useState(false);
+  const colors = ['var(--primary)', '#f59e0b'];
+
+  return (
+    <div style={{ borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.75rem', marginBottom: '0.75rem' }}>
+      <div
+        style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', marginBottom: '0.5rem' }}
+        onClick={() => setOpen(o => !o)}
+      >
+        <span style={{ width: '180px', color: 'var(--color-bright)', fontSize: '0.9rem', flexShrink: 0 }}>{dim.name}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1 }}>
+          <span style={{ color: colors[0], fontWeight: 'bold', fontSize: '0.85rem', width: '32px', textAlign: 'right' }}>{dim.score1}</span>
+          <ScoreBar score={dim.score1} color={colors[0]} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1 }}>
+          <span style={{ color: colors[1], fontWeight: 'bold', fontSize: '0.85rem', width: '32px', textAlign: 'right' }}>{dim.score2}</span>
+          <ScoreBar score={dim.score2} color={colors[1]} />
+        </div>
+      </div>
+      {open && (
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', lineHeight: 1.6, margin: 0, paddingLeft: '180px' }}>
+          {dim.analysis}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SessionCard({ session, selected, eligible, onToggle }: {
+  session: SessionMetadata;
+  selected: boolean;
+  eligible: boolean;
+  onToggle: () => void;
+}) {
+  const badge = stageBadge[session.stage];
+  return (
+    <div
+      onClick={eligible ? onToggle : undefined}
+      style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: '1rem',
+        padding: '0.75rem 1rem',
+        background: selected ? 'var(--panel-alpha-05)' : 'transparent',
+        borderRadius: '8px',
+        cursor: eligible ? 'pointer' : 'not-allowed',
+        border: selected ? '1px solid var(--primary)' : '1px solid transparent',
+        opacity: eligible ? 1 : 0.45,
+        transition: 'all 0.15s',
+      }}
+    >
+      <div style={{ marginTop: '2px', color: selected ? 'var(--primary)' : 'var(--text-muted)', flexShrink: 0 }}>
+        {selected ? <CheckSquare size={18} /> : <Square size={18} />}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.25rem' }}>
+          <strong style={{ color: 'var(--color-bright)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {session.title}
+          </strong>
+          {badge && <span className={`badge ${badge.cls}`} style={{ fontSize: '0.75rem' }}>{badge.label}</span>}
+          {!eligible && <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>(not completed)</span>}
+        </div>
+        <div style={{ display: 'flex', gap: '1rem', fontSize: '0.8rem', color: 'var(--text-dim)' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}><Users size={13} /> {session.agentCount}</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}><Clock size={13} /> {session.completedIterations} iter</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const CompareSessions = () => {
-    const navigate = useNavigate();
+  const {
+    allSessions, selectedIds, comparison, messages,
+    loading, chatPending, error,
+    loadSessions, toggleSession, runComparison, sendMessage,
+  } = useCompareStore();
 
-    return (
-        <div className="animate-fade-in" style={{ maxWidth: '1000px', margin: '0 auto', paddingBottom: '3rem' }}>
-            <div className="page-header" style={{ marginBottom: '2rem' }}>
-                <h1 className="page-title">Compare Sessions</h1>
-            </div>
+  const [chatInput, setChatInput] = useState('');
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
-            <div className="glass-card" style={{ marginBottom: '2rem' }}>
-                <h3 style={{ fontSize: '1.1rem', marginBottom: '1rem' }}>Select sessions to compare:</h3>
+  useEffect(() => { loadSessions(); }, []);
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '1rem', background: 'var(--panel-alpha-05)', borderRadius: '8px', cursor: 'pointer', border: '1px solid var(--primary)' }}>
-                        <input type="checkbox" defaultChecked style={{ accentColor: 'var(--primary)', width: '18px', height: '18px' }} />
-                        <div style={{ flex: 1 }}>
-                            <strong style={{ color: 'var(--color-bright)' }}>Communist Village</strong>
-                            <span style={{ color: 'var(--text-muted)', marginLeft: '1rem', fontSize: '0.9rem' }}>(47 agents, 20 iterations, completed)</span>
-                        </div>
-                    </label>
+  const completedSessions = allSessions.filter(
+    s => s.stage === 'completed' || s.stage === 'reviewing' || s.stage === 'reflection-complete'
+  );
 
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '1rem', background: 'var(--panel-alpha-05)', borderRadius: '8px', cursor: 'pointer', border: '1px solid var(--primary)' }}>
-                        <input type="checkbox" defaultChecked style={{ accentColor: 'var(--primary)', width: '18px', height: '18px' }} />
-                        <div style={{ flex: 1 }}>
-                            <strong style={{ color: 'var(--color-bright)' }}>Libertarian City</strong>
-                            <span style={{ color: 'var(--text-muted)', marginLeft: '1rem', fontSize: '0.9rem' }}>(85 agents, 15 iterations, completed)</span>
-                        </div>
-                    </label>
+  const handleChat = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = chatInput.trim();
+    if (!text || chatPending) return;
+    setChatInput('');
+    await sendMessage(text);
+  };
 
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '1rem', background: 'var(--panel-alpha-02)', borderRadius: '8px', opacity: 0.5 }}>
-                        <input type="checkbox" disabled style={{ width: '18px', height: '18px' }} />
-                        <div style={{ flex: 1 }}>
-                            <strong>Technocracy 2050</strong>
-                            <span style={{ marginLeft: '1rem', fontSize: '0.9rem' }}>(in design — ineligible)</span>
-                        </div>
-                    </label>
-                </div>
+  const selected1 = selectedIds[0] ? allSessions.find(s => s.id === selectedIds[0]) : null;
+  const selected2 = selectedIds[1] ? allSessions.find(s => s.id === selectedIds[1]) : null;
 
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                    <button className="btn-primary">Generate Comparison <ArrowRight size={18} /></button>
-                </div>
-            </div>
+  return (
+    <div className="animate-fade-in" style={{ maxWidth: '1000px', margin: '0 auto', paddingBottom: '3rem' }}>
+      <div className="page-header" style={{ marginBottom: '2rem' }}>
+        <h1 className="page-title">Compare Sessions</h1>
+      </div>
 
-            {/* Comparison Report Area */}
-            <h2 style={{ fontSize: '1.25rem', marginBottom: '1.5rem', color: 'var(--color-bright)' }}>Comparison Report</h2>
+      {/* Session selection */}
+      <div className="glass-card" style={{ marginBottom: '2rem' }}>
+        <h3 style={{ fontSize: '1rem', marginBottom: '1rem', color: 'var(--text-muted)' }}>
+          Select exactly 2 completed sessions to compare
+          {selectedIds.length > 0 && (
+            <span style={{ color: 'var(--primary)', marginLeft: '0.75rem' }}>
+              ({selectedIds.length}/2 selected)
+            </span>
+          )}
+        </h3>
 
-            <div style={{ display: 'flex', gap: '2rem', marginBottom: '3rem' }}>
+        {allSessions.length === 0 && (
+          <p style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '2rem' }}>
+            No sessions found. Create and complete a session first.
+          </p>
+        )}
 
-                <div className="glass-card" style={{ flex: 1, borderTop: '4px solid var(--primary)' }}>
-                    <h3 style={{ fontSize: '1.25rem', color: 'var(--color-bright)', marginBottom: '1.5rem', textAlign: 'center' }}>Communist Village</h3>
-                    <div style={{ display: 'grid', gap: '1rem', color: 'var(--text-main)', fontSize: '1.05rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Avg Wealth:</span> <span style={{ color: 'var(--warning)', fontWeight: 'bold' }}>48</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Avg Health:</span> <span style={{ color: 'var(--success)', fontWeight: 'bold' }}>68</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Avg Happiness:</span> <span style={{ fontWeight: 'bold' }}>62</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Gini Coefficient:</span> <span style={{ fontWeight: 'bold' }}>0.31</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Deaths:</span> <span style={{ color: 'var(--danger)', fontWeight: 'bold' }}>2</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Survival Rate:</span> <span style={{ color: 'var(--success)', fontWeight: 'bold' }}>96%</span>
-                        </div>
-                    </div>
-                </div>
+        {completedSessions.length < 2 && allSessions.length > 0 && (
+          <p style={{ color: 'var(--text-dim)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+            You need at least 2 completed sessions to compare. Only completed, reviewing, or reflected sessions are eligible.
+          </p>
+        )}
 
-                <div className="glass-card" style={{ flex: 1, borderTop: '4px solid #f59e0b' }}>
-                    <h3 style={{ fontSize: '1.25rem', color: 'var(--color-bright)', marginBottom: '1.5rem', textAlign: 'center' }}>Libertarian City</h3>
-                    <div style={{ display: 'grid', gap: '1rem', color: 'var(--text-main)', fontSize: '1.05rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Avg Wealth:</span> <span style={{ color: 'var(--warning)', fontWeight: 'bold' }}>67</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Avg Health:</span> <span style={{ color: 'var(--danger)', fontWeight: 'bold' }}>59</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Avg Happiness:</span> <span style={{ fontWeight: 'bold' }}>54</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Gini Coefficient:</span> <span style={{ color: 'var(--danger)', fontWeight: 'bold' }}>0.58</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Deaths:</span> <span style={{ color: 'var(--danger)', fontWeight: 'bold' }}>7</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>Survival Rate:</span> <span style={{ color: 'var(--warning)', fontWeight: 'bold' }}>92%</span>
-                        </div>
-                    </div>
-                </div>
-
-            </div>
-
-            <div className="glass-panel" style={{ padding: '2rem', marginBottom: '2rem' }}>
-                <h3 style={{ fontSize: '1.2rem', color: 'var(--color-bright)', marginBottom: '1rem' }}>Central Analysis</h3>
-                <p style={{ color: 'var(--text-muted)', lineHeight: 1.6, fontSize: '1.05rem' }}>
-                    The communist society achieved higher equality (Gini 0.31 vs 0.58) and aggregate happiness, but at the cost of lower overall wealth generation and innovation. The libertarian society produced more wealth on average but with extreme inequality — the top 10% of agents held 60% of all resources. This led to a higher mortality rate among the lower economic strata.
-                </p>
-            </div>
-
-            <div className="glass-card" style={{ padding: '1rem' }}>
-                <div style={{ display: 'flex', gap: '1rem' }}>
-                    <input type="text" className="input-glass" placeholder="Ask a follow-up question..." />
-                    <button className="btn-secondary" style={{ padding: '0.5rem 1.5rem' }}><MessageSquare size={18} /></button>
-                </div>
-            </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '1.5rem' }}>
+          {allSessions.filter(s => s.stage !== 'idea-input').map(session => {
+            const eligible = session.stage === 'completed' || session.stage === 'reviewing' || session.stage === 'reflection-complete';
+            const selected = selectedIds.includes(session.id);
+            const disabled = !selected && selectedIds.length === 2;
+            return (
+              <SessionCard
+                key={session.id}
+                session={session}
+                selected={selected}
+                eligible={eligible && !disabled}
+                onToggle={() => toggleSession(session.id)}
+              />
+            );
+          })}
         </div>
-    );
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            className="btn-primary"
+            disabled={selectedIds.length !== 2 || loading}
+            onClick={runComparison}
+          >
+            {loading ? 'Analysing...' : 'Generate Comparison'} <ArrowRight size={18} />
+          </button>
+        </div>
+      </div>
+
+      {/* Error */}
+      {error && !loading && (
+        <div style={{ color: 'var(--danger)', padding: '1rem', background: 'rgba(239,68,68,0.1)', borderRadius: '8px', marginBottom: '2rem' }}>
+          {error}
+        </div>
+      )}
+
+      {/* Loading spinner */}
+      {loading && (
+        <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
+          <p>The Central Agent is analysing both societies…</p>
+        </div>
+      )}
+
+      {/* Results */}
+      {comparison && !loading && (
+        <>
+          <h2 style={{ fontSize: '1.25rem', marginBottom: '1.5rem', color: 'var(--color-bright)' }}>
+            Comparison Report
+          </h2>
+
+          {/* Side-by-side stat cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '2rem' }}>
+            {[selected1, selected2].map((s, idx) => s && (
+              <div key={s.id} className="glass-card" style={{ borderTop: `4px solid ${idx === 0 ? 'var(--primary)' : '#f59e0b'}` }}>
+                <h3 style={{ fontSize: '1.1rem', color: 'var(--color-bright)', marginBottom: '1rem', textAlign: 'center' }}>
+                  {idx === 0 ? 'Society A' : 'Society B'}: {s.title}
+                </h3>
+                <div style={{ display: 'flex', gap: '1.5rem', justifyContent: 'center', fontSize: '0.85rem', color: 'var(--text-dim)' }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}><Users size={14} /> {s.agentCount} agents</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}><Clock size={14} /> {s.completedIterations} iter</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Dimensions */}
+          <div className="glass-card" style={{ marginBottom: '2rem' }}>
+            <h3 style={{ fontSize: '1rem', color: 'var(--color-bright)', marginBottom: '1.25rem' }}>
+              Dimensions
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: '1rem', fontWeight: 'normal' }}>
+                (click to expand analysis)
+              </span>
+            </h3>
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', paddingLeft: '180px' }}>
+              <div style={{ flex: 1, textAlign: 'center', fontSize: '0.8rem', color: 'var(--primary)' }}>Society A</div>
+              <div style={{ flex: 1, textAlign: 'center', fontSize: '0.8rem', color: '#f59e0b' }}>Society B</div>
+            </div>
+            {comparison.dimensions.map((dim, idx) => (
+              <DimensionRow key={dim.name} dim={dim} idx={idx} />
+            ))}
+          </div>
+
+          {/* Narrative */}
+          <div className="glass-panel" style={{ padding: '1.5rem', marginBottom: '2rem' }}>
+            <h3 style={{ fontSize: '1rem', color: 'var(--color-bright)', marginBottom: '1rem' }}>Central Analysis</h3>
+            {comparison.narrative.split('\n').filter(p => p.trim()).map((para, i) => (
+              <p key={i} style={{ color: 'var(--text-muted)', lineHeight: 1.7, marginBottom: '0.75rem' }}>{para}</p>
+            ))}
+          </div>
+
+          {/* Verdict callout */}
+          <div style={{
+            padding: '1.25rem 1.5rem',
+            background: 'var(--panel-alpha-05)',
+            borderLeft: '4px solid var(--primary)',
+            borderRadius: '8px',
+            marginBottom: '2rem',
+          }}>
+            <p style={{ color: 'var(--color-bright)', fontWeight: 'bold', marginBottom: '0.25rem' }}>Verdict</p>
+            <p style={{ color: 'var(--text-main)', lineHeight: 1.6 }}>{comparison.verdict}</p>
+          </div>
+
+          {/* Follow-up chat */}
+          <div className="glass-card">
+            <h3 style={{ fontSize: '1rem', color: 'var(--color-bright)', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <MessageSquare size={18} /> Follow-up Questions
+            </h3>
+
+            {messages.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem', maxHeight: '320px', overflowY: 'auto' }}>
+                {messages.map((msg, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      padding: '0.75rem 1rem',
+                      borderRadius: '8px',
+                      background: msg.role === 'user' ? 'var(--panel-alpha-05)' : 'rgba(99,102,241,0.1)',
+                      alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                      maxWidth: '85%',
+                    }}
+                  >
+                    <p style={{ color: msg.role === 'user' ? 'var(--text-main)' : 'var(--color-bright)', fontSize: '0.9rem', lineHeight: 1.6 }}>
+                      {msg.content}
+                    </p>
+                  </div>
+                ))}
+                {chatPending && (
+                  <div style={{ padding: '0.75rem 1rem', borderRadius: '8px', background: 'rgba(99,102,241,0.1)', alignSelf: 'flex-start' }}>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Thinking…</span>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+            )}
+
+            <form onSubmit={handleChat} style={{ display: 'flex', gap: '0.75rem' }}>
+              <input
+                type="text"
+                className="input-glass"
+                placeholder="Ask a follow-up question about these societies…"
+                value={chatInput}
+                onChange={e => setChatInput(e.target.value)}
+                disabled={chatPending}
+                style={{ flex: 1 }}
+              />
+              <button
+                type="submit"
+                className="btn-secondary"
+                style={{ padding: '0.5rem 1rem' }}
+                disabled={!chatInput.trim() || chatPending}
+              >
+                <Send size={16} />
+              </button>
+            </form>
+          </div>
+        </>
+      )}
+    </div>
+  );
 };
 
 export default CompareSessions;

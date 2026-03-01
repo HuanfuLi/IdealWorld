@@ -91,3 +91,61 @@ export function parseFinalReport(text: string): string {
   const raw = parseJSON<Record<string, unknown>>(text);
   return String(raw.finalReport ?? '').trim() || text.trim();
 }
+
+// ── Phase 6: map-reduce parsers ──────────────────────────────────────────────
+
+export interface ParsedGroupResolution {
+  groupSummary: string;
+  agentOutcomes: ParsedAgentOutcome[];
+  lifecycleEvents: ParsedLifecycleEvent[];
+}
+
+export function parseGroupResolution(text: string): ParsedGroupResolution {
+  try {
+    const raw = parseJSON<Record<string, unknown>>(text);
+    const groupSummary = String(raw.groupSummary ?? '').trim() || 'The group continued their activities.';
+
+    const rawOutcomes = Array.isArray(raw.agentOutcomes) ? raw.agentOutcomes : [];
+    const agentOutcomes: ParsedAgentOutcome[] = rawOutcomes.map((o: Record<string, unknown>) => ({
+      agentId: String(o.agentId ?? ''),
+      outcome: String(o.outcome ?? '').trim(),
+      wealthDelta: clampDelta(o.wealthDelta),
+      healthDelta: clampDelta(o.healthDelta),
+      happinessDelta: clampDelta(o.happinessDelta),
+      died: o.died === true,
+      newRole: o.newRole ? String(o.newRole) : null,
+    }));
+
+    const rawEvents = Array.isArray(raw.lifecycleEvents) ? raw.lifecycleEvents : [];
+    const lifecycleEvents: ParsedLifecycleEvent[] = rawEvents.map((e: Record<string, unknown>) => ({
+      type: e.type === 'role_change' ? 'role_change' : 'death',
+      agentId: String(e.agentId ?? ''),
+      detail: String(e.detail ?? ''),
+    }));
+
+    return { groupSummary, agentOutcomes, lifecycleEvents };
+  } catch {
+    return { groupSummary: 'The group continued their activities.', agentOutcomes: [], lifecycleEvents: [] };
+  }
+}
+
+export interface ParsedMergeResolution {
+  narrativeSummary: string;
+  lifecycleEvents: ParsedLifecycleEvent[];
+}
+
+export function parseMergeResolution(text: string): ParsedMergeResolution {
+  try {
+    const raw = parseJSON<Record<string, unknown>>(text);
+    const narrativeSummary = String(raw.narrativeSummary ?? '').trim() || 'The iteration passed.';
+    const rawEvents = Array.isArray(raw.lifecycleEvents) ? raw.lifecycleEvents : [];
+    const lifecycleEvents: ParsedLifecycleEvent[] = rawEvents.map((e: Record<string, unknown>) => ({
+      type: e.type === 'role_change' ? 'role_change' : 'death',
+      agentId: String(e.agentId ?? ''),
+      detail: String(e.detail ?? ''),
+    }));
+    return { narrativeSummary, lifecycleEvents };
+  } catch {
+    return { narrativeSummary: text.trim().slice(0, 500) || 'The iteration passed.', lifecycleEvents: [] };
+  }
+}

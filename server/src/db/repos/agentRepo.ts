@@ -3,7 +3,7 @@
  */
 import { eq } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import { db } from '../index.js';
+import { db, sqlite } from '../index.js';
 import { agents } from '../schema.js';
 import type { Agent, AgentStats } from '@idealworld/shared';
 
@@ -88,5 +88,48 @@ export const agentRepo = {
       .update(agents)
       .set({ status: 'dead', diedAtIteration: iterationNumber })
       .where(eq(agents.id, id));
+  },
+
+  /**
+   * Batch-update stats for multiple agents in a single SQLite transaction.
+   * Much faster than individual UPDATE statements when agent count is high.
+   */
+  async bulkUpdateStats(
+    updates: Array<{ id: string; wealth: number; health: number; happiness: number }>
+  ): Promise<void> {
+    if (updates.length === 0) return;
+    const clamp = (v: number) => Math.min(100, Math.max(0, Math.round(v)));
+    const stmt = sqlite.prepare(
+      `UPDATE agents SET current_stats = ? WHERE id = ?`
+    );
+    const run = sqlite.transaction((items: typeof updates) => {
+      for (const u of items) {
+        const stats: AgentStats = {
+          wealth: clamp(u.wealth),
+          health: clamp(u.health),
+          happiness: clamp(u.happiness),
+        };
+        stmt.run(JSON.stringify(stats), u.id);
+      }
+    });
+    run(updates);
+  },
+
+  /**
+   * Batch-mark agents as dead in a single transaction.
+   */
+  async bulkMarkDead(
+    deaths: Array<{ id: string; iterationNumber: number }>
+  ): Promise<void> {
+    if (deaths.length === 0) return;
+    const stmt = sqlite.prepare(
+      `UPDATE agents SET status = 'dead', died_at_iteration = ? WHERE id = ?`
+    );
+    const run = sqlite.transaction((items: typeof deaths) => {
+      for (const d of items) {
+        stmt.run(d.iterationNumber, d.id);
+      }
+    });
+    run(deaths);
   },
 };

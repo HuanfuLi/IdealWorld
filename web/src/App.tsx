@@ -1,6 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import React, { useState, useEffect } from 'react';
-import { Home, Settings, Box, MessageSquare, Edit3, Activity, PieChart, Users, FileText, LayoutDashboard, Sun, Moon } from 'lucide-react';
+import { Home, Settings, Box, MessageSquare, Edit3, Activity, PieChart, Users, FileText, LayoutDashboard, Sun, Moon, GitCompare } from 'lucide-react';
 
 // STUB COMPONENTS
 import HomePage from './pages/HomePage';
@@ -169,6 +169,10 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
             <Settings size={22} />
             <span>Settings</span>
           </Link>
+          <Link to="/compare" className={`nav-item ${location.pathname === '/compare' ? 'active' : ''}`}>
+            <GitCompare size={22} />
+            <span>Compare</span>
+          </Link>
 
           {isSessionActive && sessionId && sessionId !== 'new' && (
             <SessionNav sessionId={sessionId} />
@@ -201,8 +205,8 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
             className="nav-item"
             style={{ width: '100%', background: 'transparent', border: 'none', cursor: 'pointer', justifyContent: 'flex-start' }}
           >
-            {theme === 'dark' ? <Sun size={22} /> : <Moon size={22} />}
-            <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
+            {theme === 'dark' ? <Moon size={22} /> : <Sun size={22} />}
+            <span>{theme === 'dark' ? 'Dark Mode' : 'Light Mode'}</span>
           </button>
         </div>
       </aside>

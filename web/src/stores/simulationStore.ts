@@ -1,14 +1,15 @@
 import { create } from 'zustand';
-import type { Agent, Iteration, AgentAction, IterationStats } from '@idealworld/shared';
+import type { Agent, Iteration, IterationStats } from '@idealworld/shared';
 
 // SSE event shapes mirroring server's SimulationEvent union
-interface IterationStartEvent { type: 'iteration-start'; iteration: number; total: number }
-interface AgentIntentEvent { type: 'agent-intent'; agentId: string; agentName: string; intent: string }
-interface ResolutionEvent { type: 'resolution'; iteration: number; narrativeSummary: string; lifecycleEvents: LifecycleEvent[] }
-interface IterationCompleteEvent { type: 'iteration-complete'; iteration: number; stats: IterationStats }
-interface SimulationCompleteEvent { type: 'simulation-complete'; finalReport: string }
-interface PausedEvent { type: 'paused'; iteration: number }
-interface ErrorEvent { type: 'error'; message: string }
+type SSEEvent =
+  | { type: 'iteration-start'; iteration: number; total: number }
+  | { type: 'agent-intent'; agentId: string; agentName: string; intent: string }
+  | { type: 'resolution'; iteration: number; narrativeSummary: string; lifecycleEvents: LifecycleEvent[] }
+  | { type: 'iteration-complete'; iteration: number; stats: IterationStats }
+  | { type: 'simulation-complete'; finalReport: string }
+  | { type: 'paused'; iteration: number }
+  | { type: 'error'; message: string };
 
 export interface LifecycleEvent {
   type: 'death' | 'role_change';
@@ -109,84 +110,121 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   connectSSE: (sessionId: string) => {
     const es = new EventSource(`/api/sessions/${sessionId}/simulate/stream`);
 
-    es.onmessage = (e) => {
-      try {
-        const event = JSON.parse(e.data) as
-          | IterationStartEvent | AgentIntentEvent | ResolutionEvent
-          | IterationCompleteEvent | SimulationCompleteEvent | PausedEvent | ErrorEvent;
+    // ── Double-buffering: push events into a mutable buffer and flush
+    // via requestAnimationFrame to avoid per-event React re-renders. ────
+    const buffer: SSEEvent[] = [];
+    let rafId: number | null = null;
 
-        switch (event.type) {
-          case 'iteration-start':
-            set({
-              isRunning: true,
-              isPaused: false,
-              currentIteration: event.iteration,
-              totalIterations: event.total,
-              pendingIntents: {},
-            });
-            break;
+    const flushBuffer = () => {
+      rafId = null;
+      if (buffer.length === 0) return;
 
-          case 'agent-intent':
-            set(state => ({
-              pendingIntents: { ...state.pendingIntents, [event.agentId]: event.intent },
-            }));
-            break;
+      const batch = buffer.splice(0);
+      let needAgentReload = false;
 
-          case 'resolution':
-            set(state => {
-              const existingIdx = state.feed.findIndex(f => f.number === event.iteration);
+      set(state => {
+        // Clone mutable state we'll update across the batch
+        let { isRunning, isPaused, isComplete, currentIteration, totalIterations,
+              pendingIntents, feed, statsHistory, finalReport, error } = state;
+
+        // Process as mutable copies to avoid intermediate object allocations
+        feed = [...feed];
+        pendingIntents = { ...pendingIntents };
+
+        for (const event of batch) {
+          switch (event.type) {
+            case 'iteration-start':
+              isRunning = true;
+              isPaused = false;
+              currentIteration = event.iteration;
+              totalIterations = event.total;
+              pendingIntents = {};
+              break;
+
+            case 'agent-intent':
+              pendingIntents[event.agentId] = event.intent;
+              break;
+
+            case 'resolution': {
               const entry: IterationFeed = {
                 number: event.iteration,
                 narrativeSummary: event.narrativeSummary,
                 lifecycleEvents: event.lifecycleEvents as LifecycleEvent[],
                 stats: null,
               };
-              if (existingIdx >= 0) {
-                const newFeed = [...state.feed];
-                newFeed[existingIdx] = { ...newFeed[existingIdx], ...entry };
-                return { feed: newFeed };
+              const idx = feed.findIndex(f => f.number === event.iteration);
+              if (idx >= 0) {
+                feed[idx] = { ...feed[idx], ...entry };
+              } else {
+                feed.push(entry);
               }
-              return { feed: [...state.feed, entry] };
-            });
-            break;
+              break;
+            }
 
-          case 'iteration-complete':
-            set(state => {
-              const newFeed = state.feed.map(f =>
+            case 'iteration-complete': {
+              feed = feed.map(f =>
                 f.number === event.iteration ? { ...f, stats: event.stats } : f
               );
-              return {
-                feed: newFeed,
-                statsHistory: [...state.statsHistory, event.stats],
-                pendingIntents: {},
-              };
-            });
-            // Reload agents to get updated stats
-            get().loadAgents(sessionId);
-            break;
+              statsHistory = [...statsHistory, event.stats];
+              pendingIntents = {};
+              needAgentReload = true;
+              break;
+            }
 
-          case 'simulation-complete':
-            set({ isRunning: false, isComplete: true, finalReport: event.finalReport });
-            get().loadAgents(sessionId);
-            break;
+            case 'simulation-complete':
+              isRunning = false;
+              isComplete = true;
+              finalReport = event.finalReport;
+              needAgentReload = true;
+              break;
 
-          case 'paused':
-            set({ isRunning: false, isPaused: true });
-            break;
+            case 'paused':
+              isRunning = false;
+              isPaused = true;
+              break;
 
-          case 'error':
-            set({ isRunning: false, error: event.message });
-            break;
+            case 'error':
+              isRunning = false;
+              error = event.message;
+              break;
+          }
         }
+
+        return {
+          isRunning, isPaused, isComplete, currentIteration, totalIterations,
+          pendingIntents, feed, statsHistory, finalReport, error,
+        };
+      });
+
+      if (needAgentReload) {
+        get().loadAgents(sessionId);
+      }
+    };
+
+    const scheduleFlush = () => {
+      if (rafId === null) {
+        rafId = requestAnimationFrame(flushBuffer);
+      }
+    };
+
+    es.onmessage = (e) => {
+      try {
+        const event = JSON.parse(e.data) as SSEEvent;
+        buffer.push(event);
+        scheduleFlush();
       } catch { /* ignore parse errors */ }
     };
 
     es.onerror = () => {
-      // SSE errors are normal when server restarts; just close
       es.close();
     };
 
-    return () => es.close();
+    return () => {
+      es.close();
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      // Flush any remaining events synchronously
+      flushBuffer();
+    };
   },
 
   pause: async (sessionId: string) => {

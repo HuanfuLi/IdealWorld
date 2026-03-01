@@ -1,6 +1,6 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Play, Users, Clock } from 'lucide-react';
+import { Plus, Trash2, Play, Users, Clock, Download, Upload } from 'lucide-react';
 import { useSessionsStore } from '../stores/sessionsStore';
 import type { SessionMetadata, SessionStage } from '@idealworld/shared';
 
@@ -43,7 +43,8 @@ function formatDate(iso: string): string {
 
 const HomePage = () => {
   const navigate = useNavigate();
-  const { sessions, loading, error, loadSessions, deleteSession } = useSessionsStore();
+  const { sessions, loading, error, loadSessions, deleteSession, importSession } = useSessionsStore();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     loadSessions();
@@ -55,11 +56,42 @@ const HomePage = () => {
     await deleteSession(id);
   };
 
+  const handleExport = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    window.location.href = `/api/sessions/${id}/export`;
+  };
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = ''; // reset so same file can be re-imported
+    try {
+      const id = await importSession(file);
+      navigate(`/session/${id}/idea`);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Import failed');
+    }
+  };
+
   return (
     <div className="animate-fade-in">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json"
+        style={{ display: 'none' }}
+        onChange={handleImportFile}
+      />
       <div className="page-header">
         <h1 className="page-title">Your Societies</h1>
         <div style={{ display: 'flex', gap: '1rem' }}>
+          <button className="btn-secondary" onClick={handleImportClick}>
+            <Upload size={18} /> Import Session
+          </button>
           <button className="btn-primary" onClick={() => navigate('/session/new/idea')}>
             <Plus size={18} /> New Session
           </button>
@@ -128,6 +160,14 @@ const HomePage = () => {
                       title="Resume"
                     >
                       <Play size={16} />
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      style={{ padding: '0.5rem' }}
+                      title="Export session"
+                      onClick={(e) => handleExport(e, session.id)}
+                    >
+                      <Download size={16} />
                     </button>
                     <button
                       className="btn-secondary"

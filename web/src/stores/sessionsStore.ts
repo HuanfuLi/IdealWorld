@@ -9,6 +9,7 @@ interface SessionsStore {
   loadSessions: () => Promise<void>;
   createSession: (idea: string) => Promise<string>;
   deleteSession: (id: string) => Promise<void>;
+  importSession: (file: File) => Promise<string>;
 }
 
 export const useSessionsStore = create<SessionsStore>((set, get) => ({
@@ -36,5 +37,22 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
   deleteSession: async (id: string) => {
     await sessionsApi.delete(id);
     set(state => ({ sessions: state.sessions.filter(s => s.id !== id) }));
+  },
+
+  importSession: async (file: File) => {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    const res = await fetch('/api/sessions/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.json() as { error: string };
+      throw new Error(err.error || 'Import failed');
+    }
+    const { id } = await res.json() as { id: string };
+    await get().loadSessions();
+    return id;
   },
 }));

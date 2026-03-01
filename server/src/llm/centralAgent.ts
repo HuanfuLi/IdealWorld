@@ -3,6 +3,7 @@ import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { sessions, agents, chatMessages } from '../db/schema.js';
 import { getProvider } from './gateway.js';
+import { withRetry } from './retry.js';
 import {
   buildBrainstormMessages,
   buildOverviewMessages,
@@ -11,7 +12,7 @@ import {
   buildRefineMessages,
 } from './prompts.js';
 import { parseJSON } from '../parsers/json.js';
-import type { ChatMessage, DesignProgressEvent, BrainstormChecklist } from '@idealworld/shared';
+import type { ChatMessage, DesignProgressEvent, BrainstormChecklist, SessionConfig } from '@idealworld/shared';
 
 interface BrainstormResult {
   reply: string;
@@ -23,17 +24,28 @@ export async function brainstorm(
   sessionId: string,
   idea: string,
   history: ChatMessage[],
-  userMessage: string
+  userMessage: string,
+  currentChecklist?: BrainstormChecklist
 ): Promise<BrainstormResult> {
   const provider = getProvider();
-  const messages = buildBrainstormMessages(idea, history, userMessage);
-  const raw = await provider.chat(messages, { maxTokens: 1024 });
+  const messages = buildBrainstormMessages(idea, history, userMessage, currentChecklist);
+  const raw = await withRetry(() => provider.chat(messages, { maxTokens: 2048 }));
 
-  const parsed = parseJSON<{
-    reply: string;
-    checklist: BrainstormChecklist;
-    readyForDesign: boolean;
-  }>(raw);
+  let parsed: { reply: string; checklist: BrainstormChecklist; readyForDesign: boolean };
+  try {
+    parsed = parseJSON<{
+      reply: string;
+      checklist: BrainstormChecklist;
+      readyForDesign: boolean;
+    }>(raw);
+  } catch {
+    // If JSON extraction fails entirely, treat the raw text as the reply
+    parsed = {
+      reply: raw.slice(0, 1000),
+      checklist: { governance: false, economy: false, legal: false, culture: false, infrastructure: false },
+      readyForDesign: false,
+    };
+  }
 
   // Force readyForDesign false if any checklist item is still false
   const checklist = parsed.checklist ?? {
@@ -74,9 +86,8 @@ export async function generateDesign(
   // Step 1: Overview
   onProgress({ type: 'step_start', step: 'overview', stepIndex: 0, totalSteps: 3 });
 
-  const overviewRaw = await provider.chat(
-    buildOverviewMessages(session.idea, brainstormSummary),
-    { maxTokens: 2048 }
+  const overviewRaw = await withRetry(() =>
+    provider.chat(buildOverviewMessages(session.idea, brainstormSummary), { maxTokens: 2048 })
   );
   const overviewData = parseJSON<{
     societyName: string;
@@ -105,14 +116,16 @@ export async function generateDesign(
   // Step 2: Law
   onProgress({ type: 'step_start', step: 'law', stepIndex: 1, totalSteps: 3 });
 
-  const lawRaw = await provider.chat(
-    buildLawMessages(
-      session.idea,
-      overviewData.overview,
-      overviewData.governanceModel,
-      overviewData.economicModel
-    ),
-    { maxTokens: 3000 }
+  const lawRaw = await withRetry(() =>
+    provider.chat(
+      buildLawMessages(
+        session.idea,
+        overviewData.overview,
+        overviewData.governanceModel,
+        overviewData.economicModel
+      ),
+      { maxTokens: 3000 }
+    )
   );
   const lawData = parseJSON<{ law: string }>(lawRaw);
 
@@ -126,15 +139,17 @@ export async function generateDesign(
   // Step 3: Agents
   onProgress({ type: 'step_start', step: 'agents', stepIndex: 2, totalSteps: 3 });
 
-  const agentsRaw = await provider.chat(
-    buildAgentRosterMessages(
-      overviewData.overview,
-      lawData.law,
-      agentCount,
-      overviewData.governanceModel,
-      overviewData.economicModel
-    ),
-    { maxTokens: 8192 }
+  const agentsRaw = await withRetry(() =>
+    provider.chat(
+      buildAgentRosterMessages(
+        overviewData.overview,
+        lawData.law,
+        agentCount,
+        overviewData.governanceModel,
+        overviewData.economicModel
+      ),
+      { maxTokens: 8192 }
+    )
   );
   const agentsData = parseJSON<{
     agents: Array<{
@@ -144,6 +159,10 @@ export async function generateDesign(
       initialStats: { wealth: number; health: number; happiness: number };
     }>;
   }>(agentsRaw);
+
+  if (!Array.isArray(agentsData.agents) || agentsData.agents.length === 0) {
+    throw new Error('Agent roster generation returned no agents. Please retry.');
+  }
 
   // Clear existing agents and insert new ones in batches of 25
   await db.delete(agents).where(eq(agents.sessionId, session.id));
@@ -205,7 +224,7 @@ export async function refine(
     userMessage
   );
 
-  const raw = await provider.chat(messages, { maxTokens: 4096 });
+  const raw = await withRetry(() => provider.chat(messages, { maxTokens: 4096 }));
   const parsed = parseJSON<{
     reply: string;
     artifactsUpdated: Array<'overview' | 'law' | 'agents'>;

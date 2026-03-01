@@ -76,27 +76,28 @@ ideal-world/
 ```
 Phase 1: Foundation     → DB + LLM + Settings + Sessions (Home + Settings live)  ✅ DONE
 Phase 2: Design Flow    → Stages 0–1B (Idea → Brainstorm → Design live)          ✅ DONE
-Phase 3: Simulation     → Stage 2 (simulation loop live, ≤20 agents)             ✅ DONE
-Phase 4: Reflect+Review → Stages 3–4 (full lifecycle, MVP complete)              ← IN PROGRESS
-Phase 5: Polish         → Stage 1C, artifacts, two-pass reflections, lifecycle
-Phase 6: Scale          → Map-reduce >50 agents, comparison, export
+Phase 3: Simulation     → Stage 2 (simulation loop live, ≤30 agents)             ✅ DONE
+Phase 4: Reflect+Review → Stages 3–4 (full lifecycle, MVP complete)              ✅ DONE
+Phase 5: Polish         → Stage 1C, artifacts, two-pass reflections, comparison, export/import  ✅ DONE
+Phase 6: Scale          → Map-reduce >30 agents, Gini coefficient, Compare nav   ✅ DONE
 ```
 
-**MVP = Phases 1–4**
+**All phases complete.**
 
-| Feature | MVP | Post-MVP |
-|---------|-----|----------|
-| Stages 0, 1A, 1B | ✓ | |
-| Stage 1C (refinement) | | Phase 5 |
-| Stage 2 ≤20 agents | ✓ | |
-| Stage 2 >50 agents (map-reduce) | | Phase 6 |
-| Agent lifecycle (death/birth) | | Phase 5 |
-| Stage 3 single-pass reflection | ✓ | Two-pass: Phase 5 |
-| Stage 3 evaluation | ✓ | |
-| Stage 4 agent Q&A | ✓ | |
-| Home + Settings | ✓ | |
-| Artifacts page | | Phase 5 |
-| Cross-session comparison | | Phase 6 |
+| Feature | Status |
+|---------|--------|
+| Stages 0, 1A, 1B | ✅ |
+| Stage 1C (refinement chat) | ✅ |
+| Stage 2 simulation ≤30 agents (standard path) | ✅ |
+| Stage 2 simulation >30 agents (map-reduce path) | ✅ Phase 6 |
+| Agent lifecycle (death/role change) | ✅ |
+| Stage 3 two-pass reflection + evaluation | ✅ |
+| Stage 4 agent Q&A | ✅ |
+| Home + Settings | ✅ |
+| Artifacts page | ✅ |
+| Cross-session comparison + follow-up chat | ✅ Phase 5 |
+| Session export/import | ✅ Phase 5 |
+| Gini coefficient tracking | ✅ Phase 6 |
 
 ---
 
@@ -112,27 +113,31 @@ Phase 6: Scale          → Map-reduce >50 agents, comparison, export
 
 **Built:** C3 (brainstorm + overview + law + agent roster + refine prompts) → C6 (JSON parser) → C4 (designOrchestrator) → C5 (chat + design routes) → C8 (sessionDetailStore) → rewired IdeaInput + Brainstorming + DesignReview
 
-**Key files:** `server/src/llm/prompts.ts`, `server/src/llm/centralAgent.ts`, `server/src/parsers/json.ts`, `server/src/orchestration/designOrchestrator.ts`, `server/src/routes/chat.ts`, `server/src/routes/design.ts`, `web/src/stores/sessionDetailStore.ts`
+**Key files:** `server/src/llm/prompts.ts`, `server/src/parsers/json.ts`, `server/src/orchestration/designOrchestrator.ts`, `server/src/routes/chat.ts`, `server/src/routes/design.ts`, `web/src/stores/sessionDetailStore.ts`
 
 ### ✅ Phase 3: Simulation Core (Stage 2) — COMPLETE
 
 **Built:** C3 (intent + resolution + final-report prompts) → C6 (simulation parsers) → C4 (concurrencyPool + simulationManager + simulationRunner) → C5 (simulate routes + SSE stream + iterations routes) → C8 (simulationStore) → rewired Simulation page
 
-**Key files:** `server/src/parsers/simulation.ts`, `server/src/orchestration/concurrencyPool.ts`, `server/src/orchestration/simulationManager.ts`, `server/src/orchestration/simulationRunner.ts`, `server/src/routes/simulate.ts`, `server/src/routes/iterations.ts`, `web/src/stores/simulationStore.ts`
+**Key files:** `server/src/parsers/simulation.ts`, `server/src/orchestration/simulationRunner.ts`, `server/src/routes/simulate.ts`, `server/src/routes/iterations.ts`, `web/src/stores/simulationStore.ts`
 
-### Phase 4: Reflection + Review (Stages 3, 4)
+### ✅ Phase 4: Reflection + Review (Stages 3, 4) — COMPLETE
 
-**Build:** C3 (reflection + evaluation + review prompts) → C6 (reflection parser) → C4 (reflection pipeline) → C5 (reflection + review routes) → C8 (review store) → rewire Reflection + AgentReview
+**Built:** C3 (reflection + evaluation + review prompts) → C6 (reflection parser) → C4 (reflection pipeline) → C5 (reflection + review routes) → C8 (review store) → rewired Reflection + AgentReview
 
-**Done when:** Full Stage 0 → completed lifecycle. Re-entry for Q&A works.
+**Key files:** `server/src/parsers/reflection.ts`, `server/src/orchestration/reflectionRunner.ts`, `server/src/routes/reflect.ts`, `server/src/routes/review.ts`, `web/src/stores/reflectionStore.ts`
 
-### Phase 5: Refinement + Polish
+### ✅ Phase 5: Polish + Extras — COMPLETE
 
-Stage 1C design refinement, artifacts page, two-pass reflections, agent lifecycle (death/birth/role change), distribution histograms, Gini coefficient.
+**Built:** Artifacts page, cross-session comparison (LLM analysis + follow-up chat), session export/import (full-fidelity JSON)
 
-### Phase 6: Scale + Extras
+**Key files:** `server/src/routes/compare.ts`, `server/src/routes/importexport.ts`, `web/src/pages/CompareSessions.tsx`, `web/src/stores/compareStore.ts`, `web/src/api/compare.ts`
 
-Map-reduce for >50 agents, cross-session comparison page, session export/import, virtualized lists.
+### ✅ Phase 6: Scale — COMPLETE
+
+**Built:** Map-reduce simulation for large sessions (>30 agents split into groups of 15, parallel group resolution + merge step), Gini coefficient in IterationStats, Compare link in sidebar nav
+
+**Key files:** `server/src/orchestration/simulationRunner.ts` (map-reduce path, Gini), `server/src/llm/prompts.ts` (buildGroupResolutionMessages, buildMergeResolutionMessages), `server/src/parsers/simulation.ts` (parseGroupResolution, parseMergeResolution)
 
 ---
 

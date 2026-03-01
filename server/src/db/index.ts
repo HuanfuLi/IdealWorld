@@ -13,9 +13,12 @@ if (!fs.existsSync(dbDir)) {
 const dbPath = path.join(dbDir, 'idealworld.db');
 const sqlite = new Database(dbPath);
 
-// Enable WAL mode for better concurrency
+// Enable WAL mode for better concurrency & tune for high-frequency writes
 sqlite.pragma('journal_mode = WAL');
 sqlite.pragma('foreign_keys = ON');
+sqlite.pragma('synchronous = NORMAL');
+sqlite.pragma('cache_size = -20000');   // ~20 MB page cache
+sqlite.pragma('busy_timeout = 5000');   // wait up to 5 s on lock contention
 
 export const db = drizzle(sqlite, { schema });
 export { sqlite };

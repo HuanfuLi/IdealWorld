@@ -1,11 +1,31 @@
 import type { LLMMessage } from './types.js';
-import type { Agent, ChatMessage, Session } from '@idealworld/shared';
+import type { Agent, ChatMessage, Session, ComparisonResult, BrainstormChecklist } from '@idealworld/shared';
 
 export function buildBrainstormMessages(
   seedIdea: string,
   history: ChatMessage[],
-  userMessage: string
+  userMessage: string,
+  currentChecklist?: BrainstormChecklist
 ): LLMMessage[] {
+  // Build an explicit status block from the persisted checklist so the LLM
+  // never has to re-derive which areas have already been confirmed from context.
+  const areas = ['governance', 'economy', 'legal', 'culture', 'infrastructure'] as const;
+  const checklistStatus = areas
+    .map(a => `  ${a}: ${currentChecklist?.[a] ? '✓ confirmed' : 'needs more detail'}`)
+    .join('\n');
+
+  // Build a conversation transcript for models that don't reliably track
+  // multi-turn context on their own. This is embedded in the system prompt
+  // as a plain-text record so every provider has an unambiguous view of
+  // what has already been discussed.
+  const recentHistory = history.filter(m => m.role === 'user' || m.role === 'assistant').slice(-20);
+  const transcriptLines = recentHistory.map(m =>
+    `${m.role === 'user' ? 'User' : 'Agent'}: ${m.content}`
+  );
+  const transcriptSection = transcriptLines.length > 0
+    ? `\n\nConversation so far:\n${transcriptLines.join('\n\n')}`
+    : '';
+
   const systemPrompt = `You are the Central Agent for a society simulation. The user wants to simulate: "${seedIdea}"
 
 Your job is to gather enough information to design a complete society. Ask 2-3 focused questions per response covering these 5 areas:
@@ -15,7 +35,8 @@ Your job is to gather enough information to design a complete society. Ask 2-3 f
 4. culture - Values, traditions, social norms, education
 5. infrastructure - Physical environment, technology level, basic services
 
-Track which areas have been sufficiently covered. Once ALL five areas have meaningful information, set readyForDesign to true.
+Current coverage status (DO NOT reset items already marked confirmed):
+${checklistStatus}${transcriptSection}
 
 You MUST respond with ONLY valid JSON (no markdown, no preamble):
 {
@@ -31,19 +52,18 @@ You MUST respond with ONLY valid JSON (no markdown, no preamble):
 }
 
 Rules:
-- Set checklist items to true only when that area has been sufficiently discussed
+- Carry forward all confirmed items from the coverage status above — never set a confirmed area back to false
+- Set additional items to true only when that area has been sufficiently discussed in THIS conversation
 - readyForDesign must only be true when ALL 5 checklist items are true
+- Build on what has already been discussed; do not repeat questions already answered
 - Be encouraging and curious in your reply
 - Keep replies concise (under 200 words)`;
 
   const messages: LLMMessage[] = [{ role: 'system', content: systemPrompt }];
 
-  // Cap history at last 20 messages
-  const recentHistory = history.slice(-20);
+  // Also include history as multi-turn messages (correct format for API-based models).
   for (const msg of recentHistory) {
-    if (msg.role === 'user' || msg.role === 'assistant') {
-      messages.push({ role: msg.role, content: msg.content });
-    }
+    messages.push({ role: msg.role as 'user' | 'assistant', content: msg.content });
   }
 
   messages.push({ role: 'user', content: userMessage });
@@ -468,6 +488,192 @@ Rules:
 
   messages.push({ role: 'user', content: userMessage });
   return messages;
+}
+
+// ── Phase 5 prompts ─────────────────────────────────────────────────────────
+
+interface SessionSummaryInput {
+  title: string;
+  societyOverview: string | null;
+  law: string | null;
+  agentCount: number;
+  avgWealth: number;
+  avgHealth: number;
+  avgHappiness: number;
+  deaths: number;
+  verdict: string | null;
+}
+
+export function buildComparisonMessages(
+  session1: SessionSummaryInput,
+  session2: SessionSummaryInput
+): LLMMessage[] {
+  const systemPrompt = `You are the Central Agent evaluating two completed society simulations.
+Compare them objectively across exactly 5 dimensions: Economic Equality, Citizen Wellbeing, Social Cohesion, Governance Effectiveness, Long-term Stability.
+Respond with ONLY valid JSON, no markdown, no preamble.`;
+
+  const fmt = (s: SessionSummaryInput, label: 'A' | 'B') =>
+    `=== SOCIETY ${label}: ${s.title} ===
+Overview: ${(s.societyOverview ?? '(none)').slice(0, 500)}
+Law excerpt: ${(s.law ?? '(none)').slice(0, 400)}
+Agents: ${s.agentCount} citizens, Deaths: ${s.deaths}
+Final avg — wealth: ${s.avgWealth}/100, health: ${s.avgHealth}/100, happiness: ${s.avgHappiness}/100
+Evaluation verdict: ${s.verdict ?? '(none)'}`;
+
+  const userPrompt = `${fmt(session1, 'A')}
+
+${fmt(session2, 'B')}
+
+Compare these two societies. Return JSON:
+{
+  "narrative": "<3-5 paragraph prose comparison>",
+  "dimensions": [
+    { "name": "Economic Equality", "score1": 0, "score2": 0, "analysis": "..." },
+    { "name": "Citizen Wellbeing", "score1": 0, "score2": 0, "analysis": "..." },
+    { "name": "Social Cohesion", "score1": 0, "score2": 0, "analysis": "..." },
+    { "name": "Governance Effectiveness", "score1": 0, "score2": 0, "analysis": "..." },
+    { "name": "Long-term Stability", "score1": 0, "score2": 0, "analysis": "..." }
+  ],
+  "verdict": "<1-2 sentence overall takeaway>"
+}`;
+
+  return [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt },
+  ];
+}
+
+export function buildComparisonChatMessages(
+  session1Title: string,
+  session2Title: string,
+  comparison: ComparisonResult,
+  history: ChatMessage[],
+  userMessage: string
+): LLMMessage[] {
+  const systemPrompt = `You are the Central Agent who has analysed two society simulations: "${session1Title}" and "${session2Title}".
+
+Your comparison summary:
+${comparison.narrative}
+
+Dimensions (Society A score / Society B score):
+${comparison.dimensions.map(d => `- ${d.name}: ${d.score1} / ${d.score2} — ${d.analysis}`).join('\n')}
+
+Overall verdict: ${comparison.verdict}
+
+Answer follow-up questions about the comparison. Be specific and analytical. Keep responses under 200 words.`;
+
+  const messages: LLMMessage[] = [{ role: 'system', content: systemPrompt }];
+
+  const recentHistory = history.slice(-20);
+  for (const msg of recentHistory) {
+    if (msg.role === 'user' || msg.role === 'assistant') {
+      messages.push({ role: msg.role, content: msg.content });
+    }
+  }
+
+  messages.push({ role: 'user', content: userMessage });
+  return messages;
+}
+
+// ── Phase 6 map-reduce prompts ───────────────────────────────────────────────
+
+/**
+ * Resolves a sub-group of agents during a large simulation iteration.
+ * Returns outcomes only for the agents in this group.
+ */
+export function buildGroupResolutionMessages(
+  session: Pick<Session, 'idea' | 'societyOverview' | 'law' | 'timeScale'>,
+  groupAgents: Agent[],
+  groupIntents: AgentIntent[],
+  /** Compact list of ALL agents' intents (for cross-group awareness) */
+  allIntentsBrief: string,
+  iterationNumber: number,
+  previousSummary: string | null
+): LLMMessage[] {
+  const groupList = groupIntents.map(ai => {
+    const agent = groupAgents.find(a => a.id === ai.agentId);
+    const stats = agent?.currentStats ?? { wealth: 50, health: 70, happiness: 60 };
+    return `- ${ai.agentName} (${agent?.role ?? 'unknown'}): "${ai.intent}"
+  Stats: W=${stats.wealth} H=${stats.health} Hap=${stats.happiness}`;
+  }).join('\n');
+
+  const systemPrompt = `You are the Central Agent resolving iteration ${iterationNumber} of a society simulation.
+You are handling a sub-group of ${groupAgents.length} agents.
+
+Society: "${session.idea}"
+Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
+Laws (excerpt): ${session.law?.slice(0, 400) ?? '(no laws)'}
+${previousSummary ? `\nPrevious iteration summary:\n${previousSummary.slice(0, 400)}` : ''}
+
+Your sub-group's intentions:
+${groupList}
+
+All other agents' intentions (for cross-group awareness):
+${allIntentsBrief.slice(0, 800)}
+
+Resolve the outcomes ONLY for the agents in your sub-group. Consider cross-group interactions briefly.
+
+Respond with ONLY valid JSON (no markdown, no preamble):
+{
+  "groupSummary": "string - 1-2 sentence summary of what happened in this sub-group",
+  "agentOutcomes": [
+    {
+      "agentId": "string",
+      "outcome": "string - what happened (1-2 sentences)",
+      "wealthDelta": 0,
+      "healthDelta": 0,
+      "happinessDelta": 0,
+      "died": false,
+      "newRole": null
+    }
+  ],
+  "lifecycleEvents": []
+}
+
+Rules:
+- Include an entry for EVERY agent in your sub-group
+- Deltas must be integers between -30 and +30
+- lifecycleEvents: only deaths and role changes for your sub-group`;
+
+  return [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: `Resolve iteration ${iterationNumber} for this sub-group.` },
+  ];
+}
+
+/**
+ * Merges multiple sub-group summaries into a society-wide narrative.
+ */
+export function buildMergeResolutionMessages(
+  session: Pick<Session, 'idea' | 'societyOverview' | 'timeScale'>,
+  groupSummaries: string[],
+  iterationNumber: number,
+  previousSummary: string | null
+): LLMMessage[] {
+  const summaryList = groupSummaries.map((s, i) => `Group ${i + 1}: ${s}`).join('\n');
+
+  const systemPrompt = `You are the Central Agent synthesising iteration ${iterationNumber} of a society simulation.
+You have received summaries from ${groupSummaries.length} sub-groups.
+
+Society: "${session.idea}"
+Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
+${previousSummary ? `\nPrevious iteration:\n${previousSummary.slice(0, 400)}` : ''}
+
+Sub-group summaries:
+${summaryList}
+
+Synthesise these into one coherent society-wide narrative and identify any society-level lifecycle events.
+
+Respond with ONLY valid JSON (no markdown, no preamble):
+{
+  "narrativeSummary": "string - 3-5 sentence cohesive story of what happened across the whole society this iteration",
+  "lifecycleEvents": []
+}`;
+
+  return [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: `Synthesise iteration ${iterationNumber}.` },
+  ];
 }
 
 export function buildRefineMessages(

@@ -135,6 +135,10 @@ export interface IterationStats {
   maxHappiness: number;
   aliveCount: number;
   totalCount: number;
+  /** Gini coefficient for wealth inequality (0=perfect equality, 1=perfect inequality) */
+  giniWealth?: number;
+  /** Gini coefficient for happiness inequality */
+  giniHappiness?: number;
 }
 
 export interface SocietyDesign {
@@ -160,6 +164,63 @@ export interface SocietyEvaluation {
   strengths: string[];
   weaknesses: string[];
   analysis: string;
+}
+
+// ── Phase 5 types ──────────────────────────────────────────────────────────
+
+export interface ComparisonDimension {
+  name: string;
+  /** Score for session 1, 0–100 */
+  score1: number;
+  /** Score for session 2, 0–100 */
+  score2: number;
+  analysis: string;
+}
+
+export interface ComparisonResult {
+  session1Id: string;
+  session2Id: string;
+  /** Multi-paragraph prose summary */
+  narrative: string;
+  dimensions: ComparisonDimension[];
+  /** 1-2 sentence takeaway */
+  verdict: string;
+}
+
+/** Full-fidelity export envelope */
+export interface SessionExport {
+  version: 1;
+  exportedAt: string;
+  session: Session;
+  agents: Agent[];
+  iterations: Array<{
+    iterationNumber: number;
+    stateSummary: string;
+    statistics: string;
+    lifecycleEvents: string;
+    timestamp: string;
+  }>;
+  reflections: Array<{
+    agentId: string | null;
+    content: string;
+    insights: string | null;
+    createdAt: string;
+  }>;
+  chatMessages: Array<{
+    context: string;
+    agentId: string | null;
+    role: string;
+    content: string;
+    timestamp: string;
+  }>;
+  roleChanges: Array<{
+    agentId: string;
+    fromRole: string;
+    toRole: string;
+    reason: string | null;
+    iterationNumber: number;
+    timestamp: string;
+  }>;
 }
 
 // ── Settings ───────────────────────────────────────────────────────────────

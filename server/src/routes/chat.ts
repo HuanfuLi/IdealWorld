@@ -69,7 +69,14 @@ router.post('/', async (req, res) => {
 
   try {
     if (context === 'brainstorm') {
-      const result = await brainstorm(id, session.idea, history, message.trim());
+      let currentChecklist: import('@idealworld/shared').BrainstormChecklist | undefined;
+      if (session.config) {
+        try {
+          const cfg = JSON.parse(session.config) as import('@idealworld/shared').SessionConfig;
+          currentChecklist = cfg.checklist;
+        } catch { /* ignore malformed config */ }
+      }
+      const result = await brainstorm(id, session.idea, history, message.trim(), currentChecklist);
 
       let currentConfig: SessionConfig = {
         totalIterations: 20,

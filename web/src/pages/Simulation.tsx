@@ -1,7 +1,9 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Play, Pause, Square, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle } from 'lucide-react';
 import { useSimulationStore } from '../stores/simulationStore';
+import { useShallow } from 'zustand/react/shallow';
+import { useVirtualizer } from '@tanstack/react-virtual';
 
 const Simulation = () => {
   const navigate = useNavigate();
@@ -14,7 +16,14 @@ const Simulation = () => {
     feed, statsHistory, agents, finalReport, error,
     loadAgents, loadHistory, connectSSE,
     pause, resume, abort, reset,
-  } = useSimulationStore();
+  } = useSimulationStore(useShallow(s => ({
+    isRunning: s.isRunning, isPaused: s.isPaused, isComplete: s.isComplete,
+    currentIteration: s.currentIteration, totalIterations: s.totalIterations,
+    feed: s.feed, statsHistory: s.statsHistory, agents: s.agents,
+    finalReport: s.finalReport, error: s.error,
+    loadAgents: s.loadAgents, loadHistory: s.loadHistory, connectSSE: s.connectSSE,
+    pause: s.pause, resume: s.resume, abort: s.abort, reset: s.reset,
+  })));
 
   useEffect(() => {
     if (!id) return;
@@ -62,10 +71,32 @@ const Simulation = () => {
 
   const progress = totalIterations > 0 ? (currentIteration / totalIterations) * 100 : 0;
 
-  // Lifecycle events across all iterations
-  const allLifecycleEvents = feed.flatMap(f =>
-    f.lifecycleEvents.map(e => ({ ...e, iterNum: f.number }))
+  // Reversed feed for display (newest first)
+  const reversedFeed = useMemo(() => [...feed].reverse(), [feed]);
+
+  // Lifecycle events across all iterations (newest first, capped at 30)
+  const allLifecycleEvents = useMemo(() =>
+    feed.flatMap(f => f.lifecycleEvents.map(e => ({ ...e, iterNum: f.number }))).reverse().slice(0, 30),
+    [feed]
   );
+
+  // Virtualizer for the live feed
+  const feedParentRef = useRef<HTMLDivElement>(null);
+  const feedVirtualizer = useVirtualizer({
+    count: reversedFeed.length,
+    getScrollElement: () => feedParentRef.current,
+    estimateSize: () => 100,
+    overscan: 5,
+  });
+
+  // Virtualizer for lifecycle events
+  const lifecycleParentRef = useRef<HTMLDivElement>(null);
+  const lifecycleVirtualizer = useVirtualizer({
+    count: allLifecycleEvents.length,
+    getScrollElement: () => lifecycleParentRef.current,
+    estimateSize: () => 28,
+    overscan: 5,
+  });
 
   return (
     <div className="animate-fade-in" style={{ height: 'calc(100vh - 4rem)', display: 'flex', flexDirection: 'column' }}>
@@ -131,50 +162,70 @@ const Simulation = () => {
       {/* Main Dashboard — Three Columns */}
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 1.2fr) minmax(250px, 1fr) minmax(300px, 1fr)', gap: '1.5rem', flex: 1, overflow: 'hidden' }}>
 
-        {/* Col 1: Live Feed */}
+        {/* Col 1: Live Feed (virtualized) */}
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ padding: '1rem', borderBottom: '1px solid var(--glass-border)', flexShrink: 0 }}>
             <h3 style={{ fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Activity size={18} color="var(--primary)" /> Live Feed
             </h3>
           </div>
-          <div style={{ flex: 1, padding: '1rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div ref={feedParentRef} style={{ flex: 1, padding: '1rem', overflowY: 'auto' }}>
             {feed.length === 0 && !isRunning && (
               <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', textAlign: 'center', marginTop: '2rem' }}>
                 No iterations yet.
               </p>
             )}
-            {[...feed].reverse().map(entry => (
-              <div
-                key={entry.number}
-                style={{
-                  paddingLeft: '1rem',
-                  borderLeft: `2px solid ${entry.number === currentIteration ? 'var(--primary)' : 'var(--glass-border)'}`,
-                }}
-              >
-                <h4 style={{
-                  fontSize: '0.9rem',
-                  color: entry.number === currentIteration ? 'var(--primary)' : 'var(--text-muted)',
-                  marginBottom: '0.5rem',
-                }}>
-                  Iteration {entry.number}
-                  {entry.stats && (
-                    <span style={{ fontWeight: 'normal', marginLeft: '0.5rem', fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-                      · {entry.stats.aliveCount} alive
-                    </span>
-                  )}
-                </h4>
-                <p style={{ fontSize: '0.95rem', lineHeight: 1.5, color: '#e5e7eb' }}>
-                  {entry.narrativeSummary}
-                </p>
-              </div>
-            ))}
+            {/* Pending "next iteration" indicator */}
             {isRunning && feed.length > 0 && (
-              <div style={{ paddingLeft: '1rem', borderLeft: '2px solid var(--primary)', opacity: 0.6 }}>
+              <div style={{ paddingLeft: '1rem', borderLeft: '2px solid var(--primary)', opacity: 0.6, marginBottom: '1rem' }}>
                 <h4 style={{ fontSize: '0.9rem', color: 'var(--primary)' }}>
                   Iteration {currentIteration + 1} <Loader2 size={12} style={{ display: 'inline', animation: 'spin 1s linear infinite' }} />
                 </h4>
                 <p style={{ fontSize: '0.85rem', color: 'var(--text-dim)' }}>Collecting agent intentions…</p>
+              </div>
+            )}
+            {/* Virtualized feed list */}
+            {reversedFeed.length > 0 && (
+              <div style={{ height: feedVirtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
+                {feedVirtualizer.getVirtualItems().map(virtualRow => {
+                  const entry = reversedFeed[virtualRow.index];
+                  return (
+                    <div
+                      key={entry.number}
+                      data-index={virtualRow.index}
+                      ref={feedVirtualizer.measureElement}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        transform: `translateY(${virtualRow.start}px)`,
+                        paddingBottom: '1rem',
+                      }}
+                    >
+                      <div style={{
+                        paddingLeft: '1rem',
+                        borderLeft: `2px solid ${entry.number === currentIteration ? 'var(--primary)' : 'var(--glass-border)'}`,
+                      }}>
+                        <h4 style={{
+                          fontSize: '0.9rem',
+                          color: entry.number === currentIteration ? 'var(--primary)' : 'var(--text-muted)',
+                          marginBottom: '0.5rem',
+                        }}>
+                          Iteration {entry.number}
+                          {entry.stats && (
+                            <span style={{ fontWeight: 'normal', marginLeft: '0.5rem', fontSize: '0.8rem', color: 'var(--text-dim)' }}>
+                              · {entry.stats.aliveCount} alive
+                            </span>
+                          )}
+                        </h4>
+                        <p style={{ fontSize: '0.95rem', lineHeight: 1.5, color: '#e5e7eb' }}>
+                          {entry.narrativeSummary}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
             {isComplete && finalReport && (
@@ -228,6 +279,14 @@ const Simulation = () => {
                     <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Users size={16} /> Population</span>
                     <span>{latestStats.aliveCount} / {latestStats.totalCount}</span>
                   </div>
+                  {latestStats.giniWealth !== undefined && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                      <span title="Wealth inequality: 0=equal, 1=totally unequal">Gini (wealth)</span>
+                      <span style={{ color: latestStats.giniWealth > 0.5 ? 'var(--danger)' : latestStats.giniWealth > 0.3 ? 'var(--warning)' : 'var(--success)' }}>
+                        {latestStats.giniWealth.toFixed(2)}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </>
             ) : (
@@ -274,21 +333,40 @@ const Simulation = () => {
             <h4 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem', textTransform: 'uppercase' as const }}>
               Lifecycle Events
             </h4>
-            <div style={{ fontSize: '0.9rem', color: 'var(--text-dim)', display: 'flex', flexDirection: 'column' as const, gap: '0.5rem' }}>
-              {allLifecycleEvents.length === 0 ? (
-                <span>No events yet.</span>
-              ) : (
-                [...allLifecycleEvents].reverse().slice(0, 15).map((e, i) => (
-                  <div key={i}>
-                    <span style={{ color: 'var(--text-muted)' }}>Iter {e.iterNum}:</span>{' '}
-                    <span style={{ color: e.type === 'death' ? 'var(--danger)' : 'var(--primary)' }}>
-                      {e.type === 'death' ? '💀' : '🔄'}
-                    </span>{' '}
-                    {e.detail}
-                  </div>
-                ))
-              )}
-            </div>
+            {allLifecycleEvents.length === 0 ? (
+              <div style={{ fontSize: '0.9rem', color: 'var(--text-dim)' }}>No events yet.</div>
+            ) : (
+              <div ref={lifecycleParentRef} style={{ flex: 1, overflowY: 'auto', maxHeight: '300px' }}>
+                <div style={{ height: lifecycleVirtualizer.getTotalSize(), width: '100%', position: 'relative' }}>
+                  {lifecycleVirtualizer.getVirtualItems().map(virtualRow => {
+                    const e = allLifecycleEvents[virtualRow.index];
+                    return (
+                      <div
+                        key={virtualRow.index}
+                        data-index={virtualRow.index}
+                        ref={lifecycleVirtualizer.measureElement}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          transform: `translateY(${virtualRow.start}px)`,
+                          fontSize: '0.9rem',
+                          color: 'var(--text-dim)',
+                          paddingBottom: '0.5rem',
+                        }}
+                      >
+                        <span style={{ color: 'var(--text-muted)' }}>Iter {e.iterNum}:</span>{' '}
+                        <span style={{ color: e.type === 'death' ? 'var(--danger)' : 'var(--primary)' }}>
+                          {e.type === 'death' ? '💀' : '🔄'}
+                        </span>{' '}
+                        {e.detail}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
