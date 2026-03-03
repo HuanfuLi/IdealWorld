@@ -53,6 +53,22 @@ export function parseAgentIntent(text: string): ParsedAgentIntent {
   }
 }
 
+/**
+ * Strict version of parseAgentIntent that throws on failure.
+ * Used with retryWithHealing so the retry loop can detect failures and heal.
+ */
+export function parseAgentIntentStrict(text: string): ParsedAgentIntent {
+  const raw = parseJSON<Record<string, unknown>>(text);
+  const intent = String(raw.intent ?? '').trim();
+  if (!intent) throw new Error('Missing or empty "intent" field');
+  return {
+    intent,
+    reasoning: String(raw.reasoning ?? '').trim(),
+    actionCode: normalizeActionCode(String(raw.actionCode ?? 'NONE')),
+    actionTarget: raw.actionTarget ? String(raw.actionTarget) : null,
+  };
+}
+
 function clampDelta(v: unknown): number {
   const n = typeof v === 'number' ? v : Number(v ?? 0);
   return Math.max(-30, Math.min(30, Math.round(isNaN(n) ? 0 : n)));
@@ -60,30 +76,7 @@ function clampDelta(v: unknown): number {
 
 export function parseResolution(text: string): ParsedResolution {
   try {
-    const raw = parseJSON<Record<string, unknown>>(text);
-
-    const narrativeSummary = String(raw.narrativeSummary ?? '').trim() || 'The iteration passed without major events.';
-
-    const rawOutcomes = Array.isArray(raw.agentOutcomes) ? raw.agentOutcomes : [];
-    // Stat deltas are now computed by the physics engine, not the LLM
-    const agentOutcomes: ParsedAgentOutcome[] = rawOutcomes.map((o: Record<string, unknown>) => ({
-      agentId: String(o.agentId ?? ''),
-      outcome: String(o.outcome ?? '').trim(),
-      wealthDelta: 0, // placeholder — physics engine provides actual values
-      healthDelta: 0,
-      happinessDelta: 0,
-      died: o.died === true,
-      newRole: o.newRole ? String(o.newRole) : null,
-    }));
-
-    const rawEvents = Array.isArray(raw.lifecycleEvents) ? raw.lifecycleEvents : [];
-    const lifecycleEvents: ParsedLifecycleEvent[] = rawEvents.map((e: Record<string, unknown>) => ({
-      type: e.type === 'role_change' ? 'role_change' : 'death',
-      agentId: String(e.agentId ?? ''),
-      detail: String(e.detail ?? ''),
-    }));
-
-    return { narrativeSummary, agentOutcomes, lifecycleEvents };
+    return parseResolutionStrict(text);
   } catch {
     // LLM returned prose instead of JSON — use the text as the narrative summary,
     // skip stat updates for this iteration to avoid crashing the simulation
@@ -93,6 +86,37 @@ export function parseResolution(text: string): ParsedResolution {
       lifecycleEvents: [],
     };
   }
+}
+
+/**
+ * Strict version of parseResolution that throws on failure.
+ * Used with retryWithHealing.
+ */
+export function parseResolutionStrict(text: string): ParsedResolution {
+  const raw = parseJSON<Record<string, unknown>>(text);
+
+  const narrativeSummary = String(raw.narrativeSummary ?? '').trim();
+  if (!narrativeSummary) throw new Error('Missing or empty "narrativeSummary" field');
+
+  const rawOutcomes = Array.isArray(raw.agentOutcomes) ? raw.agentOutcomes : [];
+  const agentOutcomes: ParsedAgentOutcome[] = rawOutcomes.map((o: Record<string, unknown>) => ({
+    agentId: String(o.agentId ?? ''),
+    outcome: String(o.outcome ?? '').trim(),
+    wealthDelta: 0,
+    healthDelta: 0,
+    happinessDelta: 0,
+    died: o.died === true,
+    newRole: o.newRole ? String(o.newRole) : null,
+  }));
+
+  const rawEvents = Array.isArray(raw.lifecycleEvents) ? raw.lifecycleEvents : [];
+  const lifecycleEvents: ParsedLifecycleEvent[] = rawEvents.map((e: Record<string, unknown>) => ({
+    type: e.type === 'role_change' ? 'role_change' : 'death',
+    agentId: String(e.agentId ?? ''),
+    detail: String(e.detail ?? ''),
+  }));
+
+  return { narrativeSummary, agentOutcomes, lifecycleEvents };
 }
 
 export function parseFinalReport(text: string): string {
@@ -110,32 +134,40 @@ export interface ParsedGroupResolution {
 
 export function parseGroupResolution(text: string): ParsedGroupResolution {
   try {
-    const raw = parseJSON<Record<string, unknown>>(text);
-    const groupSummary = String(raw.groupSummary ?? '').trim() || 'The group continued their activities.';
-
-    const rawOutcomes = Array.isArray(raw.agentOutcomes) ? raw.agentOutcomes : [];
-    // Stat deltas are now computed by the physics engine, not the LLM
-    const agentOutcomes: ParsedAgentOutcome[] = rawOutcomes.map((o: Record<string, unknown>) => ({
-      agentId: String(o.agentId ?? ''),
-      outcome: String(o.outcome ?? '').trim(),
-      wealthDelta: 0, // placeholder — physics engine provides actual values
-      healthDelta: 0,
-      happinessDelta: 0,
-      died: o.died === true,
-      newRole: o.newRole ? String(o.newRole) : null,
-    }));
-
-    const rawEvents = Array.isArray(raw.lifecycleEvents) ? raw.lifecycleEvents : [];
-    const lifecycleEvents: ParsedLifecycleEvent[] = rawEvents.map((e: Record<string, unknown>) => ({
-      type: e.type === 'role_change' ? 'role_change' : 'death',
-      agentId: String(e.agentId ?? ''),
-      detail: String(e.detail ?? ''),
-    }));
-
-    return { groupSummary, agentOutcomes, lifecycleEvents };
+    return parseGroupResolutionStrict(text);
   } catch {
     return { groupSummary: 'The group continued their activities.', agentOutcomes: [], lifecycleEvents: [] };
   }
+}
+
+/**
+ * Strict version of parseGroupResolution that throws on failure.
+ * Used with retryWithHealing.
+ */
+export function parseGroupResolutionStrict(text: string): ParsedGroupResolution {
+  const raw = parseJSON<Record<string, unknown>>(text);
+  const groupSummary = String(raw.groupSummary ?? '').trim();
+  if (!groupSummary) throw new Error('Missing or empty "groupSummary" field');
+
+  const rawOutcomes = Array.isArray(raw.agentOutcomes) ? raw.agentOutcomes : [];
+  const agentOutcomes: ParsedAgentOutcome[] = rawOutcomes.map((o: Record<string, unknown>) => ({
+    agentId: String(o.agentId ?? ''),
+    outcome: String(o.outcome ?? '').trim(),
+    wealthDelta: 0,
+    healthDelta: 0,
+    happinessDelta: 0,
+    died: o.died === true,
+    newRole: o.newRole ? String(o.newRole) : null,
+  }));
+
+  const rawEvents = Array.isArray(raw.lifecycleEvents) ? raw.lifecycleEvents : [];
+  const lifecycleEvents: ParsedLifecycleEvent[] = rawEvents.map((e: Record<string, unknown>) => ({
+    type: e.type === 'role_change' ? 'role_change' : 'death',
+    agentId: String(e.agentId ?? ''),
+    detail: String(e.detail ?? ''),
+  }));
+
+  return { groupSummary, agentOutcomes, lifecycleEvents };
 }
 
 export interface ParsedMergeResolution {
@@ -145,16 +177,27 @@ export interface ParsedMergeResolution {
 
 export function parseMergeResolution(text: string): ParsedMergeResolution {
   try {
-    const raw = parseJSON<Record<string, unknown>>(text);
-    const narrativeSummary = String(raw.narrativeSummary ?? '').trim() || 'The iteration passed.';
-    const rawEvents = Array.isArray(raw.lifecycleEvents) ? raw.lifecycleEvents : [];
-    const lifecycleEvents: ParsedLifecycleEvent[] = rawEvents.map((e: Record<string, unknown>) => ({
-      type: e.type === 'role_change' ? 'role_change' : 'death',
-      agentId: String(e.agentId ?? ''),
-      detail: String(e.detail ?? ''),
-    }));
-    return { narrativeSummary, lifecycleEvents };
+    return parseMergeResolutionStrict(text);
   } catch {
     return { narrativeSummary: text.trim().slice(0, 500) || 'The iteration passed.', lifecycleEvents: [] };
   }
+}
+
+/**
+ * Strict version of parseMergeResolution that throws on failure.
+ * Used with retryWithHealing.
+ */
+export function parseMergeResolutionStrict(text: string): ParsedMergeResolution {
+  const raw = parseJSON<Record<string, unknown>>(text);
+  const narrativeSummary = String(raw.narrativeSummary ?? '').trim();
+  if (!narrativeSummary) throw new Error('Missing or empty "narrativeSummary" field');
+
+  const rawEvents = Array.isArray(raw.lifecycleEvents) ? raw.lifecycleEvents : [];
+  const lifecycleEvents: ParsedLifecycleEvent[] = rawEvents.map((e: Record<string, unknown>) => ({
+    type: e.type === 'role_change' ? 'role_change' : 'death',
+    agentId: String(e.agentId ?? ''),
+    detail: String(e.detail ?? ''),
+  }));
+
+  return { narrativeSummary, lifecycleEvents };
 }

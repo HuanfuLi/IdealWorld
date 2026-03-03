@@ -89,17 +89,21 @@ This enhancement plan breaks down the complex architectural and scientific upgra
 
 ---
 
-## Phase 5: RAG Injection & Resilience Layer
+## Phase 5: RAG Injection & Resilience Layer ✅ DONE
 **Goal:** Counteract RLHF bias (the tendency of LLMs to refuse conflict) and prevent JSON parsing crashes.
 
-### Actionable Steps
-1. **RAG for Historical Subconscious (Counteracting RLHF Bias):**
-   - Create a basic retrieval system. Store historical snippets (e.g., conditions of the French Revolution, 1929 Great Depression survival tactics) in local JSON arrays or a simple vector store (`sqlite-vec` or `fuse.js`).
-   - When an agent's `cortisol` hits high levels, retrieve a relevant historical mindset and append it as a "Subconscious Drive" in their prompt, forcing the LLM out of its polite, safe alignment to simulate raw survival instincts.
-2. **Autonomous Try-Heal-Retry Loop:**
-   - Refactor `parseAgentIntent` and `parseResolution` in `server/src/parsers/simulation.ts`.
-   - Wrap LLM calls in a retry block. If Zod validation throws an error (e.g., broken JSON or hallucinated formatting), catch it, append the exact parser error to the prompt, and ask the LLM to rewrite the output.
-   - Apply a max retry of 2. If it fails completely, fallback to a hardcoded safe state (e.g., `{ intent: "Agent rests.", wealthDelta: 0 }`).
+### Implementation Summary
+1. **RAG for Historical Subconscious** (`server/src/mechanics/historicalRAG.ts`):
+   - 18 historical snippets across 7 crisis categories: famine, oppression, economic collapse, plague, war, revolution, displacement.
+   - Each snippet has trigger conditions (`lowWealth`, `lowHealth`, `highCortisol`) and a historically-grounded mindset text.
+   - `getSubconsciousDrive(cortisol, wealth, health)` scores snippets by trigger match count, picks the best match deterministically based on agent state.
+   - Injected into `buildIntentPrompt()` as a "Subconscious Drive" section when cortisol > 60, pushing the LLM past its polite RLHF alignment to simulate raw survival instincts.
+2. **Autonomous Try-Heal-Retry Loop** (`server/src/llm/retryWithHealing.ts`):
+   - Generic `retryWithHealing<T>()` utility wrapping LLM `chat()` + strict parser in a retry loop.
+   - On parse failure: appends the LLM's broken response + exact error message to the conversation, asks the LLM to rewrite as valid JSON.
+   - Max 2 retries (3 total attempts), then falls back to caller-provided safe default.
+   - Strict parser variants added: `parseAgentIntentStrict`, `parseResolutionStrict`, `parseGroupResolutionStrict`, `parseMergeResolutionStrict` — these throw on failure (unlike their lenient counterparts) so the retry loop can detect and heal.
+   - All 4 LLM call sites in `simulationRunner.ts` wrapped: intent collection, standard resolution, group resolution (map-reduce), and merge resolution.
 
 ---
-*(End of Plan - Ready for AI agent execution in future sessions)*
+*(End of Plan - All phases complete)*

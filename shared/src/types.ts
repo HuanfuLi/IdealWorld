@@ -7,6 +7,7 @@ export type Stage =
   | 'refining'
   | 'simulating'
   | 'simulation-paused'
+  | 'simulation-complete'
   | 'reflecting'
   | 'reflection-complete'
   | 'reviewing'
@@ -236,6 +237,10 @@ export interface AppSettings {
   centralAgentModel: string;
   citizenAgentModel: string;
   maxConcurrency: number;
+  /** Optional separate provider for citizen agent tasks */
+  citizenProvider?: 'claude' | 'openai' | 'gemini' | 'local';
+  citizenApiKey?: string;
+  citizenBaseUrl?: string;
 }
 
 export interface SettingsResponse {
@@ -245,6 +250,9 @@ export interface SettingsResponse {
   centralAgentModel: string;
   citizenAgentModel: string;
   maxConcurrency: number;
+  citizenProvider?: 'claude' | 'openai' | 'gemini' | 'local';
+  hasCitizenApiKey?: boolean;
+  citizenBaseUrl?: string;
 }
 
 export interface TestResult {

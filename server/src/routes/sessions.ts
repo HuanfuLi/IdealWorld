@@ -288,6 +288,139 @@ router.put('/:id/config', async (req, res) => {
   }
 });
 
+// POST /api/sessions/:id/fork — clone session design into a new session
+router.post('/:id/fork', async (req, res) => {
+  const { id } = req.params;
+  const body = req.body as { iterations?: number };
+
+  try {
+    const [source] = await db.select().from(sessions).where(eq(sessions.id, id));
+    if (!source) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    const newId = uuidv4();
+    const now = new Date().toISOString();
+    const totalIterations = body.iterations || 20;
+
+    const config = JSON.stringify({
+      totalIterations,
+      checklist: { governance: true, economy: true, legal: true, culture: true, infrastructure: true },
+      readyForDesign: true,
+    });
+
+    await db.insert(sessions).values({
+      id: newId,
+      title: `${source.title} (fork)`,
+      idea: source.idea,
+      stage: 'design-review',
+      config,
+      law: source.law,
+      societyOverview: source.societyOverview,
+      timeScale: source.timeScale,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Copy agents with fresh stats
+    const sourceAgents = await db.select().from(agents).where(eq(agents.sessionId, id));
+    for (const a of sourceAgents) {
+      await db.insert(agents).values({
+        id: uuidv4(),
+        sessionId: newId,
+        name: a.name,
+        role: a.role,
+        background: a.background,
+        initialStats: a.initialStats,
+        currentStats: a.initialStats, // reset to initial
+        status: 'alive',
+        type: a.type,
+        bornAtIteration: null,
+        diedAtIteration: null,
+      });
+    }
+
+    res.status(201).json({ id: newId });
+  } catch (err) {
+    console.error('POST /sessions/:id/fork error:', err);
+    res.status(500).json({ error: 'Failed to fork session' });
+  }
+});
+
+// POST /api/sessions/:id/fork-simulation — fork with simulation data preserved
+router.post('/:id/fork-simulation', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [source] = await db.select().from(sessions).where(eq(sessions.id, id));
+    if (!source) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    const newId = uuidv4();
+    const now = new Date().toISOString();
+
+    // Find max iteration number for config
+    const [maxRow] = await db.select({ max: sql<number>`max(${iterations.iterationNumber})` })
+      .from(iterations).where(eq(iterations.sessionId, id));
+    const maxIterNum = maxRow?.max ?? 0;
+
+    const config = JSON.stringify({ totalIterations: maxIterNum });
+
+    await db.insert(sessions).values({
+      id: newId,
+      title: `${source.title} (fork)`,
+      idea: source.idea,
+      stage: 'simulation-complete',
+      config,
+      law: source.law,
+      societyOverview: source.societyOverview,
+      timeScale: source.timeScale,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Copy agents — preserve currentStats as both initial and current
+    const sourceAgents = await db.select().from(agents).where(eq(agents.sessionId, id));
+    for (const a of sourceAgents) {
+      await db.insert(agents).values({
+        id: uuidv4(),
+        sessionId: newId,
+        name: a.name,
+        role: a.role,
+        background: a.background,
+        initialStats: a.currentStats,
+        currentStats: a.currentStats,
+        status: a.status,
+        type: a.type,
+        bornAtIteration: a.bornAtIteration ?? null,
+        diedAtIteration: a.diedAtIteration ?? null,
+      });
+    }
+
+    // Copy all iterations
+    const sourceIters = await db.select().from(iterations)
+      .where(eq(iterations.sessionId, id))
+      .orderBy(asc(iterations.iterationNumber));
+    for (const it of sourceIters) {
+      await db.insert(iterations).values({
+        id: uuidv4(),
+        sessionId: newId,
+        iterationNumber: it.iterationNumber,
+        stateSummary: it.stateSummary,
+        statistics: it.statistics,
+        lifecycleEvents: it.lifecycleEvents,
+        timestamp: it.timestamp,
+      });
+    }
+
+    res.status(201).json({ id: newId });
+  } catch (err) {
+    console.error('POST /sessions/:id/fork-simulation error:', err);
+    res.status(500).json({ error: 'Failed to fork simulation' });
+  }
+});
+
 // DELETE /api/sessions/:id
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;

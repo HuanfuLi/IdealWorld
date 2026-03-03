@@ -16,6 +16,9 @@ router.get('/', (_req, res) => {
       centralAgentModel: s.centralAgentModel,
       citizenAgentModel: s.citizenAgentModel,
       maxConcurrency: s.maxConcurrency,
+      citizenProvider: s.citizenProvider,
+      hasCitizenApiKey: !!(s.citizenApiKey && s.citizenApiKey.length > 0),
+      citizenBaseUrl: s.citizenBaseUrl,
     });
   } catch (err) {
     console.error('GET /settings error:', err);
@@ -34,6 +37,10 @@ router.put('/', (req, res) => {
     if (body.apiKey !== undefined && body.apiKey.trim() === '' && current.apiKey) {
       delete body.apiKey;
     }
+    // Same for citizenApiKey
+    if (body.citizenApiKey !== undefined && body.citizenApiKey.trim() === '' && current.citizenApiKey) {
+      delete body.citizenApiKey;
+    }
 
     const updated = writeSettings(body);
     invalidateProvider();
@@ -45,6 +52,9 @@ router.put('/', (req, res) => {
       centralAgentModel: updated.centralAgentModel,
       citizenAgentModel: updated.citizenAgentModel,
       maxConcurrency: updated.maxConcurrency,
+      citizenProvider: updated.citizenProvider,
+      hasCitizenApiKey: !!(updated.citizenApiKey && updated.citizenApiKey.length > 0),
+      citizenBaseUrl: updated.citizenBaseUrl,
     });
   } catch (err) {
     console.error('PUT /settings error:', err);

@@ -17,9 +17,10 @@
 import { v4 as uuidv4 } from 'uuid';
 import { db, sqlite } from '../db/index.js';
 import { agentIntents, resolvedActions, iterations as iterationsTable } from '../db/schema.js';
+import { asc, eq, sql } from 'drizzle-orm';
 import { agentRepo } from '../db/repos/agentRepo.js';
 import { sessionRepo } from '../db/repos/sessionRepo.js';
-import { getProvider } from '../llm/gateway.js';
+import { getProvider, getCitizenProvider } from '../llm/gateway.js';
 import { readSettings } from '../settings.js';
 import {
   buildIntentPrompt,
@@ -30,10 +31,10 @@ import {
   type AgentIntent,
 } from '../llm/prompts.js';
 import {
-  parseAgentIntent,
-  parseResolution,
-  parseGroupResolution,
-  parseMergeResolution,
+  parseAgentIntentStrict,
+  parseResolutionStrict,
+  parseGroupResolutionStrict,
+  parseMergeResolutionStrict,
   parseFinalReport,
 } from '../parsers/simulation.js';
 import { runWithConcurrency } from './concurrencyPool.js';
@@ -41,6 +42,7 @@ import { asyncLogFlusher } from '../db/asyncLogFlusher.js';
 import { resolveAction } from '../mechanics/physicsEngine.js';
 import { type ActionCode } from '../mechanics/actionCodes.js';
 import { clusterByRole } from './clustering.js';
+import { retryWithHealing } from '../llm/retryWithHealing.js';
 
 /** Agents per resolution batch when session is large */
 const MAPREDUCE_THRESHOLD = 30;
@@ -99,6 +101,7 @@ function computeStats(agents: Agent[], iterationNumber: number): IterationStats 
 export async function runSimulation(sessionId: string, totalIterations: number): Promise<void> {
   const settings = readSettings();
   const provider = getProvider();
+  const citizenProv = getCitizenProvider();
   const summaries: Array<{ number: number; summary: string }> = [];
 
   try {
@@ -112,7 +115,30 @@ export async function runSimulation(sessionId: string, totalIterations: number):
     let agents = await agentRepo.listBySession(sessionId);
     let previousSummary: string | null = null;
 
-    for (let iterNum = 1; iterNum <= totalIterations; iterNum++) {
+    // Support continuation: find max existing iteration number
+    const [maxRow] = await db.select({ max: sql<number>`max(${iterationsTable.iterationNumber})` })
+      .from(iterationsTable).where(eq(iterationsTable.sessionId, sessionId));
+    const startIter = (maxRow?.max ?? 0) + 1;
+    const endIter = startIter + totalIterations - 1;
+
+    // Load previous summaries for final report if continuing
+    if (startIter > 1) {
+      const prevIters = await db.select({
+        iterationNumber: iterationsTable.iterationNumber,
+        stateSummary: iterationsTable.stateSummary,
+      }).from(iterationsTable)
+        .where(eq(iterationsTable.sessionId, sessionId))
+        .orderBy(asc(iterationsTable.iterationNumber));
+      for (const pi of prevIters) {
+        summaries.push({ number: pi.iterationNumber, summary: pi.stateSummary });
+      }
+      // Set previousSummary to last existing iteration's summary
+      if (prevIters.length > 0) {
+        previousSummary = prevIters[prevIters.length - 1].stateSummary;
+      }
+    }
+
+    for (let iterNum = startIter; iterNum <= endIter; iterNum++) {
       // ── Abort check ──────────────────────────────────────────────────────
       if (simulationManager.isAbortRequested(sessionId)) {
         asyncLogFlusher.stop();
@@ -152,7 +178,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       simulationManager.broadcast(sessionId, {
         type: 'iteration-start',
         iteration: iterNum,
-        total: totalIterations,
+        total: endIter,
       });
 
       // ── Collect intents (parallel) ───────────────────────────────────────
@@ -161,18 +187,28 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       const now = new Date().toISOString();
 
       const intentTasks = aliveAgents.map(agent => async (): Promise<AgentIntent> => {
-        try {
-          const messages = buildIntentPrompt(agent, session, previousSummary, iterNum);
-          const raw = await provider.chat(messages, { model: settings.citizenAgentModel });
-          const parsed = parseAgentIntent(raw);
-          return {
-            agentId: agent.id, agentName: agent.name,
-            intent: parsed.intent, reasoning: parsed.reasoning,
-            actionCode: parsed.actionCode, actionTarget: parsed.actionTarget,
-          };
-        } catch {
-          return { agentId: agent.id, agentName: agent.name, intent: `${agent.name} continues their routine.`, reasoning: '', actionCode: 'NONE', actionTarget: null };
-        }
+        const messages = buildIntentPrompt(agent, session, previousSummary, iterNum);
+        const fallbackIntent: AgentIntent = {
+          agentId: agent.id, agentName: agent.name,
+          intent: `${agent.name} continues their routine.`, reasoning: '',
+          actionCode: 'NONE', actionTarget: null,
+        };
+        const parsed = await retryWithHealing({
+          provider: citizenProv,
+          messages,
+          options: { model: settings.citizenAgentModel },
+          parse: (raw) => {
+            const p = parseAgentIntentStrict(raw);
+            return {
+              agentId: agent.id, agentName: agent.name,
+              intent: p.intent, reasoning: p.reasoning,
+              actionCode: p.actionCode, actionTarget: p.actionTarget,
+            } as AgentIntent;
+          },
+          fallback: fallbackIntent,
+          label: `intent:${agent.name}`,
+        });
+        return parsed;
       });
 
       const intents = await runWithConcurrency(intentTasks, settings.maxConcurrency);
@@ -206,12 +242,18 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           .join('\n');
 
         const groups = clusterByRole(aliveAgents, BATCH_SIZE);
-        const groupTasks = groups.map(group => async () => {
+        const groupTasks = groups.map((group, gi) => async () => {
           const groupIntents = intents.filter(i => group.some(a => a.id === i.agentId));
           const msgs = buildGroupResolutionMessages(session, group, groupIntents, allIntentsBrief, iterNum, previousSummary);
           // Use citizenAgentModel for group coordinators (cheaper); merge step keeps centralAgentModel
-          const raw = await provider.chat(msgs, { model: settings.citizenAgentModel });
-          return parseGroupResolution(raw);
+          return retryWithHealing({
+            provider: citizenProv,
+            messages: msgs,
+            options: { model: settings.citizenAgentModel },
+            parse: parseGroupResolutionStrict,
+            fallback: { groupSummary: 'The group continued their activities.', agentOutcomes: [], lifecycleEvents: [] },
+            label: `groupResolution:${gi}`,
+          });
         });
 
         const groupResults = await runWithConcurrency(groupTasks, settings.maxConcurrency);
@@ -219,8 +261,14 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         // Merge step: synthesise group summaries into a society-wide narrative
         const groupSummaries = groupResults.map(r => r.groupSummary);
         const mergeMessages = buildMergeResolutionMessages(session, groupSummaries, iterNum, previousSummary);
-        const mergeRaw = await provider.chat(mergeMessages, { model: settings.centralAgentModel });
-        const mergeResult = parseMergeResolution(mergeRaw);
+        const mergeResult = await retryWithHealing({
+          provider,
+          messages: mergeMessages,
+          options: { model: settings.centralAgentModel },
+          parse: parseMergeResolutionStrict,
+          fallback: { narrativeSummary: 'The iteration passed.', lifecycleEvents: [] },
+          label: 'mergeResolution',
+        });
 
         resolution = {
           narrativeSummary: mergeResult.narrativeSummary,
@@ -234,8 +282,14 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       } else {
         // ── Standard path ────────────────────────────────────────────────
         const resolutionMessages = buildResolutionPrompt(session, agents, intents, iterNum, previousSummary);
-        const resolutionRaw = await provider.chat(resolutionMessages, { model: settings.centralAgentModel });
-        resolution = parseResolution(resolutionRaw);
+        resolution = await retryWithHealing({
+          provider,
+          messages: resolutionMessages,
+          options: { model: settings.centralAgentModel },
+          parse: parseResolutionStrict,
+          fallback: { narrativeSummary: 'The iteration passed without major events.', agentOutcomes: [], lifecycleEvents: [] },
+          label: 'resolution',
+        });
       }
 
       simulationManager.broadcast(sessionId, {
@@ -359,7 +413,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
     }
 
     // ── Final report ─────────────────────────────────────────────────────────
-    const finalStats = computeStats(agents, totalIterations);
+    const finalStats = computeStats(agents, endIter);
     const finalMessages = buildFinalReportPrompt(session, summaries, {
       aliveCount: finalStats.aliveCount,
       avgWealth: finalStats.avgWealth,
@@ -371,13 +425,13 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       const finalRaw = await provider.chat(finalMessages, { model: settings.centralAgentModel });
       finalReport = parseFinalReport(finalRaw);
     } catch {
-      finalReport = `The simulation of "${session.idea}" concluded after ${totalIterations} iterations with ${finalStats.aliveCount} survivors.`;
+      finalReport = `The simulation of "${session.idea}" concluded after ${endIter} iterations with ${finalStats.aliveCount} survivors.`;
     }
 
     // Drain all pending log writes before finishing
     asyncLogFlusher.stop();
 
-    await sessionRepo.updateStage(sessionId, 'reflecting');
+    await sessionRepo.updateStage(sessionId, 'simulation-complete');
     simulationManager.broadcast(sessionId, { type: 'simulation-complete', finalReport });
     simulationManager.finish(sessionId);
   } catch (err) {

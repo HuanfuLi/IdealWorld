@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useRef, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Play, Pause, Square, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle } from 'lucide-react';
+import { Play, Pause, Square, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle, ArrowRight, GitFork } from 'lucide-react';
 import { useSimulationStore } from '../stores/simulationStore';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -15,6 +15,7 @@ const Simulation = () => {
     feed, statsHistory, agents, finalReport, error,
     loadAgents, loadHistory, connectSSE,
     pause, resume, abort, reset,
+    continueSimulation, forkSimulation,
   } = useSimulationStore(useShallow(s => ({
     isRunning: s.isRunning, isPaused: s.isPaused, isComplete: s.isComplete,
     currentIteration: s.currentIteration, totalIterations: s.totalIterations,
@@ -22,7 +23,12 @@ const Simulation = () => {
     finalReport: s.finalReport, error: s.error,
     loadAgents: s.loadAgents, loadHistory: s.loadHistory, connectSSE: s.connectSSE,
     pause: s.pause, resume: s.resume, abort: s.abort, reset: s.reset,
+    continueSimulation: s.continueSimulation, forkSimulation: s.forkSimulation,
   })));
+
+  const [sessionStage, setSessionStage] = useState<string>('simulating');
+  const [extraIterations, setExtraIterations] = useState(10);
+  const sseCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -31,6 +37,7 @@ const Simulation = () => {
     loadHistory(id);
     // Connect SSE for live updates; will close gracefully if simulation already done
     const disconnect = connectSSE(id);
+    sseCleanupRef.current = disconnect;
     return disconnect;
   }, [id]);
 
@@ -38,6 +45,7 @@ const Simulation = () => {
   useEffect(() => {
     if (!id) return;
     fetch(`/api/sessions/${id}`).then(r => r.json()).then((s: { stage?: string }) => {
+      if (s.stage) setSessionStage(s.stage);
       if (s.stage && s.stage !== 'simulating' && s.stage !== 'simulation-paused') {
         // Simulation already finished
         const state = useSimulationStore.getState();
@@ -46,23 +54,11 @@ const Simulation = () => {
         }
       }
     }).catch(() => {});
-  }, [id]);
+  }, [id, isComplete]);
 
   useEffect(() => {
     feedEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [feed.length]);
-
-  // Navigate to reflection when simulation completes (only during live simulation, not on reload)
-  const wasRunningRef = useRef(false);
-  useEffect(() => {
-    if (isRunning) wasRunningRef.current = true;
-  }, [isRunning]);
-  useEffect(() => {
-    if (isComplete && id && wasRunningRef.current) {
-      const t = setTimeout(() => navigate(`/session/${id}/reflection`), 3000);
-      return () => clearTimeout(t);
-    }
-  }, [isComplete, id]);
 
   const handlePauseResume = async () => {
     if (!id) return;
@@ -107,7 +103,7 @@ const Simulation = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', flex: 1, marginRight: '2rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
             {isComplete ? (
-              <span style={{ color: 'var(--success)' }}><strong>Simulation Complete</strong> — Proceeding to reflection…</span>
+              <span style={{ color: 'var(--success)' }}><strong>Simulation Complete</strong></span>
             ) : isRunning ? (
               <span>
                 <strong style={{ color: 'var(--color-bright)' }}>Iteration {currentIteration}</strong>
@@ -334,6 +330,71 @@ const Simulation = () => {
         </div>
 
       </div>
+
+      {/* Action Bar — shown when simulation is complete and not running */}
+      {isComplete && !isRunning && (
+        <div className="glass-panel" style={{ padding: '1rem 1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '1rem', marginTop: '1.5rem', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginRight: 'auto' }}>
+            <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Extra iterations:</label>
+            <input
+              type="number"
+              min={1}
+              max={200}
+              value={extraIterations}
+              onChange={e => setExtraIterations(Math.max(1, Math.min(200, Number(e.target.value) || 1)))}
+              style={{
+                width: '70px', padding: '0.35rem 0.5rem', borderRadius: '6px',
+                border: '1px solid var(--glass-border)', background: 'var(--panel-alpha-10)',
+                color: 'var(--color-bright)', fontSize: '0.9rem', textAlign: 'center',
+              }}
+            />
+          </div>
+
+          {['simulating', 'simulation-paused', 'simulation-complete'].includes(sessionStage) ? (
+            <>
+              <button
+                className="btn-primary"
+                onClick={async () => {
+                  if (!id) return;
+                  sseCleanupRef.current?.();
+                  sseCleanupRef.current = await continueSimulation(id, extraIterations);
+                  setSessionStage('simulating');
+                }}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+              >
+                <Play size={16} /> Add More Iterations
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={async () => {
+                  if (!id) return;
+                  await fetch(`/api/sessions/${id}/stage`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ stage: 'reflecting' }),
+                  });
+                  navigate(`/session/${id}/reflection`);
+                }}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+              >
+                <ArrowRight size={16} /> Proceed to Reflection
+              </button>
+            </>
+          ) : (
+            <button
+              className="btn-primary"
+              onClick={async () => {
+                if (!id) return;
+                const newId = await forkSimulation(id);
+                navigate(`/session/${newId}/simulation`);
+              }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              <GitFork size={16} /> Fork & Continue
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 };

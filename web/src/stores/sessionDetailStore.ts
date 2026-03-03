@@ -18,13 +18,16 @@ interface SessionDetailStore {
   chatPending: boolean;
   designProgress: DesignProgress;
   error: string | null;
+  failedMessage: string | null;
 
   loadSession: (id: string) => Promise<void>;
   loadAgents: (id: string) => Promise<void>;
   sendBrainstormMessage: (id: string, text: string) => Promise<void>;
   startDesignGeneration: (id: string) => Promise<void>;
   sendRefinementMessage: (id: string, text: string) => Promise<void>;
+  retryRefinement: (id: string) => Promise<void>;
   startSimulation: (id: string, totalIterations: number) => Promise<void>;
+  forkSession: (id: string, iterations: number) => Promise<string>;
   reset: () => void;
 }
 
@@ -44,6 +47,7 @@ export const useSessionDetailStore = create<SessionDetailStore>((set, get) => ({
   chatPending: false,
   designProgress: defaultProgress,
   error: null,
+  failedMessage: null,
 
   reset: () =>
     set({
@@ -55,6 +59,7 @@ export const useSessionDetailStore = create<SessionDetailStore>((set, get) => ({
       chatPending: false,
       designProgress: defaultProgress,
       error: null,
+      failedMessage: null,
     }),
 
   loadSession: async (id: string) => {
@@ -268,6 +273,8 @@ export const useSessionDetailStore = create<SessionDetailStore>((set, get) => ({
     set(state => ({
       refinementMessages: [...state.refinementMessages, optimisticMsg],
       chatPending: true,
+      error: null,
+      failedMessage: null,
     }));
 
     try {
@@ -286,6 +293,7 @@ export const useSessionDetailStore = create<SessionDetailStore>((set, get) => ({
       set(state => ({
         refinementMessages: [...state.refinementMessages, assistantMsg],
         chatPending: false,
+        failedMessage: null,
       }));
 
       if (response.artifactsUpdated.includes('agents')) {
@@ -296,12 +304,42 @@ export const useSessionDetailStore = create<SessionDetailStore>((set, get) => ({
         set({ session });
       }
     } catch (err) {
-      set(state => ({
-        refinementMessages: state.refinementMessages.filter(m => m.id !== optimisticMsg.id),
+      // Keep user message visible, store text for retry
+      set({
         chatPending: false,
         error: err instanceof Error ? err.message : 'Refinement chat failed',
+        failedMessage: text,
+      });
+    }
+  },
+
+  retryRefinement: async (id: string) => {
+    const { failedMessage, refinementMessages } = get();
+    if (!failedMessage) return;
+    // Remove the failed user message before retrying
+    const lastUserIdx = refinementMessages.findLastIndex(m => m.role === 'user' && m.content === failedMessage);
+    if (lastUserIdx >= 0) {
+      set(state => ({
+        refinementMessages: state.refinementMessages.filter((_, i) => i !== lastUserIdx),
+        error: null,
+        failedMessage: null,
       }));
     }
+    await get().sendRefinementMessage(id, failedMessage);
+  },
+
+  forkSession: async (id: string, iterations: number): Promise<string> => {
+    const res = await fetch(`/api/sessions/${id}/fork`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ iterations }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+    }
+    const { id: newId } = await res.json();
+    return newId;
   },
 
   startSimulation: async (id: string, totalIterations: number) => {

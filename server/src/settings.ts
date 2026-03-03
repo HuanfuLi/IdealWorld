@@ -13,6 +13,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   centralAgentModel: 'claude-sonnet-4-6',
   citizenAgentModel: 'claude-haiku-4-5-20251001',
   maxConcurrency: 10,
+  citizenProvider: undefined,
+  citizenApiKey: '',
+  citizenBaseUrl: '',
 };
 
 export function readSettings(): AppSettings {

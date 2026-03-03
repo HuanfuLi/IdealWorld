@@ -1,5 +1,6 @@
 import type { LLMMessage, ContentBlock } from './types.js';
 import type { Agent, ChatMessage, Session, ComparisonResult, BrainstormChecklist } from '@idealworld/shared';
+import { getSubconsciousDrive } from '../mechanics/historicalRAG.js';
 
 export function buildBrainstormMessages(
   seedIdea: string,
@@ -224,6 +225,12 @@ Action meanings:
     stressModifier = '\n\nYou are under extreme biological stress. Survival instincts dominate. You may act desperately.';
   } else if (cortisol > 60) {
     stressModifier = '\n\nYou feel significant pressure. You are more willing to take risks or drastic action.';
+  }
+
+  // RAG injection: historical subconscious drive for high-stress agents
+  const subconsciousDrive = getSubconsciousDrive(cortisol, agent.currentStats.wealth, agent.currentStats.health);
+  if (subconsciousDrive) {
+    stressModifier += `\n\n${subconsciousDrive}`;
   }
 
   const dynamicSuffix = `Your identity: ${agent.name}, a ${agent.role}
@@ -719,21 +726,26 @@ export function buildRefineMessages(
   seedIdea: string,
   overview: string,
   law: string,
-  agentCount: number,
+  agents: Array<{ name: string; role: string; initialStats: { wealth: number; health: number; happiness: number } }>,
   refineHistory: ChatMessage[],
   userMessage: string
 ): LLMMessage[] {
+  const agentRoster = agents
+    .map(a => `- ${a.name} [${a.role}] W:${a.initialStats.wealth} H:${a.initialStats.health} Hap:${a.initialStats.happiness}`)
+    .join('\n');
+
   const systemPrompt = `You are the Central Agent helping refine a society design. You have context about the current design.
 
 Seed idea: ${seedIdea}
 
 Current overview (excerpt):
-${overview.slice(0, 500)}
+${overview.slice(0, 3000)}
 
 Current law (excerpt):
-${law.slice(0, 500)}
+${law.slice(0, 3000)}
 
-Current agent count: ${agentCount}
+Current agents (${agents.length} total):
+${agentRoster}
 
 Help the user make targeted changes to the society design.
 
@@ -742,7 +754,7 @@ You MUST respond with ONLY valid JSON (no markdown, no preamble, no code fences)
   "reply": "string - explain what changes you made",
   "artifactsUpdated": [],
   "updatedOverview": null,
-  "updatedLaw": null,
+  "lawChanges": null,
   "agentChanges": {
     "add": [],
     "remove": [],
@@ -754,11 +766,19 @@ You MUST respond with ONLY valid JSON (no markdown, no preamble, no code fences)
 Rules:
 - artifactsUpdated: array containing any of "overview", "law", "agents" that were changed
 - updatedOverview: full new overview text if changed, null otherwise
-- updatedLaw: full new law text if changed, null otherwise
-- agentChanges.add: array of {name, role, background, initialStats} for new agents
-- agentChanges.remove: array of agent names to remove
-- agentChanges.modify: array of {name, role, background, initialStats} for agents to update
+- lawChanges: if law changes are needed, provide an object: { "add": ["new law text to append"], "modify": [{ "original": "exact existing law text", "replacement": "new text" }], "remove": ["exact law text to remove"] }. Set to null if no law changes.
+  - lawChanges.add: array of new law text strings to append
+  - lawChanges.modify: array of { original: "exact existing law text", replacement: "new text" }
+  - lawChanges.remove: array of exact law text strings to remove
+  - Only include lawChanges when user explicitly requests law changes
+- agentChanges.add: array of {name, role, background, initialStats: {wealth, health, happiness}} for new agents
+- agentChanges.remove: array of exact agent names to remove (use names from the roster above)
+- agentChanges.modify: array of {name, role, background, initialStats: {wealth, health, happiness}} for agents to update (use exact names from roster)
 - agentsSummary: brief summary of agent changes if agents were modified, null otherwise
+- All stat values (wealth, health, happiness) must be integers between 0 and 100
+- initialStats must always include all three fields: wealth, health, happiness
+- Agent names must be unique — do not reuse names from the roster above when adding new agents
+- When removing or modifying agents, use exact names from the roster above
 - Only include changes that were explicitly requested`;
 
   const messages: LLMMessage[] = [{ role: 'system', content: systemPrompt }];

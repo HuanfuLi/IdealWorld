@@ -55,6 +55,8 @@ interface SimulationStore {
   pause: (sessionId: string) => Promise<void>;
   resume: (sessionId: string) => Promise<void>;
   abort: (sessionId: string) => Promise<void>;
+  continueSimulation: (sessionId: string, iterations: number) => Promise<() => void>;
+  forkSimulation: (sessionId: string) => Promise<string>;
   reset: () => void;
 }
 
@@ -245,5 +247,21 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   abort: async (sessionId: string) => {
     await fetch(`/api/sessions/${sessionId}/simulate/abort`, { method: 'POST' });
     set({ isRunning: false, isPaused: false });
+  },
+
+  continueSimulation: async (sessionId: string, iterations: number) => {
+    set({ isComplete: false, finalReport: null, error: null });
+    await fetch(`/api/sessions/${sessionId}/simulate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ iterations }),
+    });
+    return get().connectSSE(sessionId);
+  },
+
+  forkSimulation: async (sessionId: string) => {
+    const res = await fetch(`/api/sessions/${sessionId}/fork-simulation`, { method: 'POST' });
+    const data = await res.json() as { id: string };
+    return data.id;
   },
 }));

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Send, FileText, Users, Scale, Play, Loader2, AlertCircle, Bot } from 'lucide-react';
+import { Send, FileText, Users, Scale, Play, Loader2, AlertCircle, Bot, GitFork, RefreshCw } from 'lucide-react';
 import { useSessionDetailStore } from '../stores/sessionDetailStore';
 
 const DesignReview = () => {
@@ -13,6 +13,7 @@ const DesignReview = () => {
   const [reviewed, setReviewed] = useState(false);
   const [input, setInput] = useState('');
   const [agentSearch, setAgentSearch] = useState('');
+  const [forking, setForking] = useState(false);
 
   const {
     session,
@@ -21,9 +22,12 @@ const DesignReview = () => {
     loading,
     chatPending,
     error,
+    failedMessage,
     loadSession,
     sendRefinementMessage,
+    retryRefinement,
     startSimulation,
+    forkSession,
     reset,
   } = useSessionDetailStore();
 
@@ -39,9 +43,6 @@ const DesignReview = () => {
     if (session.stage === 'brainstorming' || session.stage === 'idea-input' || session.stage === 'designing') {
       navigate(`/session/${id}/brainstorm`, { replace: true });
     }
-    if (session.stage === 'simulating' || session.stage === 'reflecting' || session.stage === 'completed') {
-      navigate(`/session/${id}/simulation`, { replace: true });
-    }
     // Sync iterations from config
     if (session.config?.totalIterations) {
       setIterations(session.config.totalIterations);
@@ -51,6 +52,13 @@ const DesignReview = () => {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [refinementMessages, chatPending]);
+
+  // Pre-fill input with failed message so user can edit and resend
+  useEffect(() => {
+    if (failedMessage && !input) {
+      setInput(failedMessage);
+    }
+  }, [failedMessage]);
 
   const handleSend = async () => {
     if (!input.trim() || chatPending || !id) return;
@@ -63,6 +71,21 @@ const DesignReview = () => {
     if (!id) return;
     await startSimulation(id, iterations);
     navigate(`/session/${id}/simulation`);
+  };
+
+  const isPastDesign = session && !['design-review', 'refining'].includes(session.stage);
+
+  const handleFork = async () => {
+    if (!id || forking) return;
+    setForking(true);
+    try {
+      const newId = await forkSession(id, iterations);
+      navigate(`/session/${newId}/design`);
+    } catch (err) {
+      console.error('Fork failed:', err);
+    } finally {
+      setForking(false);
+    }
   };
 
   const filteredAgents = agents.filter(a =>
@@ -237,6 +260,15 @@ const DesignReview = () => {
             {error && (
               <div style={{ color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
                 <AlertCircle size={14} /> {error}
+                {failedMessage && (
+                  <button
+                    onClick={() => id && retryRefinement(id)}
+                    disabled={chatPending}
+                    style={{ background: 'none', border: '1px solid var(--danger)', color: 'var(--danger)', padding: '0.25rem 0.5rem', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.8rem' }}
+                  >
+                    <RefreshCw size={12} /> Retry
+                  </button>
+                )}
               </div>
             )}
 
@@ -269,17 +301,20 @@ const DesignReview = () => {
 
       {/* Bottom Action Bar */}
       <div className="glass-card" style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.5rem' }}>
-        <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', color: reviewed ? 'var(--success)' : 'var(--text-muted)' }}>
-            <input
-              type="checkbox"
-              checked={reviewed}
-              onChange={e => setReviewed(e.target.checked)}
-              style={{ accentColor: 'var(--success)', width: '18px', height: '18px' }}
-            />
-            I have reviewed the society design
-          </label>
-        </div>
+        {!isPastDesign && (
+          <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', color: reviewed ? 'var(--success)' : 'var(--text-muted)' }}>
+              <input
+                type="checkbox"
+                checked={reviewed}
+                onChange={e => setReviewed(e.target.checked)}
+                style={{ accentColor: 'var(--success)', width: '18px', height: '18px' }}
+              />
+              I have reviewed the society design
+            </label>
+          </div>
+        )}
+        {isPastDesign && <div />}
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -295,14 +330,26 @@ const DesignReview = () => {
             />
           </div>
 
-          <button
-            className="btn-primary"
-            onClick={handleStartSimulation}
-            disabled={!reviewed}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: reviewed ? 1 : 0.5 }}
-          >
-            <Play size={18} /> Start Simulation
-          </button>
+          {isPastDesign ? (
+            <button
+              className="btn-primary"
+              onClick={handleFork}
+              disabled={forking}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              {forking ? <Loader2 size={18} style={{ animation: 'spin 1s linear infinite' }} /> : <GitFork size={18} />}
+              Fork & Simulate
+            </button>
+          ) : (
+            <button
+              className="btn-primary"
+              onClick={handleStartSimulation}
+              disabled={!reviewed}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: reviewed ? 1 : 0.5 }}
+            >
+              <Play size={18} /> Start Simulation
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -14,7 +14,7 @@ import { db } from '../db/index.js';
 import { reflections, iterations as iterationsTable, sessions as sessionsTable } from '../db/schema.js';
 import { agentRepo } from '../db/repos/agentRepo.js';
 import { sessionRepo } from '../db/repos/sessionRepo.js';
-import { getProvider } from '../llm/gateway.js';
+import { getProvider, getCitizenProvider } from '../llm/gateway.js';
 import { readSettings } from '../settings.js';
 import {
   buildAgentReflectionPrompt,
@@ -33,6 +33,7 @@ import type { Agent } from '@idealworld/shared';
 export async function runReflection(sessionId: string): Promise<void> {
   const settings = readSettings();
   const provider = getProvider();
+  const citizenProv = getCitizenProvider();
 
   try {
     reflectionManager.start(sessionId);
@@ -154,7 +155,7 @@ export async function runReflection(sessionId: string): Promise<void> {
       const pass1 = pass1Map.get(agent.id) ?? '';
       try {
         const messages = buildAgentReflection2Prompt(agent, session, pass1, evaluation.analysis);
-        const raw = await provider.chat(messages, { model: settings.citizenAgentModel });
+        const raw = await citizenProv.chat(messages, { model: settings.citizenAgentModel });
         const { pass2 } = parseAgentReflection2(raw);
 
         // Store pass2 as a second reflection entry with insights field marking it

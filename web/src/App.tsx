@@ -35,6 +35,7 @@ const STAGE_TO_STEP: Record<Stage, NavStep> = {
   'refining':             'design',
   'simulating':           'simulation',
   'simulation-paused':    'simulation',
+  'simulation-complete':  'simulation',
   'reflecting':           'reflection',
   'reflection-complete':  'reflection',
   'reviewing':            'review',
@@ -95,7 +96,7 @@ function SessionNav({ sessionId }: { sessionId: string }) {
       {SESSION_NAV_ITEMS.map(({ step, label, Icon, path }) => {
         const stepIdx = NAV_ORDER.indexOf(step);
         // isActive: which step is the user currently viewing (URL-based)
-        const isActive = activeStepFromUrl ? step === activeStepFromUrl : step === storeStep;
+        const isActive = (activeStepFromUrl ? step === activeStepFromUrl : step === storeStep) && !isOnArtifacts;
         const isPast = stepIdx < progressIdx;
         const isUpcoming = stepIdx > progressIdx;
 

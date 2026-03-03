@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Server, CheckCircle2, AlertTriangle, Key, XCircle } from 'lucide-react';
+import { Server, CheckCircle2, AlertTriangle, Key, XCircle, ToggleLeft, ToggleRight } from 'lucide-react';
 import { useSettingsStore } from '../stores/settingsStore';
 import type { AppSettings } from '@idealworld/shared';
 
@@ -45,6 +45,12 @@ const DEFAULT_CITIZEN: Record<Provider, string> = {
   local:  '',
 };
 
+function getModelOptions(p: Provider) {
+  return p === 'claude' ? CLAUDE_MODELS :
+         p === 'openai' ? OPENAI_MODELS :
+         p === 'gemini' ? GEMINI_MODELS : null;
+}
+
 type ProviderConfig = {
   apiKey: string;
   centralAgentModel: string;
@@ -63,6 +69,12 @@ const SettingsPage = () => {
   const [maxConcurrency, setMaxConcurrency]   = useState(10);
   const [saving, setSaving]                   = useState(false);
   const [saveError, setSaveError]             = useState<string | null>(null);
+
+  // Separate citizen provider state
+  const [separateCitizen, setSeparateCitizen]         = useState(false);
+  const [citizenProvider, setCitizenProvider]          = useState<Provider>('local');
+  const [citizenApiKey, setCitizenApiKey]              = useState('');
+  const [citizenBaseUrl, setCitizenBaseUrl]            = useState('http://localhost:1234/v1');
 
   // Stores per-provider form values so switching back restores what the user entered
   const savedConfigs = useRef<Partial<Record<Provider, ProviderConfig>>>({});
@@ -83,6 +95,14 @@ const SettingsPage = () => {
       citizenAgentModel: settings.citizenAgentModel,
       baseUrl: settings.baseUrl,
     };
+    // Restore citizen provider state from server
+    if (settings.citizenProvider) {
+      setSeparateCitizen(true);
+      setCitizenProvider(settings.citizenProvider);
+      setCitizenBaseUrl(settings.citizenBaseUrl ?? 'http://localhost:1234/v1');
+    } else {
+      setSeparateCitizen(false);
+    }
   }, [settings]);
 
   const handleProviderChange = (p: Provider) => {
@@ -110,8 +130,20 @@ const SettingsPage = () => {
         maxConcurrency,
       };
       if (apiKey.trim()) updates.apiKey = apiKey.trim();
+
+      if (separateCitizen) {
+        updates.citizenProvider = citizenProvider;
+        updates.citizenBaseUrl = citizenBaseUrl;
+        if (citizenApiKey.trim()) updates.citizenApiKey = citizenApiKey.trim();
+      } else {
+        updates.citizenProvider = undefined;
+        updates.citizenApiKey = '';
+        updates.citizenBaseUrl = '';
+      }
+
       await updateSettings(updates as Parameters<typeof updateSettings>[0]);
       setApiKey('');
+      setCitizenApiKey('');
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save settings');
     } finally {
@@ -121,10 +153,9 @@ const SettingsPage = () => {
 
   const needsApiKey = provider !== 'local';
 
-  const modelOptions =
-    provider === 'claude'  ? CLAUDE_MODELS  :
-    provider === 'openai'  ? OPENAI_MODELS  :
-    provider === 'gemini'  ? GEMINI_MODELS  : null;
+  const modelOptions = getModelOptions(provider);
+  const citizenModelOptions = getModelOptions(citizenProvider);
+  const citizenNeedsApiKey = citizenProvider !== 'local';
 
   const apiKeyPlaceholder: Record<Provider, string> = {
     claude: 'sk-ant-...',
@@ -175,7 +206,7 @@ const SettingsPage = () => {
                 <Key size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
                 <input
                   type="password"
-                  placeholder={settings?.hasApiKey ? '••••••••••••• (leave blank to keep)' : apiKeyPlaceholder[provider]}
+                  placeholder={settings?.hasApiKey ? '............. (leave blank to keep)' : apiKeyPlaceholder[provider]}
                   className="input-glass"
                   style={{ paddingLeft: '3rem' }}
                   value={apiKey}
@@ -202,7 +233,7 @@ const SettingsPage = () => {
           )}
 
           {/* Model selectors */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: separateCitizen ? '1fr' : '1fr 1fr', gap: '1.5rem' }}>
             <div>
               <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
                 Central Agent Model
@@ -216,19 +247,21 @@ const SettingsPage = () => {
                   value={centralAgentModel} onChange={e => setCentralAgent(e.target.value)} />
               )}
             </div>
-            <div>
-              <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
-                Citizen Agent Model
-              </label>
-              {modelOptions ? (
-                <select className="input-glass" value={citizenAgentModel} onChange={e => setCitizenAgent(e.target.value)}>
-                  {modelOptions.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-                </select>
-              ) : (
-                <input type="text" className="input-glass" placeholder="e.g. liquid/lfm2.5-1.2b"
-                  value={citizenAgentModel} onChange={e => setCitizenAgent(e.target.value)} />
-              )}
-            </div>
+            {!separateCitizen && (
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
+                  Citizen Agent Model
+                </label>
+                {modelOptions ? (
+                  <select className="input-glass" value={citizenAgentModel} onChange={e => setCitizenAgent(e.target.value)}>
+                    {modelOptions.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                  </select>
+                ) : (
+                  <input type="text" className="input-glass" placeholder="e.g. liquid/lfm2.5-1.2b"
+                    value={citizenAgentModel} onChange={e => setCitizenAgent(e.target.value)} />
+                )}
+              </div>
+            )}
           </div>
 
           {/* Local warning */}
@@ -256,9 +289,104 @@ const SettingsPage = () => {
 
         <hr style={{ border: 'none', borderTop: '1px solid var(--glass-border)', margin: '0 0 2rem' }} />
 
+        {/* Separate citizen provider toggle */}
+        <div style={{ marginBottom: '2rem' }}>
+          <div
+            style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', marginBottom: separateCitizen ? '1.5rem' : 0 }}
+            onClick={() => setSeparateCitizen(!separateCitizen)}
+          >
+            {separateCitizen
+              ? <ToggleRight size={28} style={{ color: 'var(--primary)' }} />
+              : <ToggleLeft size={28} style={{ color: 'var(--text-dim)' }} />
+            }
+            <span style={{ fontSize: '0.95rem' }}>Use different provider for citizen agents</span>
+          </div>
+
+          {separateCitizen && (
+            <div className="animate-fade-in" style={{
+              display: 'grid', gap: '1.5rem',
+              background: 'rgba(255,255,255,0.03)', border: '1px solid var(--glass-border)',
+              borderRadius: '12px', padding: '1.5rem',
+            }}>
+              {/* Citizen provider selector */}
+              <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+                {PROVIDERS.map(p => (
+                  <label key={p.value} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                    <input
+                      type="radio"
+                      name="citizenProvider"
+                      checked={citizenProvider === p.value}
+                      onChange={() => {
+                        setCitizenProvider(p.value);
+                        setCitizenAgent(DEFAULT_CITIZEN[p.value]);
+                      }}
+                      style={{ accentColor: 'var(--primary)' }}
+                    />
+                    {p.label}
+                  </label>
+                ))}
+              </div>
+
+              {/* Citizen API key */}
+              {citizenNeedsApiKey && (
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
+                    Citizen API Key{' '}
+                    {settings?.hasCitizenApiKey && <span style={{ color: 'var(--success)', fontSize: '0.8rem' }}>(saved)</span>}
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <Key size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
+                    <input
+                      type="password"
+                      placeholder={settings?.hasCitizenApiKey ? '............. (leave blank to keep)' : apiKeyPlaceholder[citizenProvider]}
+                      className="input-glass"
+                      style={{ paddingLeft: '3rem' }}
+                      value={citizenApiKey}
+                      onChange={e => setCitizenApiKey(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Citizen base URL */}
+              {citizenProvider === 'local' && (
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
+                    Citizen Endpoint URL
+                  </label>
+                  <input
+                    type="text"
+                    className="input-glass"
+                    value={citizenBaseUrl}
+                    onChange={e => setCitizenBaseUrl(e.target.value)}
+                    placeholder="http://127.0.0.1:1234/v1"
+                  />
+                </div>
+              )}
+
+              {/* Citizen model */}
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
+                  Citizen Agent Model
+                </label>
+                {citizenModelOptions ? (
+                  <select className="input-glass" value={citizenAgentModel} onChange={e => setCitizenAgent(e.target.value)}>
+                    {citizenModelOptions.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                  </select>
+                ) : (
+                  <input type="text" className="input-glass" placeholder="e.g. liquid/lfm2.5-1.2b"
+                    value={citizenAgentModel} onChange={e => setCitizenAgent(e.target.value)} />
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <hr style={{ border: 'none', borderTop: '1px solid var(--glass-border)', margin: '0 0 2rem' }} />
+
         <div style={{ marginBottom: '2rem' }}>
           <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
-            Max Concurrent Requests (1–50)
+            Max Concurrent Requests (1-50)
           </label>
           <input type="number" className="input-glass" style={{ maxWidth: '150px' }}
             value={maxConcurrency} onChange={e => setMaxConcurrency(Number(e.target.value))} min={1} max={50} />

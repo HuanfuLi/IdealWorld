@@ -1,0 +1,74 @@
+/**
+ * Autonomous Try-Heal-Retry loop for LLM calls.
+ *
+ * Wraps an LLM chat call + parser in a retry loop. If the parser throws
+ * (e.g. broken JSON, hallucinated formatting), the exact error is appended
+ * to the prompt and the LLM is asked to fix its output. After MAX_RETRIES
+ * failures, falls back to a caller-provided safe default.
+ */
+import type { LLMMessage, LLMOptions, LLMProvider } from './types.js';
+
+const MAX_RETRIES = 2;
+
+interface RetryWithHealingOptions<T> {
+  /** The LLM provider to call */
+  provider: LLMProvider;
+  /** The original messages to send */
+  messages: LLMMessage[];
+  /** LLM options (model, temperature, etc.) */
+  options?: LLMOptions;
+  /** Parser function that converts raw LLM text to the desired type. Throws on failure. */
+  parse: (raw: string) => T;
+  /** Safe fallback value returned after all retries are exhausted */
+  fallback: T;
+  /** Optional label for logging */
+  label?: string;
+}
+
+/**
+ * Calls the LLM, parses the result. On parse failure, appends the error
+ * to the conversation and retries up to MAX_RETRIES times.
+ */
+export async function retryWithHealing<T>({
+  provider,
+  messages,
+  options,
+  parse,
+  fallback,
+  label,
+}: RetryWithHealingOptions<T>): Promise<T> {
+  let lastRaw = '';
+  // Build a mutable copy of the conversation for healing rounds
+  const conversation = [...messages];
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      lastRaw = await provider.chat(conversation, options);
+      return parse(lastRaw);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+
+      if (attempt < MAX_RETRIES) {
+        // Append the failed response and healing instruction
+        conversation.push({ role: 'assistant', content: lastRaw });
+        conversation.push({
+          role: 'user',
+          content: `Your previous response could not be parsed. Error: ${errorMsg}\n\nPlease rewrite your response as valid JSON following the exact schema specified above. Output ONLY the JSON object, no markdown fences, no preamble.`,
+        });
+
+        if (label) {
+          console.warn(`[retryWithHealing] ${label} attempt ${attempt + 1} failed: ${errorMsg.slice(0, 120)}`);
+        }
+      } else {
+        // All retries exhausted
+        if (label) {
+          console.warn(`[retryWithHealing] ${label} all ${MAX_RETRIES + 1} attempts failed, using fallback. Last error: ${errorMsg.slice(0, 120)}`);
+        }
+        return fallback;
+      }
+    }
+  }
+
+  // Should not reach here, but TypeScript needs it
+  return fallback;
+}

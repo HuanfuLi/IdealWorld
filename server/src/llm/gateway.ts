@@ -5,6 +5,7 @@ import { OpenAICompatibleProvider } from './openai.js';
 import { readSettings } from '../settings.js';
 
 let provider: LLMProvider | null = null;
+let citizenProviderCache: LLMProvider | null = null;
 
 export function getProvider(): LLMProvider {
   if (!provider) {
@@ -13,8 +14,26 @@ export function getProvider(): LLMProvider {
   return provider;
 }
 
+/** Returns a separate provider for citizen agent tasks if configured, otherwise falls back to main provider. */
+export function getCitizenProvider(): LLMProvider {
+  const settings = readSettings();
+  if (!settings.citizenProvider) {
+    return getProvider();
+  }
+  if (!citizenProviderCache) {
+    citizenProviderCache = createProviderFromSettings({
+      ...settings,
+      provider: settings.citizenProvider,
+      apiKey: settings.citizenApiKey ?? '',
+      baseUrl: settings.citizenBaseUrl ?? 'http://localhost:1234/v1',
+    });
+  }
+  return citizenProviderCache;
+}
+
 export function invalidateProvider(): void {
   provider = null;
+  citizenProviderCache = null;
 }
 
 /** Create a provider from explicit settings without touching the module-level cache. */

@@ -39,12 +39,25 @@ export async function brainstorm(
       readyForDesign: boolean;
     }>(raw);
   } catch {
-    // If JSON extraction fails entirely, treat the raw text as the reply
-    parsed = {
-      reply: raw.slice(0, 1000),
-      checklist: { governance: false, economy: false, legal: false, culture: false, infrastructure: false },
-      readyForDesign: false,
-    };
+    // If JSON extraction fails, try regex extraction of the reply field
+    const replyMatch = raw.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (replyMatch) {
+      let extractedReply: string;
+      try { extractedReply = JSON.parse(`"${replyMatch[1]}"`); } catch { extractedReply = replyMatch[1]; }
+      parsed = {
+        reply: extractedReply,
+        checklist: { governance: false, economy: false, legal: false, culture: false, infrastructure: false },
+        readyForDesign: false,
+      };
+    } else {
+      // Sanitize raw text: strip JSON artifacts and trim
+      const sanitized = raw.replace(/^[\s\n]*[{\[]+/, '').replace(/[}\]]+[\s\n]*$/, '').trim().slice(0, 500);
+      parsed = {
+        reply: sanitized || 'I received your message but had trouble formatting my response. Could you try again?',
+        checklist: { governance: false, economy: false, legal: false, culture: false, infrastructure: false },
+        readyForDesign: false,
+      };
+    }
   }
 
   // Force readyForDesign false if any checklist item is still false
@@ -215,11 +228,23 @@ export async function refine(
   userMessage: string
 ): Promise<RefineResult> {
   const provider = getProvider();
+
+  // Build agent list with parsed stats for the prompt
+  const agentList = currentAgents.map(a => {
+    let stats: { wealth: number; health: number; happiness: number };
+    try {
+      stats = JSON.parse(a.initialStats);
+    } catch {
+      stats = { wealth: 50, health: 70, happiness: 60 };
+    }
+    return { name: a.name, role: a.role, initialStats: stats };
+  });
+
   const messages = buildRefineMessages(
     session.idea,
     session.societyOverview ?? '',
     session.law ?? '',
-    currentAgents.length,
+    agentList,
     refineHistory,
     userMessage
   );
@@ -229,7 +254,12 @@ export async function refine(
     reply: string;
     artifactsUpdated: Array<'overview' | 'law' | 'agents'>;
     updatedOverview: string | null;
-    updatedLaw: string | null;
+    updatedLaw?: string | null;
+    lawChanges?: {
+      add?: string[];
+      modify?: Array<{ original: string; replacement: string }>;
+      remove?: string[];
+    } | null;
     agentChanges: {
       add: Array<{ name: string; role: string; background: string; initialStats: { wealth: number; health: number; happiness: number } }>;
       remove: string[];
@@ -238,21 +268,50 @@ export async function refine(
     agentsSummary: string | null;
   }>(raw);
 
+  // Helper: clamp stat values to 0-100 with defaults
+  const clampStats = (s: Partial<{ wealth: number; health: number; happiness: number }> | undefined) => ({
+    wealth: Math.max(0, Math.min(100, Math.round(s?.wealth ?? 50))),
+    health: Math.max(0, Math.min(100, Math.round(s?.health ?? 70))),
+    happiness: Math.max(0, Math.min(100, Math.round(s?.happiness ?? 60))),
+  });
+
   const now = new Date().toISOString();
   const updates: Record<string, unknown> = { updatedAt: now };
 
   if (parsed.updatedOverview) {
     updates.societyOverview = parsed.updatedOverview;
   }
-  if (parsed.updatedLaw) {
+
+  // Apply law changes: prefer diff-based lawChanges, fall back to updatedLaw
+  if (parsed.lawChanges) {
+    let currentLaw = session.law ?? '';
+    const lc = parsed.lawChanges;
+    if (lc.remove?.length) {
+      for (const text of lc.remove) {
+        currentLaw = currentLaw.replace(text, '');
+      }
+    }
+    if (lc.modify?.length) {
+      for (const m of lc.modify) {
+        currentLaw = currentLaw.replace(m.original, m.replacement);
+      }
+    }
+    if (lc.add?.length) {
+      currentLaw = currentLaw.trimEnd() + '\n\n' + lc.add.join('\n\n');
+    }
+    updates.law = currentLaw.trim();
+  } else if (parsed.updatedLaw) {
+    // Backward compat: LLM returned old format
     updates.law = parsed.updatedLaw;
   }
+
   if (Object.keys(updates).length > 1) {
     await db.update(sessions).set(updates).where(eq(sessions.id, session.id));
   }
 
   // Apply agent changes
   const agentChanges = parsed.agentChanges ?? { add: [], remove: [], modify: [] };
+  const existingNames = new Set(currentAgents.map(a => a.name));
 
   // Remove agents by name
   if (agentChanges.remove?.length > 0) {
@@ -263,10 +322,11 @@ export async function refine(
     }
   }
 
-  // Modify existing agents by name
+  // Modify existing agents by name (with stat clamping)
   if (agentChanges.modify?.length > 0) {
     for (const a of agentChanges.modify) {
-      const statsJson = JSON.stringify(a.initialStats ?? { wealth: 50, health: 70, happiness: 60 });
+      const clamped = clampStats(a.initialStats);
+      const statsJson = JSON.stringify(clamped);
       await db
         .update(agents)
         .set({ role: a.role, background: a.background, initialStats: statsJson, currentStats: statsJson })
@@ -274,20 +334,26 @@ export async function refine(
     }
   }
 
-  // Add new agents
+  // Add new agents (with stat clamping + deduplication)
   if (agentChanges.add?.length > 0) {
-    const newRows = agentChanges.add.map(a => ({
-      id: uuidv4(),
-      sessionId: session.id,
-      name: a.name,
-      role: a.role,
-      background: a.background ?? '',
-      initialStats: JSON.stringify(a.initialStats ?? { wealth: 50, health: 70, happiness: 60 }),
-      currentStats: JSON.stringify(a.initialStats ?? { wealth: 50, health: 70, happiness: 60 }),
-      type: 'citizen',
-      status: 'alive',
-    }));
-    await db.insert(agents).values(newRows);
+    const deduped = agentChanges.add.filter(a => !existingNames.has(a.name));
+    if (deduped.length > 0) {
+      const newRows = deduped.map(a => {
+        const clamped = clampStats(a.initialStats);
+        return {
+          id: uuidv4(),
+          sessionId: session.id,
+          name: a.name,
+          role: a.role,
+          background: a.background ?? '',
+          initialStats: JSON.stringify(clamped),
+          currentStats: JSON.stringify(clamped),
+          type: 'citizen',
+          status: 'alive',
+        };
+      });
+      await db.insert(agents).values(newRows);
+    }
   }
 
   return {
