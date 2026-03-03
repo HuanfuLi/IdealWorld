@@ -1,7 +1,8 @@
 import type { LLMProvider } from './types.js';
 import type { AppSettings } from '@idealworld/shared';
 import { AnthropicProvider } from './anthropic.js';
-import { OpenAICompatibleProvider } from './openai.js';
+import { OpenAIProvider, OpenAICompatibleProvider } from './openai.js';
+import { GeminiProvider } from './gemini.js';
 import { readSettings } from '../settings.js';
 
 let provider: LLMProvider | null = null;
@@ -43,16 +44,13 @@ export function createProviderFromSettings(settings: AppSettings): LLMProvider {
       return new AnthropicProvider(settings.apiKey, settings.centralAgentModel);
 
     case 'openai':
-      return new OpenAICompatibleProvider(
-        'https://api.openai.com/v1',
+      return new OpenAIProvider(
         settings.apiKey,
         settings.centralAgentModel
       );
 
     case 'gemini':
-      // Google Gemini exposes an OpenAI-compatible REST endpoint
-      return new OpenAICompatibleProvider(
-        'https://generativelanguage.googleapis.com/v1beta/openai/',
+      return new GeminiProvider(
         settings.apiKey,
         settings.centralAgentModel
       );
