@@ -17,6 +17,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   citizenProvider: undefined,
   citizenApiKey: '',
   citizenBaseUrl: '',
+  maxMessageLength: 64000,
 };
 
 export function readSettings(): AppSettings {

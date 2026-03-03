@@ -4,8 +4,8 @@ import { useCompareStore } from '../stores/compareStore';
 import type { SessionMetadata, ComparisonDimension } from '@idealworld/shared';
 
 const stageBadge: Record<string, { label: string; cls: string }> = {
-  'completed':           { label: '✓ Completed', cls: 'badge-success' },
-  'reviewing':           { label: 'Reviewing', cls: 'badge-info' },
+  'completed': { label: '✓ Completed', cls: 'badge-success' },
+  'reviewing': { label: 'Reviewing', cls: 'badge-info' },
   'reflection-complete': { label: 'Reflected', cls: 'badge-info' },
 };
 
@@ -42,6 +42,48 @@ function DimensionRow({ dim, idx }: { dim: ComparisonDimension; idx: number }) {
           {dim.analysis}
         </p>
       )}
+    </div>
+  );
+}
+
+function SVGLineChart({ title, iterations }: { title: string, iterations: any[] }) {
+  if (!iterations || iterations.length === 0) return (
+    <div style={{ flex: 1, background: 'var(--panel-alpha-05)', borderRadius: '8px', padding: '1rem', textAlign: 'center', color: 'var(--text-dim)', fontSize: '0.85rem' }}>
+      No metric history available for {title}
+    </div>
+  );
+
+  const width = 400;
+  const height = 150;
+  const padUrl = 20;
+
+  const x = (i: number) => padUrl + (i / Math.max(1, iterations.length - 1)) * (width - 2 * padUrl);
+  const y = (val: number) => height - padUrl - (val / 100) * (height - 2 * padUrl);
+
+  const pointsWealth = iterations.map((it, i) => `${x(i)},${y(it.statistics?.avgWealth || 50)}`).join(' ');
+  const pointsHealth = iterations.map((it, i) => `${x(i)},${y(it.statistics?.avgHealth || 50)}`).join(' ');
+  const pointsHappiness = iterations.map((it, i) => `${x(i)},${y(it.statistics?.avgHappiness || 50)}`).join(' ');
+
+  return (
+    <div style={{ flex: 1, background: 'var(--panel-alpha-05)', borderRadius: '8px', padding: '1rem' }}>
+      <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: 'var(--color-bright)', textAlign: 'center' }}>
+        {title} Metrics Over Time
+      </h4>
+      <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ overflow: 'visible' }}>
+        <g stroke="var(--glass-border)" strokeWidth="1">
+          <line x1={padUrl} y1={y(0)} x2={width - padUrl} y2={y(0)} />
+          <line x1={padUrl} y1={y(50)} x2={width - padUrl} y2={y(50)} strokeDasharray="4,4" />
+          <line x1={padUrl} y1={y(100)} x2={width - padUrl} y2={y(100)} />
+        </g>
+        <polyline points={pointsWealth} fill="none" stroke="#10b981" strokeWidth="2" />
+        <polyline points={pointsHealth} fill="none" stroke="#ef4444" strokeWidth="2" />
+        <polyline points={pointsHappiness} fill="none" stroke="#3b82f6" strokeWidth="2" />
+      </svg>
+      <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '0.5rem', fontSize: '0.75rem' }}>
+        <span style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>● Wealth</span>
+        <span style={{ color: '#ef4444', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>● Health</span>
+        <span style={{ color: '#3b82f6', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>● Happiness</span>
+      </div>
     </div>
   );
 }
@@ -91,15 +133,15 @@ function SessionCard({ session, selected, eligible, onToggle }: {
 
 const CompareSessions = () => {
   const {
-    allSessions, selectedIds, comparison, messages,
+    allSessions, selectedIds, comparison, messages, history, session1Iterations, session2Iterations,
     loading, chatPending, error,
-    loadSessions, toggleSession, runComparison, sendMessage,
+    loadSessions, loadHistory, selectHistoryItem, toggleSession, runComparison, sendMessage,
   } = useCompareStore();
 
   const [chatInput, setChatInput] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { loadSessions(); }, []);
+  useEffect(() => { loadSessions(); loadHistory(); }, []);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   const completedSessions = allSessions.filter(
@@ -174,6 +216,40 @@ const CompareSessions = () => {
         </div>
       </div>
 
+      {/* Historical comparisons */}
+      <div className="glass-card" style={{ marginBottom: '2rem' }}>
+        <h3 style={{ fontSize: '1rem', marginBottom: '1rem', color: 'var(--text-muted)' }}>Historical Comparisons</h3>
+        {history.length === 0 ? (
+          <p style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '1rem', fontSize: '0.9rem' }}>No past reports found.</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            {history.map(item => {
+              const s1 = allSessions.find(s => s.id === item.comparison.session1Id)?.title || 'Society A';
+              const s2 = allSessions.find(s => s.id === item.comparison.session2Id)?.title || 'Society B';
+              const isSelected = !!comparison && comparison.session1Id === item.comparison.session1Id && comparison.session2Id === item.comparison.session2Id;
+              return (
+                <div
+                  key={item.id}
+                  onClick={() => selectHistoryItem(item.id)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem 1rem',
+                    background: isSelected ? 'var(--panel-alpha-05)' : 'transparent',
+                    border: isSelected ? '1px solid var(--primary)' : '1px solid transparent',
+                    borderRadius: '8px', cursor: 'pointer', transition: 'all 0.15s'
+                  }}
+                >
+                  <Clock size={16} color={isSelected ? "var(--primary)" : "var(--text-dim)"} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: isSelected ? 'var(--primary)' : 'var(--color-bright)', fontSize: '0.9rem' }}>{s1} vs {s2}</div>
+                    <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>{new Date(item.timestamp).toLocaleString()}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* Error */}
       {error && !loading && (
         <div style={{ color: 'var(--danger)', padding: '1rem', background: 'rgba(239,68,68,0.1)', borderRadius: '8px', marginBottom: '2rem' }}>
@@ -225,6 +301,11 @@ const CompareSessions = () => {
             {comparison.dimensions.map((dim, idx) => (
               <DimensionRow key={dim.name} dim={dim} idx={idx} />
             ))}
+
+            <div style={{ display: 'flex', gap: '1.5rem', marginTop: '2rem', flexWrap: 'wrap' }}>
+              <SVGLineChart title={selected1?.title || 'Society A'} iterations={session1Iterations} />
+              <SVGLineChart title={selected2?.title || 'Society B'} iterations={session2Iterations} />
+            </div>
           </div>
 
           {/* Narrative */}

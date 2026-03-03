@@ -9,4 +9,7 @@ export const sessionsApi = {
 
   delete: (id: string) =>
     apiFetch<void>(`/sessions/${id}`, 'DELETE'),
+
+  getIterations: (id: string) =>
+    apiFetch<any[]>(`/sessions/${id}/iterations?full=true`),
 };

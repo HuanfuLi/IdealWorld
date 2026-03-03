@@ -7,7 +7,7 @@
  * POST /chat    — follow-up Q&A on an existing comparison
  */
 import { Router } from 'express';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, like } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { sessions, agents, iterations, chatMessages } from '../db/schema.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -125,12 +125,13 @@ router.post('/', async (req, res) => {
 // POST /api/compare/chat
 router.post('/chat', async (req, res) => {
   const { id1, id2, message } = req.body as { id1?: string; id2?: string; message?: string };
+  const maxLength = readSettings().maxMessageLength ?? 64000;
 
   if (!id1 || !id2) {
     return res.status(400).json({ error: 'id1 and id2 are required' });
   }
-  if (!message || message.trim().length === 0 || message.length > 2000) {
-    return res.status(400).json({ error: 'message must be 1-2000 characters' });
+  if (!message || message.trim().length === 0 || message.length > maxLength) {
+    return res.status(400).json({ error: `message must be 1-${maxLength} characters` });
   }
 
   // Verify both sessions exist
@@ -216,6 +217,40 @@ router.post('/chat', async (req, res) => {
     console.error('POST /api/compare/chat error:', err);
     const detail = err instanceof Error ? err.message : String(err);
     return res.status(500).json({ error: 'LLM call failed', detail });
+  }
+});
+
+// GET /api/compare/history
+router.get('/history', async (req, res) => {
+  try {
+    const rows = await db
+      .select({
+        id: chatMessages.id,
+        sessionId: chatMessages.sessionId,
+        context: chatMessages.context,
+        content: chatMessages.content,
+        timestamp: chatMessages.timestamp
+      })
+      .from(chatMessages)
+      .where(and(eq(chatMessages.role, 'system'), like(chatMessages.context, 'compare:%')))
+      .orderBy(asc(chatMessages.timestamp));
+
+    const history = rows.map(r => {
+      try {
+        const comparison = JSON.parse(r.content) as ComparisonResult;
+        return {
+          id: r.id,
+          timestamp: r.timestamp,
+          comparison
+        };
+      } catch {
+        return null;
+      }
+    }).filter(Boolean);
+
+    return res.json({ history });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch comparison history' });
   }
 });
 

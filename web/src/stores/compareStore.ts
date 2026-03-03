@@ -17,7 +17,13 @@ interface CompareStore {
   chatPending: boolean;
   error: string | null;
 
+  history: { id: string, timestamp: string, comparison: ComparisonResult }[];
+  session1Iterations: any[];
+  session2Iterations: any[];
+
   loadSessions: () => Promise<void>;
+  loadHistory: () => Promise<void>;
+  selectHistoryItem: (id: string) => Promise<void>;
   toggleSession: (id: string) => void;
   runComparison: () => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
@@ -32,6 +38,9 @@ const initialState = {
   loading: false,
   chatPending: false,
   error: null as string | null,
+  history: [] as { id: string, timestamp: string, comparison: ComparisonResult }[],
+  session1Iterations: [] as any[],
+  session2Iterations: [] as any[],
 };
 
 export const useCompareStore = create<CompareStore>((set, get) => ({
@@ -45,6 +54,39 @@ export const useCompareStore = create<CompareStore>((set, get) => ({
       set({ allSessions: sessions });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Failed to load sessions' });
+    }
+  },
+
+  loadHistory: async () => {
+    try {
+      const history = await compareApi.getHistory();
+      set({ history });
+    } catch (err) {
+      console.error(err);
+    }
+  },
+
+  selectHistoryItem: async (id: string) => {
+    const { history } = get();
+    const item = history.find(h => h.id === id);
+    if (!item) return;
+
+    set({
+      selectedIds: [item.comparison.session1Id, item.comparison.session2Id],
+      comparison: item.comparison,
+      messages: [],
+      error: null,
+      loading: true,
+    });
+
+    try {
+      const [it1, it2] = await Promise.all([
+        sessionsApi.getIterations(item.comparison.session1Id),
+        sessionsApi.getIterations(item.comparison.session2Id)
+      ]);
+      set({ session1Iterations: it1, session2Iterations: it2, loading: false });
+    } catch {
+      set({ loading: false });
     }
   },
 
@@ -62,13 +104,19 @@ export const useCompareStore = create<CompareStore>((set, get) => ({
   },
 
   runComparison: async () => {
-    const { selectedIds } = get();
+    const { selectedIds, loadHistory } = get();
     if (selectedIds.length !== 2) return;
 
-    set({ loading: true, error: null, comparison: null, messages: [] });
+    set({ loading: true, error: null, comparison: null, messages: [], session1Iterations: [], session2Iterations: [] });
     try {
-      const comparison = await compareApi.runComparison(selectedIds[0], selectedIds[1]);
-      set({ comparison, loading: false });
+      const [comparison, it1, it2] = await Promise.all([
+        compareApi.runComparison(selectedIds[0], selectedIds[1]),
+        sessionsApi.getIterations(selectedIds[0]),
+        sessionsApi.getIterations(selectedIds[1])
+      ]);
+
+      set({ comparison, session1Iterations: it1, session2Iterations: it2, loading: false });
+      void loadHistory(); // refresh history list
     } catch (err) {
       set({
         loading: false,

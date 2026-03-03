@@ -244,6 +244,7 @@ export interface AppSettings {
   citizenProvider?: 'claude' | 'openai' | 'gemini' | 'local';
   citizenApiKey?: string;
   citizenBaseUrl?: string;
+  maxMessageLength: number;
 }
 
 export interface SettingsResponse {
@@ -258,6 +259,7 @@ export interface SettingsResponse {
   citizenProvider?: 'claude' | 'openai' | 'gemini' | 'local';
   hasCitizenApiKey?: boolean;
   citizenBaseUrl?: string;
+  maxMessageLength: number;
 }
 
 export interface TestResult {
@@ -285,9 +287,9 @@ export interface SessionConfig {
 
 export type DesignProgressEvent =
   | { type: 'step_start'; step: 'overview' | 'law' | 'agents'; stepIndex: number; totalSteps: 3 }
-  | { type: 'step_done';  step: 'overview' | 'law' | 'agents'; stepIndex: number }
-  | { type: 'complete';   sessionStage: Stage }
-  | { type: 'error';      step: string; message: string };
+  | { type: 'step_done'; step: 'overview' | 'law' | 'agents'; stepIndex: number }
+  | { type: 'complete'; sessionStage: Stage }
+  | { type: 'error'; step: string; message: string };
 
 export interface ChatResponse {
   reply: string;

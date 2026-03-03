@@ -25,6 +25,7 @@ router.get('/', (_req, res) => {
       citizenProvider: s.citizenProvider,
       hasCitizenApiKey: !!(s.citizenApiKey && s.citizenApiKey.length > 0),
       citizenBaseUrl: s.citizenBaseUrl,
+      maxMessageLength: s.maxMessageLength,
     });
   } catch (err) {
     console.error('GET /settings error:', err);
@@ -69,6 +70,7 @@ router.put('/', (req, res) => {
       citizenProvider: updated.citizenProvider,
       hasCitizenApiKey: !!(updated.citizenApiKey && updated.citizenApiKey.length > 0),
       citizenBaseUrl: updated.citizenBaseUrl,
+      maxMessageLength: updated.maxMessageLength,
     });
   } catch (err) {
     console.error('PUT /settings error:', err);
@@ -93,10 +95,10 @@ router.post('/test', async (req, res) => {
     const testSettings: AppSettings = {
       ...saved,
       // Only override fields the body actually provided (non-empty)
-      ...(body.provider                       ? { provider: body.provider }                               : {}),
-      ...(body.apiKey?.trim()                 ? { apiKey: body.apiKey.trim() }                            : {}),
-      ...(body.baseUrl?.trim()                ? { baseUrl: body.baseUrl.trim() }                          : {}),
-      ...(body.centralAgentModel?.trim()      ? { centralAgentModel: body.centralAgentModel.trim() }      : {}),
+      ...(body.provider ? { provider: body.provider } : {}),
+      ...(body.apiKey?.trim() ? { apiKey: body.apiKey.trim() } : {}),
+      ...(body.baseUrl?.trim() ? { baseUrl: body.baseUrl.trim() } : {}),
+      ...(body.centralAgentModel?.trim() ? { centralAgentModel: body.centralAgentModel.trim() } : {}),
     };
 
     // Resolve API key for the provider being tested from per-provider storage

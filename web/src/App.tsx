@@ -28,18 +28,18 @@ const NAV_ORDER: NavStep[] = ['idea', 'brainstorm', 'design', 'simulation', 'ref
 const ONE_WAY_STEPS = new Set<NavStep>(['idea', 'brainstorm']);
 
 const STAGE_TO_STEP: Record<Stage, NavStep> = {
-  'idea-input':           'idea',
-  'brainstorming':        'brainstorm',
-  'designing':            'brainstorm',
-  'design-review':        'design',
-  'refining':             'design',
-  'simulating':           'simulation',
-  'simulation-paused':    'simulation',
-  'simulation-complete':  'simulation',
-  'reflecting':           'reflection',
-  'reflection-complete':  'reflection',
-  'reviewing':            'review',
-  'completed':            'review',
+  'idea-input': 'idea',
+  'brainstorming': 'brainstorm',
+  'designing': 'brainstorm',
+  'design-review': 'design',
+  'refining': 'design',
+  'simulating': 'simulation',
+  'simulation-paused': 'simulation',
+  'simulation-complete': 'simulation',
+  'reflecting': 'reflection',
+  'reflection-complete': 'reflection',
+  'reviewing': 'review',
+  'completed': 'review',
 };
 
 interface NavItemDef {
@@ -50,12 +50,12 @@ interface NavItemDef {
 }
 
 const SESSION_NAV_ITEMS: NavItemDef[] = [
-  { step: 'idea',       label: '① Idea Input',  Icon: Edit3,          path: id => `/session/${id}/idea` },
-  { step: 'brainstorm', label: '② Brainstorm',   Icon: MessageSquare,  path: id => `/session/${id}/brainstorm` },
-  { step: 'design',     label: '③ Design',       Icon: LayoutDashboard,path: id => `/session/${id}/design` },
-  { step: 'simulation', label: '④ Simulation',   Icon: Activity,       path: id => `/session/${id}/simulation` },
-  { step: 'reflection', label: '⑤ Reflection',   Icon: PieChart,       path: id => `/session/${id}/reflection` },
-  { step: 'review',     label: '⑥ Review',       Icon: Users,          path: id => `/session/${id}/agents` },
+  { step: 'idea', label: '① Idea Input', Icon: Edit3, path: id => `/session/${id}/idea` },
+  { step: 'brainstorm', label: '② Brainstorm', Icon: MessageSquare, path: id => `/session/${id}/brainstorm` },
+  { step: 'design', label: '③ Design', Icon: LayoutDashboard, path: id => `/session/${id}/design` },
+  { step: 'simulation', label: '④ Simulation', Icon: Activity, path: id => `/session/${id}/simulation` },
+  { step: 'reflection', label: '⑤ Reflection', Icon: PieChart, path: id => `/session/${id}/reflection` },
+  { step: 'review', label: '⑥ Review', Icon: Users, path: id => `/session/${id}/agents` },
 ];
 
 // ── SessionNav component ─────────────────────────────────────────────────────
@@ -166,13 +166,13 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
             <Home size={22} />
             <span>Home</span>
           </Link>
-          <Link to="/settings" className={`nav-item ${location.pathname === '/settings' ? 'active' : ''}`}>
-            <Settings size={22} />
-            <span>Settings</span>
-          </Link>
           <Link to="/compare" className={`nav-item ${location.pathname === '/compare' ? 'active' : ''}`}>
             <GitCompare size={22} />
             <span>Compare</span>
+          </Link>
+          <Link to="/settings" className={`nav-item ${location.pathname === '/settings' ? 'active' : ''}`}>
+            <Settings size={22} />
+            <span>Settings</span>
           </Link>
 
           {isSessionActive && sessionId && sessionId !== 'new' && (

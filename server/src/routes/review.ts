@@ -23,9 +23,10 @@ const router = Router({ mergeParams: true });
 router.post('/:agentId/chat', async (req, res) => {
   const { id, agentId } = req.params as { id: string; agentId: string };
   const { message } = req.body as { message?: string };
+  const maxLength = readSettings().maxMessageLength ?? 64000;
 
-  if (!message || message.trim().length === 0 || message.length > 2000) {
-    return res.status(400).json({ error: 'message must be 1-2000 characters' });
+  if (!message || message.trim().length === 0 || message.length > maxLength) {
+    return res.status(400).json({ error: `message must be 1-${maxLength} characters` });
   }
 
   const [session] = await db.select().from(sessions).where(eq(sessions.id, id));

@@ -4,6 +4,7 @@ import { db } from '../db/index.js';
 import { sessions, chatMessages, agents } from '../db/schema.js';
 import { v4 as uuidv4 } from 'uuid';
 import { brainstorm, refine } from '../llm/centralAgent.js';
+import { readSettings } from '../settings.js';
 import type { ChatMessage, BrainstormChecklist, SessionConfig } from '@idealworld/shared';
 
 const router = Router({ mergeParams: true });
@@ -13,9 +14,10 @@ const router = Router({ mergeParams: true });
 router.post('/', async (req, res) => {
   const { id } = req.params as { id: string };
   const { message, context } = req.body as { message?: string; context?: string };
+  const maxLength = readSettings().maxMessageLength ?? 64000;
 
-  if (!message || message.trim().length === 0 || message.length > 2000) {
-    return res.status(400).json({ error: 'message must be 1-2000 characters' });
+  if (!message || message.trim().length === 0 || message.length > maxLength) {
+    return res.status(400).json({ error: `message must be 1-${maxLength} characters` });
   }
   if (context !== 'brainstorm' && context !== 'refinement') {
     return res.status(400).json({ error: 'context must be "brainstorm" or "refinement"' });
