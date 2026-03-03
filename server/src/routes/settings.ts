@@ -9,9 +9,15 @@ const router = Router();
 router.get('/', (_req, res) => {
   try {
     const s = readSettings();
+    const keys = s.apiKeys ?? {};
     res.json({
       provider: s.provider,
       hasApiKey: s.apiKey.length > 0,
+      savedApiKeys: {
+        claude: !!(keys.claude),
+        openai: !!(keys.openai),
+        gemini: !!(keys.gemini),
+      },
       baseUrl: s.baseUrl,
       centralAgentModel: s.centralAgentModel,
       citizenAgentModel: s.citizenAgentModel,
@@ -31,10 +37,12 @@ router.put('/', (req, res) => {
   try {
     const body = req.body as Partial<AppSettings>;
 
-    // If apiKey field is present but empty/blank and settings already have a key,
-    // keep the existing key (don't overwrite with empty from masked UI)
+    // If apiKey field is empty and we're staying on the same provider,
+    // keep the existing key (don't overwrite with empty from masked UI).
+    // But if switching providers, let writeSettings resolve the correct key.
     const current = readSettings();
-    if (body.apiKey !== undefined && body.apiKey.trim() === '' && current.apiKey) {
+    const switchingProvider = body.provider && body.provider !== current.provider;
+    if (body.apiKey !== undefined && body.apiKey.trim() === '' && current.apiKey && !switchingProvider) {
       delete body.apiKey;
     }
     // Same for citizenApiKey
@@ -45,9 +53,15 @@ router.put('/', (req, res) => {
     const updated = writeSettings(body);
     invalidateProvider();
 
+    const uKeys = updated.apiKeys ?? {};
     res.json({
       provider: updated.provider,
       hasApiKey: updated.apiKey.length > 0,
+      savedApiKeys: {
+        claude: !!(uKeys.claude),
+        openai: !!(uKeys.openai),
+        gemini: !!(uKeys.gemini),
+      },
       baseUrl: updated.baseUrl,
       centralAgentModel: updated.centralAgentModel,
       citizenAgentModel: updated.citizenAgentModel,
@@ -75,6 +89,7 @@ router.post('/test', async (req, res) => {
     const saved = readSettings();
     const body = (req.body ?? {}) as Partial<AppSettings>;
 
+    const testProvider = body.provider ?? saved.provider;
     const testSettings: AppSettings = {
       ...saved,
       // Only override fields the body actually provided (non-empty)
@@ -83,6 +98,12 @@ router.post('/test', async (req, res) => {
       ...(body.baseUrl?.trim()                ? { baseUrl: body.baseUrl.trim() }                          : {}),
       ...(body.centralAgentModel?.trim()      ? { centralAgentModel: body.centralAgentModel.trim() }      : {}),
     };
+
+    // Resolve API key for the provider being tested from per-provider storage
+    if (!body.apiKey?.trim() && testProvider !== 'local') {
+      const savedKeys = saved.apiKeys ?? {};
+      testSettings.apiKey = savedKeys[testProvider] ?? '';
+    }
 
     // Validate: cloud providers require an API key
     const needsKey = testSettings.provider !== 'local';

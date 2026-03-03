@@ -19,29 +19,33 @@ const CLAUDE_MODELS = [
 ];
 
 const OPENAI_MODELS = [
-  { value: 'gpt-4o',       label: 'gpt-4o' },
-  { value: 'gpt-4o-mini',  label: 'gpt-4o-mini' },
-  { value: 'gpt-4-turbo',  label: 'gpt-4-turbo' },
+  { value: 'gpt-5.2',      label: 'GPT-5.2' },
+  { value: 'gpt-5',        label: 'GPT-5' },
+  { value: 'gpt-5-mini',   label: 'GPT-5 mini' },
+  { value: 'gpt-4o',       label: 'GPT-4o' },
+  { value: 'gpt-4o-mini',  label: 'GPT-4o mini' },
   { value: 'o3-mini',      label: 'o3-mini' },
 ];
 
 const GEMINI_MODELS = [
-  { value: 'gemini-2.0-flash',   label: 'gemini-2.0-flash' },
-  { value: 'gemini-1.5-pro',     label: 'gemini-1.5-pro' },
-  { value: 'gemini-1.5-flash',   label: 'gemini-1.5-flash' },
+  { value: 'gemini-3.1-pro-preview',  label: 'Gemini 3.1 Pro' },
+  { value: 'gemini-3-flash-preview',  label: 'Gemini 3 Flash' },
+  { value: 'gemini-2.5-flash',        label: 'Gemini 2.5 Flash' },
+  { value: 'gemini-2.5-pro',          label: 'Gemini 2.5 Pro' },
+  { value: 'gemini-2.5-flash-lite',   label: 'Gemini 2.5 Flash Lite' },
 ];
 
 const DEFAULT_CENTRAL: Record<Provider, string> = {
   claude: 'claude-sonnet-4-6',
-  openai: 'gpt-4o',
-  gemini: 'gemini-2.0-flash',
+  openai: 'gpt-5',
+  gemini: 'gemini-3-flash-preview',
   local:  '',
 };
 
 const DEFAULT_CITIZEN: Record<Provider, string> = {
   claude: 'claude-haiku-4-5-20251001',
-  openai: 'gpt-4o-mini',
-  gemini: 'gemini-1.5-flash',
+  openai: 'gpt-5-mini',
+  gemini: 'gemini-2.5-flash-lite',
   local:  '',
 };
 
@@ -196,25 +200,28 @@ const SettingsPage = () => {
         <div className="animate-fade-in" style={{ display: 'grid', gap: '1.5rem', marginBottom: '2rem' }}>
 
           {/* API Key field (all cloud providers) */}
-          {needsApiKey && (
-            <div>
-              <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
-                API Key{' '}
-                {settings?.hasApiKey && <span style={{ color: 'var(--success)', fontSize: '0.8rem' }}>(saved)</span>}
-              </label>
-              <div style={{ position: 'relative' }}>
-                <Key size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
-                <input
-                  type="password"
-                  placeholder={settings?.hasApiKey ? '............. (leave blank to keep)' : apiKeyPlaceholder[provider]}
-                  className="input-glass"
-                  style={{ paddingLeft: '3rem' }}
-                  value={apiKey}
-                  onChange={e => setApiKey(e.target.value)}
-                />
+          {needsApiKey && (() => {
+            const hasSavedKey = !!(settings?.savedApiKeys as Record<string, boolean> | undefined)?.[provider];
+            return (
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
+                  API Key{' '}
+                  {hasSavedKey && <span style={{ color: 'var(--success)', fontSize: '0.8rem' }}>(saved)</span>}
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <Key size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
+                  <input
+                    type="password"
+                    placeholder={hasSavedKey ? '............. (leave blank to keep)' : apiKeyPlaceholder[provider]}
+                    className="input-glass"
+                    style={{ paddingLeft: '3rem' }}
+                    value={apiKey}
+                    onChange={e => setApiKey(e.target.value)}
+                  />
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Local endpoint field */}
           {provider === 'local' && (

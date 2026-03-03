@@ -231,7 +231,10 @@ export interface SessionExport {
 export interface AppSettings {
   /** LLM provider selection */
   provider: 'claude' | 'openai' | 'gemini' | 'local';
+  /** Active API key — maps to apiKeys[provider]. Kept for backward compat. */
   apiKey: string;
+  /** Per-provider API key storage so switching providers doesn't lose keys */
+  apiKeys?: Partial<Record<'claude' | 'openai' | 'gemini', string>>;
   /** Base URL for local/custom OpenAI-compatible providers */
   baseUrl: string;
   centralAgentModel: string;
@@ -246,6 +249,8 @@ export interface AppSettings {
 export interface SettingsResponse {
   provider: AppSettings['provider'];
   hasApiKey: boolean;
+  /** Which providers have API keys saved */
+  savedApiKeys?: Partial<Record<'claude' | 'openai' | 'gemini', boolean>>;
   baseUrl: string;
   centralAgentModel: string;
   citizenAgentModel: string;
