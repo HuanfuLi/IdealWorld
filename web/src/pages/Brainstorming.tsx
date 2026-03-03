@@ -21,6 +21,7 @@ const Brainstorming = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const hasAutoSent = useRef(false);
   const [input, setInput] = useState('');
 
@@ -73,10 +74,24 @@ const Brainstorming = () => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [brainstormMessages, chatPending]);
 
+  // Handle textarea auto-resize
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    if (!input) {
+      el.style.height = 'auto'; // Reset when empty
+    } else {
+      el.style.height = 'auto';
+      // 1.5rem padding + up to 4 lines of 1.25 line height
+      el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    }
+  }, [input]);
+
   const handleSend = async () => {
     if (!input.trim() || chatPending || !id) return;
     const text = input.trim();
     setInput('');
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
     await sendBrainstormMessage(id, text);
   };
 
@@ -214,14 +229,28 @@ const Brainstorming = () => {
             {/* Input Area */}
             <div style={{ padding: '1.5rem', borderTop: '1px solid var(--glass-border)', background: 'var(--panel-dark-20)' }}>
               <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
-                <input
-                  type="text"
+                <textarea
+                  ref={textareaRef}
                   className="input-glass"
-                  placeholder="Type your response..."
+                  placeholder="Type your response... (Shift+Enter for new line)"
                   value={input}
                   onChange={e => setInput(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && !chatPending && handleSend()}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      if (!chatPending) handleSend();
+                    }
+                  }}
                   disabled={chatPending}
+                  rows={1}
+                  style={{
+                    resize: 'none',
+                    overflowY: 'auto',
+                    minHeight: '52px',
+                    maxHeight: '120px',
+                    fontFamily: 'inherit',
+                    lineHeight: '1.25',
+                  }}
                 />
                 <button
                   className="btn-secondary"

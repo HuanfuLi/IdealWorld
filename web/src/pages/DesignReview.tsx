@@ -7,6 +7,7 @@ const DesignReview = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [activeTab, setActiveTab] = useState<'overview' | 'agents' | 'law'>('overview');
   const [iterations, setIterations] = useState(20);
@@ -53,6 +54,19 @@ const DesignReview = () => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [refinementMessages, chatPending]);
 
+  // Handle textarea auto-resize
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    if (!input) {
+      el.style.height = 'auto'; // Reset when empty
+    } else {
+      el.style.height = 'auto';
+      // 1.5rem padding + up to 4 lines of 1.25 line height
+      el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    }
+  }, [input]);
+
   // Pre-fill input with failed message so user can edit and resend
   useEffect(() => {
     if (failedMessage && !input) {
@@ -64,6 +78,7 @@ const DesignReview = () => {
     if (!input.trim() || chatPending || !id) return;
     const text = input.trim();
     setInput('');
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
     await sendRefinementMessage(id, text);
   };
 
@@ -277,14 +292,28 @@ const DesignReview = () => {
 
           <div style={{ padding: '1rem', borderTop: '1px solid var(--glass-border)', flexShrink: 0 }}>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <input
-                type="text"
+              <textarea
+                ref={textareaRef}
                 className="input-glass"
-                placeholder="Request a change..."
+                placeholder="Request a change... (Shift+Enter for new line)"
                 value={input}
                 onChange={e => setInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && !chatPending && handleSend()}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (!chatPending) handleSend();
+                  }
+                }}
                 disabled={chatPending}
+                rows={1}
+                style={{
+                  resize: 'none',
+                  overflowY: 'auto',
+                  minHeight: '52px',
+                  maxHeight: '120px',
+                  fontFamily: 'inherit',
+                  lineHeight: '1.25',
+                }}
               />
               <button
                 className="btn-secondary"
