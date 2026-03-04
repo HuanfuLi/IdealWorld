@@ -99,17 +99,17 @@ export async function generateDesign(
   // Step 1: Overview
   onProgress({ type: 'step_start', step: 'overview', stepIndex: 0, totalSteps: 3 });
 
-  const overviewRaw = await withRetry(() =>
-    provider.chat(buildOverviewMessages(session.idea, brainstormSummary), { maxTokens: 8192 })
-  );
-  const overviewData = parseJSON<{
-    societyName: string;
-    overview: string;
-    timeScale: string;
-    agentCount: number;
-    governanceModel: string;
-    economicModel: string;
-  }>(overviewRaw);
+  const overviewData = await withRetry(async () => {
+    const raw = await provider.chat(buildOverviewMessages(session.idea, brainstormSummary), { maxTokens: 8192 });
+    return parseJSON<{
+      societyName: string;
+      overview: string;
+      timeScale: string;
+      agentCount: number;
+      governanceModel: string;
+      economicModel: string;
+    }>(raw);
+  });
 
   // Clamp agentCount to 20-50
   const agentCount = Math.min(50, Math.max(20, Math.round(overviewData.agentCount ?? 30)));
@@ -129,8 +129,8 @@ export async function generateDesign(
   // Step 2: Law
   onProgress({ type: 'step_start', step: 'law', stepIndex: 1, totalSteps: 3 });
 
-  const lawRaw = await withRetry(() =>
-    provider.chat(
+  const lawData = await withRetry(async () => {
+    const raw = await provider.chat(
       buildLawMessages(
         session.idea,
         overviewData.overview,
@@ -138,9 +138,9 @@ export async function generateDesign(
         overviewData.economicModel
       ),
       { maxTokens: 8192 }
-    )
-  );
-  const lawData = parseJSON<{ law: string }>(lawRaw);
+    );
+    return parseJSON<{ law: string }>(raw);
+  });
 
   await db
     .update(sessions)
@@ -152,8 +152,8 @@ export async function generateDesign(
   // Step 3: Agents
   onProgress({ type: 'step_start', step: 'agents', stepIndex: 2, totalSteps: 3 });
 
-  const agentsRaw = await withRetry(() =>
-    provider.chat(
+  const agentsData = await withRetry(async () => {
+    const raw = await provider.chat(
       buildAgentRosterMessages(
         overviewData.overview,
         lawData.law,
@@ -162,20 +162,21 @@ export async function generateDesign(
         overviewData.economicModel
       ),
       { maxTokens: 8192 }
-    )
-  );
-  const agentsData = parseJSON<{
-    agents: Array<{
-      name: string;
-      role: string;
-      background: string;
-      initialStats: { wealth: number; health: number; happiness: number };
-    }>;
-  }>(agentsRaw);
+    );
+    const parsed = parseJSON<{
+      agents: Array<{
+        name: string;
+        role: string;
+        background: string;
+        initialStats: { wealth: number; health: number; happiness: number };
+      }>;
+    }>(raw);
 
-  if (!Array.isArray(agentsData.agents) || agentsData.agents.length === 0) {
-    throw new Error('Agent roster generation returned no agents. Please retry.');
-  }
+    if (!Array.isArray(parsed.agents) || parsed.agents.length === 0) {
+      throw new Error('Agent roster generation returned no agents. Please retry.');
+    }
+    return parsed;
+  });
 
   // Clear existing agents and insert new ones in batches of 25
   await db.delete(agents).where(eq(agents.sessionId, session.id));

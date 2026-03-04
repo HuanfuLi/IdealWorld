@@ -1,136 +1,221 @@
-# Ideal World (理想世界) 代码库结构与逻辑详解
+# Ideal World 项目代码库结构与技术架构解析
 
-本文档旨在帮助人类开发者快速理解 Ideal World 项目的代码结构、核心模拟工作流（设计、模拟、反思等），以及配置（AI提示词、模型、数据、UI配置）的具所在位置。
+本文档提供 Ideal World 项目的代码级架构指南，旨在说明系统的模块划分、核心算法（神经符号架构、MapReduce状态推演）以及底层数值计算与资源约束机制的设计实现。
 
-## 1. 项目架构概览
+本文结合关键模块的源代码片段进行技术原理阐释。
 
-Ideal World 是一个使用全本地化技术栈的大型多智能体(Multi-Agent)微观社会模拟平台。该应用不需要云端服务器，其数据和核心运算都在用户本地运行。
+## 1. 系统架构概览
 
-*   **架构类型**: Monorepo (使用 npm workspaces)
-*   **前端 (`web/`)**: React 19 + TypeScript + Zustand + TailwindCSS + Vite。它主要通过轮询与 SSE (Server-Sent Events) 来和后端进行通信。
-*   **后端 (`server/`)**: Node.js + Express + TypeScript。后端处理协调、数据库操作，以及管理对 LLM (大型语言模型) 的 API 请求。
-*   **共享库 (`shared/`)**: 包含前端与后端共享的 TypeScript 类型定义、数据结构、验证器和常量。
+Ideal World 是基于本地化技术栈构建的多智能体微观社会模拟平台。系统设计目标是在受限计算资源下，模拟多智能体在预设物理规则下的交互与状态演变。
 
-### 核心运作机制：两大核心智能体类型
+*   **架构体系**: Monorepo（基于 npm workspaces）
+*   **前端平台**: React 19、TypeScript、Zustand、TailwindCSS、Vite。前端依赖 Server-Sent Events 处理服务端状态推送，采用 requestAnimationFrame 实现批量渲染优化。
+*   **后端平台**: Node.js、Express、TypeScript。后端负责任务调度、大语言模型路由控制、数据库 CRUD 操作及核心确定性逻辑运算。
+*   **共享库**: 提供跨端共享的 TypeScript 类型定义、接口协议及常量配置。
 
-1.  **Central Agent (中央智能体)**：这是一个无所不知的管理员智能体。它负责与人类用户一起“头脑风暴”设定社会规则，生成宪法，设计并生成所有市民（Citizen Agents）。在模拟循环中，它负责裁决冲突，管理生死，更新状态，总结每一回合的故事。
-2.  **Citizen Agents (市民智能体)**：独立的个体智能体（20~150+个），每个人有独特的背景和初始属性。在模拟循环中，它们只负责输出**意图 (Intents)**，它们不能直接修改自己的属性，结果均由 Central Agent 裁定。
+### 核心智能体类型
+1.  **Central Agent（中央智能体）**：系统全局控制器。负责环境初始化阶段生成社会背景、规则描述及市民属性数据集。在模拟循环阶段负责解析全体市民的自然语言输出，对冲突事件进行算法仲裁，并输出当前迭代的宏观状态总结。
+2.  **Citizen Agents（市民智能体）**：数量在20至150名之间的个体模型。每个实例具有独立的背景设定、职业属性以及三项基础数值（财富、健康、幸福）和两项隐藏状态变量（皮质醇、多巴胺）。该类型智能体在系统中处于只读状态，其计算属性由系统底层的确定性引擎与中央智能体统一修改。
 
----
+## 2. 核心模拟工作流
 
-## 2. 核心模拟工作流 (Core Simulation Workflow)
+系统运行周期划分为四个主要阶段。
 
-项目的生命周期被分为若干阶段 (Stages)，代码按照这些阶段进行了很好的模块化划分。
+### 2.1 阶段一：环境初始化与数据集生成
+该阶段逻辑由 server/src/orchestration/designOrchestrator.ts 和 server/src/llm/centralAgent.ts 控制。
 
-### 2.1 阶段 1：社会设计 (Design Phase)
-*   **交互逻辑**：人类用户输入基础构思 (Seed Idea)。Central Agent 会通过一个“头脑风暴”界面 (Stage 1A) 和用户对话，直到收集到治理、经济、法律、文化和基础设施的所有所需要素。
-*   **代码位置**：`server/src/orchestration/designOrchestrator.ts` 以及 `server/src/llm/centralAgent.ts`
-*   **执行过程**：一旦信息收集完毕，Central Agent 将执行一系列连续的 LLM 调用 (Stage 1B) 来生成：
-    1.  社会概览 (Overview) 和时间尺度 (Time Scale)
-    2.  虚拟法律文档 (Law Document)
-    3.  市民名单与初始状态 (Agent Roster & Stats)
+系统接收初始配置参数（治理、经济、法律、文化、基建），触发调用，通过预设格式约束 Schema 生成初始社会数据集。
 
-### 2.2 阶段 2：核心模拟循环 (Simulation Loop) 与神经符号引擎
-这是本系统最具技术含量的模块。为了对抗 LLM 由于 RLHF 偏见导致的“一味妥协”与“缺乏真实资源约束”问题，系统引入了**神经符号 AI (Neuro-symbolic AI)** 范式，使用了一个“意图 (神经层/并发) -> 裁决与数值计算 (符号层/串行或 Map-Reduce)” 的混合执行模型。
-*   **代码位置**：`server/src/orchestration/simulationRunner.ts`
-*   **量化经济与符号引擎位置**：`server/src/mechanics/physicsEngine.ts` 与 `actionCodes.ts`
-*   **循环步骤 (每一回合 / Iteration)**:
-    1.  **收集意图 (Intent Phase)**：遍历所有活着的 Citizen Agents，通过并发的 LLM 请求获取每个人这回合想干什么（输出意图、原因和硬编码的 `ActionCode`）。并发数由系统配置决定以避免 Rate Limit。
-    2.  **Central Agent 裁决 (Resolution Phase)**：
-        *   **Standard Path (<=30 人)**：将所有意图聚合给 Central Agent，要求其编写一个连贯的故事，并指出谁可能死亡。
-        *   **Map-Reduce Path (>30 人)**：为了防止上下文窗口超载，系统使用 `server/src/orchestration/clustering.ts` 按照角色 (Role) 将人群聚类分组（比如农民一组，商人一组）。每组由一个局部的协调器 LLM 进行预演合并，最后再由 Central Agent 统一合并所有子组的结果 (Merge Step)，生成全局总结。
-    3.  **应用物理学与状态变更 (Symbolic Logic)**：绝不让 LLM 自由幻觉数值变化！基于 LLM 返回的意图和提取出的规范化 `ActionCode` (如 `WORK`, `STEAL`, `STRIKE`)，系统将调用 `resolveAction` 进行基于硬编码数学公式的确切财富、健康、幸福变化计算。同时，这里还内置了**神经心理学参数模拟 (Neurobiological Modeling)**，计算智能体的压力 (`Cortisol`) 与多巴胺 (`Dopamine`) 累积。当平民被长期剥削导致 Cortisol 飙升时，系统会在下一回合强行在其 Prompt 中注入“生存本能占主导”的系统级指令，以此突破 RLHF 封印，逼迫其发动社会反抗。应用状态并保存到数据库。
-    4.  **推送数据**：通过 SSE (`simulationManager.broadcast`) 将这一迭代的故事、数据发送给前端进行 UI 渲染。
+**核心代码片段（server/src/llm/centralAgent.ts）：**
+```typescript
+  // 步骤三: 生成市民实体
+  onProgress({ type: 'step_start', step: 'agents', stepIndex: 2, totalSteps: 3 });
 
-### 2.3 阶段 3 & 4：反思与总结 (Reflection & Review)
-*   **代码位置**：`server/src/orchestration/reflectionRunner.ts`
-*   **Two-pass Reflection (双向反思)**：
-    1.  **Pass 1**: 让每个 Citizen Agent 基于自己经历的所有 iteration 回顾一生。
-    2.  **Evaluation**: Central Agent 根据所有市民的 Pass 1 评价和历史记录，生成一份社会整体评价报告 (Society Evaluation)。
-    3.  **Pass 2**: 将这份上帝视角的 Evaluation 交回给每个 Citizen Agent，询问他们在得知全部真相后的态度变化。
-*   **审讯 (Stage 4)**: 用户可以点开任何一个活着的或者死去的 Citizen Agent 的聊天窗口，对其进行采访 (`server/src/routes/review.ts`)。
+  // 调用 buildAgentRosterMessages 约束模型生成对应数量的结构化数据
+  const agentsRaw = await withRetry(() =>
+    provider.chat(
+      buildAgentRosterMessages(
+        overviewData.overview,
+        lawData.law,
+        agentCount, 
+        overviewData.governanceModel,
+        overviewData.economicModel
+      ),
+      { maxTokens: 8192 }   // 提升输出上限阈值配置，防止长文本截断
+    )
+  );
 
----
+  // 映射至预设 JSON 结构
+  const agentsData = parseJSON<{
+    agents: Array<{
+      name: string;
+      role: string;
+      background: string;
+      initialStats: { wealth: number; health: number; happiness: number };
+    }>;
+  }>(agentsRaw);
+```
+**技术解析**：环境初始化阶段通过提高 maxTokens 参数至8192以防止大数组响应被截断。随后利用定制的 parseJSON 容错函数，对非结构化文本进行匹配与数据提取，最终映射为类型安全的市民实体列表并持久化。
 
-## 3. 核心配置与提示词 (Prompts & LLM Configs) 位置
+### 2.2 阶段二：神经符号架构与主控循环
+为解决单一模型输出因安全限制策略偏好导致的无效计算问题，系统引入了神经符号架构体系：
+*   **神经网络层**：处理非结构化文本生成及自然语言逻辑推理。
+*   **符号计算层**：独立于模型之外，执行完全确定性的资源分配与属性核算逻辑。
 
-如果需要修改 AI 的行为逻辑、身份设定或是返回的数据结构，请直接查看这些文件。
+在模拟环境的迭代周期内部，控制流逻辑如下：
 
-### 3.1 提示词工厂 (Prompts)
-系统内所有的 LLM Prompt 都被剥离成了纯函数，集中在一个文件中：
-*   **文件位置**: `server/src/llm/prompts.ts`
-*   **内容说明**:
-    *   `buildBrainstormMessages`: 头脑风暴时的 Central Agent 人设和追问逻辑。
-    *   `buildOverviewMessages` / `buildLawMessages` / `buildAgentRosterMessages`: 用于生成社会背景、法律、市民列表的核心模板。
-    *   `buildIntentPrompt`: **极其核心！** 这是决定 Citizen Agent 每一回合如何思考的提示词。它包含了压力系统（Cortisol/Dopamine 导致的行为变形），并要求 Agent 输出 `actionCode` 供物理引擎解析。
-    *   `buildResolutionPrompt` (及对应的 Map-Reduce Prompt): Central Agent 如何裁定事件。
-    *   `buildAgentReflectionPrompt`: 市民一生的反思提示词。
+#### 2.2.1 标准化行动指令集定义
+**核心代码片段（server/src/mechanics/actionCodes.ts）：**
+```typescript
+export type ActionCode =
+  | 'WORK'
+  | 'TRADE'
+  | 'REST'
+  | 'STRIKE'
+  | 'STEAL'
+  | 'HELP'
+  | 'INVEST'
+  | 'CONSUME'
+  | 'NONE';
+```
+**技术解析**：系统在系统提示语中注入指令，要求智能体在生成非结构化意图的同时，必须以结构化格式携带上述 ActionCode 字面量集中的单一项。此设定为后续符号计算层提供了明确的执行目标。
 
-### 3.2 物理引擎与机制参数 (Game Mechanics)
-系统的数值增长逻辑（不完全依赖大模型胡编乱造，而是混合了符号计算）：
-*   **文件位置**: `server/src/mechanics/physicsEngine.ts` 和 `server/src/mechanics/actionCodes.ts`
-*   **内容说明**: 包含 `WORK`, `REST`, `STEAL` 等动作导致生命、财富、压力的固定数学公式。如果想修改“偷窃扣多少血”或“休息回多少压力”，修改此处。
+#### 2.2.2 并发状态采集
+**核心代码片段（server/src/orchestration/simulationRunner.ts）：**
+```typescript
+const intentTasks = aliveAgents.map(agent => async (): Promise<AgentIntent> => {
+    const messages = buildIntentPrompt(agent, session, previousSummary, iterNum);
+    const parsed = await retryWithHealing({
+        provider: citizenProv, // 路由至适用的推理模型端点
+        messages,
+        options: { model: settings.citizenAgentModel },
+        parse: (raw) => { ... }
+    });
+    return parsed;
+});
+const intents = await runWithConcurrency(intentTasks, settings.maxConcurrency);
+```
+**技术解析**：系统采用 Promise.all 映射机制对全体节点并发下发运算请求。各实体的当前状态变量阵列及全局日志文本将被注入每次独立调用的上下文环境。并发池函数限制了同一时刻发往外部接口的最大线程数。
 
-### 3.3 LLM 网关与提供商 (LLM Gateway)
-项目使用了一个统一的提供商抽象层，支持本地与云端模型。
-*   **文件位置**: `server/src/llm/gateway.ts`, `server/src/llm/anthropic.ts`, `server/src/llm/openai.ts`
-*   **配置说明**: 支持 Anthropic 官方 API，以及兼容 OpenAI 格式的 API（如本地的 LM Studio 或 Ollama）。在 `anthropic.ts` 中还可以看到针对 Claude 的 `cache_control` (Prompt Caching) 的特殊支持。
+#### 2.2.3 基于 MapReduce 的层级化状态解析
+针对大规模并发集群产生的长尾延迟与上下文溢出问题，系统设计了基于局部聚合的 MapReduce 方案。
+**核心代码片段（server/src/orchestration/simulationRunner.ts）：**
+```typescript
+if (aliveAgents.length > MAPREDUCE_THRESHOLD) { 
+    // Mapper 阶段: 根据设定阈值及内部属性划分子任务组
+    const groups = clusterByRole(aliveAgents, BATCH_SIZE);
+    const groupTasks = groups.map((group, gi) => async () => {
+        const msgs = buildGroupResolutionMessages(...);
+        return retryWithHealing({ provider: citizenProv, ... });
+    });
+    const groupResults = await runWithConcurrency(groupTasks, ...);
 
----
+    // Reducer 阶段: 聚合各局部节点输出执行全局状态合并
+    const groupSummaries = groupResults.map(r => r.groupSummary);
+    const mergeMessages = buildMergeResolutionMessages(session, groupSummaries, ...);
+    const mergeResult = await retryWithHealing({ provider: provider, ... });
+}
+```
+**技术解析**：将高指数级复杂度的节点交互关系图切分为相互独立的离散子图。基础模型负责处理局部图内部的连通性事件，而具有更高参数量的中央控制模型负责合并子图输出，执行宏观统计特征分析，以此方法调优总体 API 使用率与响应延迟。
 
-## 4. UI 界面与前端配置
+#### 2.2.4 确定性状态核算系统
+系统底层建立了一套基于算术运算的检验规则，用于替代模型的幻觉干预。
+**核心代码片段（server/src/mechanics/physicsEngine.ts）：**
+```typescript
+export function resolveAction(input: PhysicsInput): PhysicsOutput {
+  const { agent, actionCode, actionTarget, allAgents } = input;
+  let w = 0, h = 0, hap = 0, cor = 0, dop = 0;
 
-前端的大部分状态和样式都不依赖复杂的外部配置文件，而是直接内联或者写在特定的全局样式表中。
+  switch (actionCode) {
+    case 'WORK':
+      w = roleIncome(agent.role); 
+      h = -2;   
+      hap = -1; 
+      cor = -3; 
+      break;
+    case 'STEAL':
+      w = stealCalc(agent, allAgents, actionTarget); 
+      h = -5;   
+      hap = -3;
+      cor = 10; 
+      break;
+    ...
+  }
+  return { wealthDelta: w, healthDelta: h, ...};
+}
+```
+**技术解析**：基于解析所得的具体类型集，规则引擎输出多维度的数值标量增减结果。程序将健康值变量降至零点及其以下定义为单次生命周期的结束条件，并借此回收或初始化该内存实例。
 
-### 4.1 全局主题与颜色 (Colors, Fonts, Layouts)
-*   **文件位置**: `web/src/index.css`
-*   **内容说明**:
-    *   这是 CSS 变量的主阵地！所有的颜色基调（Dark mode 默认，支持 Light mode）、玻璃拟态 (Glassmorphism) 参数、高光、阴影都在这里以 `:root` CSS variables 的形式定义（如 `--bg-color`, `--primary`, `--glass-bg`）。
-    *   字体设置：`--font-family: 'Inter', -apple-system, ...`
-    *   如果你需要调整系统主色调，直接修改这里的 `--primary` 或背景 `--bg-gradient` 即可。
-*   **文件位置**: `web/src/App.css`
-*   **内容说明**: 包含整体的主结构布局逻辑（侧边栏宽度、主要的 Dashboard 网格布局规范等）。
+#### 2.2.5 检索增强机制及上下文干预
+系统监控内部状态标量，并在超越临界阈值时启动外部环境注入协议。
+**核心代码片段（server/src/mechanics/historicalRAG.ts）：**
+```typescript
+const HISTORICAL_SNIPPETS: HistoricalSnippet[] = [
+  {
+    category: 'famine',
+    era: 'Irish Famine, 1845–1852',
+    mindset: 'You remember stories of families who ate grass and bark to survive. You must secure food and resources by any means necessary.',
+    triggers: { lowWealth: true, highCortisol: true },
+  },
+  // 历史参数配置项
+];
 
-### 4.2 前端状态管理 (Zustand Stores)
-为了避免 React re-renders 问题，业务状态被细粒度拆分到了不同的 Store 中：
-*   **文件位置**: `web/src/stores/` (例如 `simulationStore.ts`, `sessionDetailStore.ts`, `settingsStore.ts`)
-*   **内容说明**: 所有的网络请求 (API calls) 和 SSE (Server-Sent Events) 监听器都在这里建立，进而触发 React UI 更新。
+export function getSubconsciousDrive(cortisol, wealth, health) {
+  if (cortisol <= 60) return null; // 阈值检测
+  // 返回与输入状态变量匹配的增强指令字符串
+}
+```
+**技术解析**：程序持续监听指标组。当侦测到资源短缺状态变量及内部压力标志参数超出设定边界值时，检索子系统会从静态数据库中匹配同源场景的历史参考文本。注入该强化语境后的模型输出将大概率偏离基准参数设定的防御性倾向，转向触发具有破坏性的特定分类意图。
 
-### 4.3 核心组件 UI (Components)
-*   **图表渲染**: `web/src/components/LineChart.tsx` (使用原生的 SVG 绘制社会的财富/健康趋势折线图，没有使用第三方重型库)。
-*   **视图页面**: 都在 `web/src/pages/` 目录下，比如 `Simulation.tsx` (核心模拟运行面板), `Reflection.tsx` 等。
+## 3. 系统性能优化设计
 
----
+在并发执行环境中，本系统应用了三类优化实现策略。
 
-## 5. 性能与成本优化 (Performance & Cost Optimizations)
+### 3.1 异步日志吞吐器
+**所属模块**：server/src/db/asyncLogFlusher.ts
+**机制解析**：常规同步执行数据库写入指令会导致 I/O 事件阻塞。应用通过预分配的内存环形队列结构存储排队的写入对象，并结合定时循环控制器每隔500毫秒提取队列执行 SQLite 批量写请求，基于 WAL 模式实现了高吞吐量写日志分离。
 
-根据最新的架构与性能报告，Ideal World 在前端渲染和 LLM 调用成本方面进行了深度优化：
+### 3.2 提示词缓存与内存利用
+**所属模块**：server/src/llm/prompts.ts
+**机制解析**：
+```typescript
+  const systemContent: ContentBlock[] = [
+    { type: 'text', text: staticPrefix, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: dynamicSuffix },
+  ];
+```
+针对外部服务商提供的前置缓存接口支持，系统识别高体积静态化规则文本并附加对应的存活期标识。高并发集群调用时优先匹配云端驻留缓存结果集，大幅减少冗余输入计算损耗，降低并缩短 TTFT 首字到达响应耗时。
 
-### 5.1 前端渲染与状态同步瓶颈优化
-*   **双缓冲与 rAF 防抖批处理 (`web/src/stores/simulationStore.ts`)**:
-    后端通过 SSE 以高频推送大量智能体状态时，为防止 React 频繁重新渲染导致卡顿（Render Thrashing），系统在底层建立了一个脱离 React 生命周期的可变数组缓冲池。所有高频传入的事件先被推入该缓冲区，并借助原生浏览器的 `requestAnimationFrame` (rAF) API，与显示器刷新率对齐。在每一帧渲染前，将缓冲区的所有更新一次性合并推送到 Zustand 状态中，极大地保证了渲染的丝滑度。
-*   **状态隔离与并发渲染特性 (`web/src/pages/Simulation.tsx`)**:
-    结合 Zustand 与 React 19，系统大量使用了 `useShallow` 进行选择性订阅（Selectors），保证组件仅在自身依赖的字段发生变更时进行 Diff 计算。这彻底避免了状态瀑布引起的级联重绘。
-*   *注：曾经尝试引入的 Virtualization 虚拟列表库在后期优化中被移除（为了解决 CSS 定位重叠问题），当前转而采用基于数组切片和简洁 DOM 结构的原生映射。*
+### 3.3 前端事件聚合渲染缓冲区
+**所属模块**：web/src/stores/simulationStore.ts
+**机制解析**：在包含高密度事件数据包的 SSE 传输流下，为规避 React 虚拟 DOM 前端框架的重绘级联卡顿，系统在原生全局域初始化了一组只写缓冲池。挂载浏览器的 requestAnimationFrame 接口，控制层在接收到硬件显示器下一次帧级刷新信号前，提取缓冲池事件组执行合并操作更新状态树对象，避免无效资源消耗。
 
-### 5.2 LLM 成本优化与端云混合调度
-*   **Prompt Caching 提示词缓存 (`server/src/llm/anthropic.ts`, `server/src/llm/prompts.ts`)**:
-    在构建发给 LLM 的上下文时，系统严格遵守“静态极度前置、动态严格后置”的法则。将基础世界观、不变的机制、法律设定全部标记为可缓存对象。通过使用 Anthropic API 提供的 `cache_control` 属性，系统能复用 KV 缓存，极大降低多轮交互和并发智能体调用的 Token 开销与首字响应延迟（TTFT）。
-*   **端云混合模型调度策略 (Hybrid Model Orchestration) (`server/src/orchestration/simulationRunner.ts`)**:
-    不再盲目让顶级模型包揽一切。在 Map-Reduce 的推演路径中：
-    *   **局部推演 (System 1)**：成百上千个底层 Citizen Agent 组成的簇（Cluster）和基础的生活事件推演，被下发至较廉价的模型（`citizenAgentModel`，甚至可以是端侧的 Llama 3/Mistral）运行。
-    *   **全局宏观合并 (System 2)**：那些需要深邃分析与全局协调的任务，如宏观社会裁定与合并各个群组的推演总结时，流量则被路由至高阶云端模型（`centralAgentModel`）进行。这种基于认知复杂度的智能算力切分，削减了近 60% 的总推理开销。
+## 4. 评估与回调机制
 
----
+循环任务列队结案后，控制进程移交 server/src/orchestration/reflectionRunner.ts 执行日志结算分析。
 
-## 6. 数据持久化与数据库 (Database & Storage)
+回溯工作流被拆分为二次分层评估环节：
+1. **第一阶段局部回调**：系统查询单一对象所绑定的时间线记录片段并装配输入流。在局部特征限制下，模型针对被摄对象行为输出独立分析数据报表。
+2. **全局特征分析**：提取如基尼系数、存活率占比等汇总统计类结构化数据，协同上层采集的数据片段集整合至新一轮上下文。此环节由控制中心完成输出全量系统特征测评报告。
+3. **第二阶段变量测试**：注入全局评测文件反向回馈至原始节点，探测在信息完全公开条件下节点对于初始状态理解特征的数据偏差映射值。
 
-*   **数据存储位置**: 用户主目录下的 `.idealworld` 文件夹。
-    *   **Mac/Linux**: `~/.idealworld/idealworld.db`
-    *   **Windows**: `C:\Users\Username\.idealworld\idealworld.db`
-    *   应用的 API Key 配置文件也存放在该目录下：`~/.idealworld/config.json` (相关代码见 `server/src/settings.ts`)
-*   **ORM 与 数据模式 (Schema)**:
-    *   **文件位置**: `server/src/db/schema.ts`
-    *   使用 Drizzle ORM，结合 SQLite 的 WAL 模式（以支持高并发读写）。
-    *   核心表包括：`sessions`, `agents`, `agent_intents`, `resolved_actions`, `iterations`, `reflections` 等。
-*   **日志写入优化**: `server/src/db/asyncLogFlusher.ts` 包含一个异步队列刷写器，用于将大量的 Intent 和 Resolve 文本异步写入 SQLite，以避免阻塞主模拟事件循环。
+上述测评输出皆实行本地持久化转储，为数据仪表盘操作接口提供稳定数据源。
+
+## 5. 持续演进路线与下一步优化计划
+
+系统架构预置了模块化拓展接口，依据后续工程实施路径规划，底层算法规则拟按以下阶段执行重构升级。详细的渐进式组件拆分及代码实施细则可参考附带的 `PHYSICS_ENHANCEMENT_IMPLEMENTATION.md` 技术方案。
+
+### 阶段一：物理引擎与经济基座重构
+此阶段目标为解耦静态属性，构建基于实体物质与交易驱动的底层环境。
+*   **1A 动态技能矩阵**：移除常量化职业收益，建立基于行动反馈的熟练度运算组件及其称号调度逻辑。
+*   **1B 双轨生产与物理库存**：接入包含耐久与损耗参数的离散化库存表，支持建立实体企业并拓展雇佣劳动状态逻辑。
+*   **1C 全局订单簿撮合引擎**：重构互动交易逻辑，引入基于价格与时间优先队列的集中竞价撮合中心提取全局物价行情。
+
+### 阶段二：社会心理干预与环境闭环
+此阶段目标为根据前序阶段产生的宏观指标，按周期阈值精准干预模型提示词结构。
+*   **2A 宏观经济遥测**：开发针对基尼系数、通胀率及垄断比率的全局大盘聚合运算方法。
+*   **2B 周期律干预控制器**：基于上述特征值的触发器体系，在繁荣、分化、危机、爆发四项边界条件下，精准切合神经层对应历史语境下发的 RAG 追加提示补丁。
+
+### 阶段三：工作流流水线与适配改造
+*   **3A 数据栈透传**：强化 `prompts.ts` 生成逻辑，确保局部库存与宏观物价等强变量数组能够前置呈现给决策模型。
+*   **3B 分布式调度聚合算法重组**：废弃现行的静态角色聚类函数，开发面向经济实体、企业边界及资产净值分层的新一代 MapReduce 组团划分逻辑，以维持处理冲突时的情境连续性。
