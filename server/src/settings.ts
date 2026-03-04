@@ -17,7 +17,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   citizenProvider: undefined,
   citizenApiKey: '',
   citizenBaseUrl: '',
+  citizenVertexProjectId: '',
+  citizenVertexLocation: '',
   maxMessageLength: 64000,
+  vertexProjectId: '',
+  vertexLocation: '',
 };
 
 export function readSettings(): AppSettings {

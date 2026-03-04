@@ -29,7 +29,7 @@ export async function brainstorm(
 ): Promise<BrainstormResult> {
   const provider = getProvider();
   const messages = buildBrainstormMessages(idea, history, userMessage, currentChecklist);
-  const raw = await withRetry(() => provider.chat(messages, { maxTokens: 2048 }));
+  const raw = await withRetry(() => provider.chat(messages, { maxTokens: 4096 }));
 
   let parsed: { reply: string; checklist: BrainstormChecklist; readyForDesign: boolean };
   try {
@@ -100,7 +100,7 @@ export async function generateDesign(
   onProgress({ type: 'step_start', step: 'overview', stepIndex: 0, totalSteps: 3 });
 
   const overviewRaw = await withRetry(() =>
-    provider.chat(buildOverviewMessages(session.idea, brainstormSummary), { maxTokens: 2048 })
+    provider.chat(buildOverviewMessages(session.idea, brainstormSummary), { maxTokens: 8192 })
   );
   const overviewData = parseJSON<{
     societyName: string;
@@ -137,7 +137,7 @@ export async function generateDesign(
         overviewData.governanceModel,
         overviewData.economicModel
       ),
-      { maxTokens: 3000 }
+      { maxTokens: 8192 }
     )
   );
   const lawData = parseJSON<{ law: string }>(lawRaw);
@@ -249,7 +249,7 @@ export async function refine(
     userMessage
   );
 
-  const raw = await withRetry(() => provider.chat(messages, { maxTokens: 4096 }));
+  const raw = await withRetry(() => provider.chat(messages, { maxTokens: 8192 }));
   const parsed = parseJSON<{
     reply: string;
     artifactsUpdated: Array<'overview' | 'law' | 'agents'>;

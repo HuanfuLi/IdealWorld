@@ -17,15 +17,19 @@ router.get('/', (_req, res) => {
         claude: !!(keys.claude),
         openai: !!(keys.openai),
         gemini: !!(keys.gemini),
+        vertex: !!(keys.vertex),
       },
       baseUrl: s.baseUrl,
       centralAgentModel: s.centralAgentModel,
       citizenAgentModel: s.citizenAgentModel,
-      maxConcurrency: s.maxConcurrency,
       citizenProvider: s.citizenProvider,
       hasCitizenApiKey: !!(s.citizenApiKey && s.citizenApiKey.length > 0),
       citizenBaseUrl: s.citizenBaseUrl,
       maxMessageLength: s.maxMessageLength,
+      vertexProjectId: s.vertexProjectId,
+      vertexLocation: s.vertexLocation,
+      citizenVertexProjectId: s.citizenVertexProjectId,
+      citizenVertexLocation: s.citizenVertexLocation,
     });
   } catch (err) {
     console.error('GET /settings error:', err);
@@ -37,6 +41,13 @@ router.get('/', (_req, res) => {
 router.put('/', (req, res) => {
   try {
     const body = req.body as Partial<AppSettings>;
+
+    // Frontend sends null to explicitly clear fields (JSON stringify drops undefined)
+    for (const key of Object.keys(body)) {
+      if ((body as any)[key] === null) {
+        (body as any)[key] = undefined;
+      }
+    }
 
     // If apiKey field is empty and we're staying on the same provider,
     // keep the existing key (don't overwrite with empty from masked UI).
@@ -62,15 +73,19 @@ router.put('/', (req, res) => {
         claude: !!(uKeys.claude),
         openai: !!(uKeys.openai),
         gemini: !!(uKeys.gemini),
+        vertex: !!(uKeys.vertex),
       },
       baseUrl: updated.baseUrl,
       centralAgentModel: updated.centralAgentModel,
       citizenAgentModel: updated.citizenAgentModel,
-      maxConcurrency: updated.maxConcurrency,
       citizenProvider: updated.citizenProvider,
       hasCitizenApiKey: !!(updated.citizenApiKey && updated.citizenApiKey.length > 0),
       citizenBaseUrl: updated.citizenBaseUrl,
       maxMessageLength: updated.maxMessageLength,
+      vertexProjectId: updated.vertexProjectId,
+      vertexLocation: updated.vertexLocation,
+      citizenVertexProjectId: updated.citizenVertexProjectId,
+      citizenVertexLocation: updated.citizenVertexLocation,
     });
   } catch (err) {
     console.error('PUT /settings error:', err);
@@ -99,6 +114,8 @@ router.post('/test', async (req, res) => {
       ...(body.apiKey?.trim() ? { apiKey: body.apiKey.trim() } : {}),
       ...(body.baseUrl?.trim() ? { baseUrl: body.baseUrl.trim() } : {}),
       ...(body.centralAgentModel?.trim() ? { centralAgentModel: body.centralAgentModel.trim() } : {}),
+      ...(body.vertexProjectId?.trim() ? { vertexProjectId: body.vertexProjectId.trim() } : {}),
+      ...(body.vertexLocation?.trim() ? { vertexLocation: body.vertexLocation.trim() } : {}),
     };
 
     // Resolve API key for the provider being tested from per-provider storage
@@ -107,8 +124,8 @@ router.post('/test', async (req, res) => {
       testSettings.apiKey = savedKeys[testProvider] ?? '';
     }
 
-    // Validate: cloud providers require an API key
-    const needsKey = testSettings.provider !== 'local';
+    // Validate: cloud providers (except Vertex) require an API key
+    const needsKey = testSettings.provider !== 'local' && testSettings.provider !== 'vertex';
     if (needsKey && !testSettings.apiKey) {
       return res.json({
         ok: false,

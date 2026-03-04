@@ -5,12 +5,20 @@ import type { AppSettings } from '@idealworld/shared';
 
 type Provider = AppSettings['provider'];
 
-const PROVIDERS: { value: Provider; label: string }[] = [
-  { value: 'claude', label: 'Claude (Anthropic)' },
-  { value: 'openai', label: 'ChatGPT (OpenAI)' },
-  { value: 'gemini', label: 'Gemini (Google)' },
-  { value: 'local', label: 'Local (LM Studio / Ollama)' },
+const PROVIDERS: { id: Provider; name: string }[] = [
+  { id: 'claude', name: 'Anthropic (Claude)' },
+  { id: 'openai', name: 'OpenAI' },
+  { id: 'gemini', name: 'Gemini (Google AI Studio)' },
+  { id: 'vertex', name: 'Vertex AI (Google Cloud)' },
+  { id: 'local', name: 'Local (LM Studio/Ollama)' },
 ];
+
+const apiKeyPlaceholder: Record<string, string> = {
+  claude: 'sk-ant-api03-................................',
+  openai: 'sk-...................................',
+  gemini: 'AIzaSy.............................',
+  vertex: '', // Handled separately
+};
 
 const CLAUDE_MODELS = [
   { value: 'claude-opus-4-6', label: 'claude-opus-4-6' },
@@ -39,6 +47,7 @@ const DEFAULT_CENTRAL: Record<Provider, string> = {
   claude: 'claude-sonnet-4-6',
   openai: 'gpt-5',
   gemini: 'gemini-3-flash-preview',
+  vertex: 'gemini-1.5-flash-001',
   local: '',
 };
 
@@ -46,6 +55,7 @@ const DEFAULT_CITIZEN: Record<Provider, string> = {
   claude: 'claude-haiku-4-5-20251001',
   openai: 'gpt-5-mini',
   gemini: 'gemini-2.5-flash-lite',
+  vertex: 'gemini-1.5-flash-001',
   local: '',
 };
 
@@ -55,11 +65,13 @@ function getModelOptions(p: Provider) {
       p === 'gemini' ? GEMINI_MODELS : null;
 }
 
-type ProviderConfig = {
+type SavedConfig = {
   apiKey: string;
   centralAgentModel: string;
   citizenAgentModel: string;
-  baseUrl: string;
+  baseUrl?: string;
+  vertexProjectId?: string;
+  vertexLocation?: string;
 };
 
 const SettingsPage = () => {
@@ -68,6 +80,8 @@ const SettingsPage = () => {
   const [provider, setProvider] = useState<Provider>('claude');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('http://localhost:1234/v1');
+  const [vertexProjectId, setVertexProjectId] = useState('');
+  const [vertexLocation, setVertexLocation] = useState('');
   const [centralAgentModel, setCentralAgent] = useState('claude-sonnet-4-6');
   const [citizenAgentModel, setCitizenAgent] = useState('claude-haiku-4-5-20251001');
   const [maxConcurrency, setMaxConcurrency] = useState(10);
@@ -80,9 +94,11 @@ const SettingsPage = () => {
   const [citizenProvider, setCitizenProvider] = useState<Provider>('local');
   const [citizenApiKey, setCitizenApiKey] = useState('');
   const [citizenBaseUrl, setCitizenBaseUrl] = useState('http://localhost:1234/v1');
+  const [citizenVertexProjectId, setCitizenVertexProjectId] = useState('');
+  const [citizenVertexLocation, setCitizenVertexLocation] = useState('');
 
   // Stores per-provider form values so switching back restores what the user entered
-  const savedConfigs = useRef<Partial<Record<Provider, ProviderConfig>>>({});
+  const savedConfigs = useRef<Partial<Record<Provider, SavedConfig>>>({});
 
   useEffect(() => { loadSettings(); }, []);
 
@@ -94,26 +110,33 @@ const SettingsPage = () => {
     setCitizenAgent(settings.citizenAgentModel);
     setMaxConcurrency(settings.maxConcurrency);
     setMaxMessageLength(settings.maxMessageLength ?? 64000);
+    setVertexProjectId(settings.vertexProjectId ?? '');
+    setVertexLocation(settings.vertexLocation ?? '');
+
     // Seed the saved config for the active provider from server values
     savedConfigs.current[settings.provider] = {
       apiKey: '',
       centralAgentModel: settings.centralAgentModel,
       citizenAgentModel: settings.citizenAgentModel,
       baseUrl: settings.baseUrl,
+      vertexProjectId: settings.vertexProjectId,
+      vertexLocation: settings.vertexLocation,
     };
     // Restore citizen provider state from server
     if (settings.citizenProvider) {
       setSeparateCitizen(true);
       setCitizenProvider(settings.citizenProvider);
       setCitizenBaseUrl(settings.citizenBaseUrl ?? 'http://localhost:1234/v1');
+      setCitizenVertexProjectId(settings.citizenVertexProjectId ?? '');
+      setCitizenVertexLocation(settings.citizenVertexLocation ?? '');
     } else {
       setSeparateCitizen(false);
     }
   }, [settings]);
 
-  const handleProviderChange = (p: Provider) => {
+  const handleProviderSwitch = (p: Provider) => {
     // Snapshot current form before switching
-    savedConfigs.current[provider] = { apiKey, centralAgentModel, citizenAgentModel, baseUrl };
+    savedConfigs.current[provider] = { apiKey, centralAgentModel, citizenAgentModel, baseUrl, vertexProjectId, vertexLocation };
 
     // Restore previously entered values, or fall back to defaults
     const saved = savedConfigs.current[p];
@@ -122,6 +145,8 @@ const SettingsPage = () => {
     setCentralAgent(saved?.centralAgentModel ?? DEFAULT_CENTRAL[p]);
     setCitizenAgent(saved?.citizenAgentModel ?? DEFAULT_CITIZEN[p]);
     setBaseUrl(saved?.baseUrl ?? 'http://localhost:1234/v1');
+    setVertexProjectId(saved?.vertexProjectId ?? '');
+    setVertexLocation(saved?.vertexLocation ?? '');
   };
 
   const handleSave = async () => {
@@ -135,17 +160,25 @@ const SettingsPage = () => {
         citizenAgentModel,
         maxConcurrency,
         maxMessageLength,
+        vertexProjectId,
+        vertexLocation,
       };
       if (apiKey.trim()) updates.apiKey = apiKey.trim();
 
       if (separateCitizen) {
         updates.citizenProvider = citizenProvider;
         updates.citizenBaseUrl = citizenBaseUrl;
+        updates.citizenVertexProjectId = citizenVertexProjectId;
+        updates.citizenVertexLocation = citizenVertexLocation;
         if (citizenApiKey.trim()) updates.citizenApiKey = citizenApiKey.trim();
       } else {
-        updates.citizenProvider = undefined;
-        updates.citizenApiKey = '';
-        updates.citizenBaseUrl = '';
+        // JSON.stringify drops undefined, so backend never clears these fields.
+        // We use null to forcefully overwrite them in the backend merge.
+        (updates as any).citizenProvider = null;
+        (updates as any).citizenApiKey = null;
+        (updates as any).citizenBaseUrl = null;
+        (updates as any).citizenVertexProjectId = null;
+        (updates as any).citizenVertexLocation = null;
       }
 
       await updateSettings(updates as Parameters<typeof updateSettings>[0]);
@@ -158,18 +191,11 @@ const SettingsPage = () => {
     }
   };
 
-  const needsApiKey = provider !== 'local';
+  const needsApiKey = provider !== 'local' && provider !== 'vertex';
+  const citizenNeedsApiKey = citizenProvider !== 'local' && citizenProvider !== 'vertex';
 
   const modelOptions = getModelOptions(provider);
   const citizenModelOptions = getModelOptions(citizenProvider);
-  const citizenNeedsApiKey = citizenProvider !== 'local';
-
-  const apiKeyPlaceholder: Record<Provider, string> = {
-    claude: 'sk-ant-...',
-    openai: 'sk-...',
-    gemini: 'AIza...',
-    local: '',
-  };
 
   return (
     <div className="animate-fade-in" style={{ maxWidth: '800px', margin: '0 auto' }}>
@@ -185,15 +211,15 @@ const SettingsPage = () => {
         {/* Provider selector */}
         <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', marginBottom: '2rem' }}>
           {PROVIDERS.map(p => (
-            <label key={p.value} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+            <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
               <input
                 type="radio"
                 name="provider"
-                checked={provider === p.value}
-                onChange={() => handleProviderChange(p.value)}
+                checked={provider === p.id}
+                onChange={() => handleProviderSwitch(p.id)}
                 style={{ accentColor: 'var(--primary)' }}
               />
-              {p.label}
+              {p.name}
             </label>
           ))}
         </div>
@@ -202,9 +228,52 @@ const SettingsPage = () => {
 
         <div className="animate-fade-in" style={{ display: 'grid', gap: '1.5rem', marginBottom: '2rem' }}>
 
-          {/* API Key field (all cloud providers) */}
-          {needsApiKey && (() => {
-            const hasSavedKey = !!(settings?.savedApiKeys as Record<string, boolean> | undefined)?.[provider];
+          {/* Active provider config area */}
+          {(() => {
+            if (provider === 'local') return (
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
+                  Endpoint URL <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(e.g. http://127.0.0.1:1234/v1)</span>
+                </label>
+                <input
+                  type="text"
+                  className="input-glass"
+                  value={baseUrl}
+                  onChange={e => setBaseUrl(e.target.value)}
+                  placeholder="http://127.0.0.1:1234/v1"
+                />
+              </div>
+            );
+            if (provider === 'vertex') return (
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
+                    Google Cloud Project ID <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. my-agent-project-123"
+                    className="input-glass"
+                    value={vertexProjectId}
+                    onChange={e => setVertexProjectId(e.target.value)}
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
+                    Location <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. us-central1"
+                    className="input-glass"
+                    value={vertexLocation}
+                    onChange={e => setVertexLocation(e.target.value)}
+                  />
+                </div>
+              </div>
+            );
+            const savedKeysMap = (settings as any)?.savedApiKeys ?? {};
+            const hasSavedKey = Boolean(savedKeysMap[provider] && !apiKey);
             return (
               <div>
                 <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
@@ -243,7 +312,7 @@ const SettingsPage = () => {
           )}
 
           {/* Model selectors */}
-          <div style={{ display: 'grid', gridTemplateColumns: separateCitizen ? '1fr' : '1fr 1fr', gap: '1.5rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: separateCitizen ? '1fr' : '1fr 1fr', gap: '1.5rem', marginTop: '1.5rem' }}>
             <div>
               <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
                 Central Agent Model
@@ -286,12 +355,12 @@ const SettingsPage = () => {
             </div>
           )}
 
-          {/* Gemini note */}
-          {provider === 'gemini' && (
-            <div style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.2)', padding: '1rem', borderRadius: '8px', color: '#93c5fd', display: 'flex', gap: '0.75rem', fontSize: '0.9rem' }}>
+          {/* Vertex API note */}
+          {provider === 'vertex' && (
+            <div style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.2)', padding: '1rem', borderRadius: '8px', color: '#93c5fd', display: 'flex', gap: '0.75rem', fontSize: '0.9rem', marginTop: '1rem' }}>
               <Server size={20} style={{ flexShrink: 0 }} />
               <div>
-                Get a free API key at <strong>aistudio.google.com</strong>. Uses Google's OpenAI-compatible endpoint.
+                <strong>Uses Application Default Credentials (ADC)</strong>. Configure via <code>gcloud auth application-default login</code> in your terminal. Project ID and Location will be inferred automatically if left blank.
               </div>
             </div>
           )}
@@ -313,50 +382,51 @@ const SettingsPage = () => {
           </div>
 
           {separateCitizen && (
-            <div className="animate-fade-in" style={{
-              display: 'grid', gap: '1.5rem',
-              background: 'rgba(255,255,255,0.03)', border: '1px solid var(--glass-border)',
-              borderRadius: '12px', padding: '1.5rem',
-            }}>
-              {/* Citizen provider selector */}
+            <div className="animate-fade-in" style={{ display: 'grid', gap: '1.5rem', marginBottom: '2rem' }}>
+              {/* Citizen Provider selector */}
               <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
                 {PROVIDERS.map(p => (
-                  <label key={p.value} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
                     <input
                       type="radio"
                       name="citizenProvider"
-                      checked={citizenProvider === p.value}
+                      checked={citizenProvider === p.id}
                       onChange={() => {
-                        setCitizenProvider(p.value);
-                        setCitizenAgent(DEFAULT_CITIZEN[p.value]);
+                        const newP = p.id as Provider;
+                        setCitizenProvider(newP);
+                        setCitizenAgent(DEFAULT_CITIZEN[newP] || '');
                       }}
                       style={{ accentColor: 'var(--primary)' }}
                     />
-                    {p.label}
+                    {p.name}
                   </label>
                 ))}
               </div>
 
               {/* Citizen API key */}
-              {citizenNeedsApiKey && (
-                <div>
-                  <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
-                    Citizen API Key{' '}
-                    {settings?.hasCitizenApiKey && <span style={{ color: 'var(--success)', fontSize: '0.8rem' }}>(saved)</span>}
-                  </label>
-                  <div style={{ position: 'relative' }}>
-                    <Key size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
-                    <input
-                      type="password"
-                      placeholder={settings?.hasCitizenApiKey ? '............. (leave blank to keep)' : apiKeyPlaceholder[citizenProvider]}
-                      className="input-glass"
-                      style={{ paddingLeft: '3rem' }}
-                      value={citizenApiKey}
-                      onChange={e => setCitizenApiKey(e.target.value)}
-                    />
+              {citizenNeedsApiKey && (() => {
+                const savedKeysMap = (settings as any)?.savedApiKeys ?? {};
+                const hasSavedKey = Boolean(settings?.hasCitizenApiKey && !citizenApiKey);
+                return (
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-dim)', fontSize: '0.9rem' }}>
+                      Citizen API Key{' '}
+                      {hasSavedKey && <span style={{ color: 'var(--success)', fontSize: '0.8rem' }}>(saved)</span>}
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <Key size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
+                      <input
+                        type="password"
+                        placeholder={hasSavedKey ? '............. (leave blank to keep)' : apiKeyPlaceholder[citizenProvider]}
+                        className="input-glass"
+                        style={{ paddingLeft: '3rem' }}
+                        value={citizenApiKey}
+                        onChange={e => setCitizenApiKey(e.target.value)}
+                      />
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Citizen base URL */}
               {citizenProvider === 'local' && (

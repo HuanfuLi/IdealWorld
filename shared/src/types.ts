@@ -230,20 +230,25 @@ export interface SessionExport {
 
 export interface AppSettings {
   /** LLM provider selection */
-  provider: 'claude' | 'openai' | 'gemini' | 'local';
+  provider: 'claude' | 'openai' | 'gemini' | 'vertex' | 'local';
   /** Active API key — maps to apiKeys[provider]. Kept for backward compat. */
   apiKey: string;
   /** Per-provider API key storage so switching providers doesn't lose keys */
-  apiKeys?: Partial<Record<'claude' | 'openai' | 'gemini', string>>;
+  apiKeys?: Partial<Record<'claude' | 'openai' | 'gemini' | 'vertex', string>>;
+  /** GCP parameters for Vertex AI provider */
+  vertexProjectId?: string;
+  vertexLocation?: string;
   /** Base URL for local/custom OpenAI-compatible providers */
   baseUrl: string;
   centralAgentModel: string;
   citizenAgentModel: string;
   maxConcurrency: number;
   /** Optional separate provider for citizen agent tasks */
-  citizenProvider?: 'claude' | 'openai' | 'gemini' | 'local';
+  citizenProvider?: 'claude' | 'openai' | 'gemini' | 'vertex' | 'local';
   citizenApiKey?: string;
   citizenBaseUrl?: string;
+  citizenVertexProjectId?: string;
+  citizenVertexLocation?: string;
   maxMessageLength: number;
 }
 
@@ -251,15 +256,20 @@ export interface SettingsResponse {
   provider: AppSettings['provider'];
   hasApiKey: boolean;
   /** Which providers have API keys saved */
-  savedApiKeys?: Partial<Record<'claude' | 'openai' | 'gemini', boolean>>;
+  savedApiKeys?: Partial<Record<'claude' | 'openai' | 'gemini' | 'vertex', boolean>>;
   baseUrl: string;
   centralAgentModel: string;
   citizenAgentModel: string;
   maxConcurrency: number;
-  citizenProvider?: 'claude' | 'openai' | 'gemini' | 'local';
+  citizenProvider?: 'claude' | 'openai' | 'gemini' | 'vertex' | 'local';
   hasCitizenApiKey?: boolean;
   citizenBaseUrl?: string;
+  citizenVertexProjectId?: string;
+  citizenVertexLocation?: string;
   maxMessageLength: number;
+  vertexProjectId?: string;
+  vertexLocation?: string;
+  apiKeys?: Partial<Record<'claude' | 'openai' | 'gemini' | 'vertex', string>>;
 }
 
 export interface TestResult {
