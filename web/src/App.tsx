@@ -75,14 +75,12 @@ function SessionNav({ sessionId }: { sessionId: string }) {
   const location = useLocation();
 
   // Active step: always derived from the URL (which page the user is actually on).
-  // This is correct even when sessionDetailStore hasn't been refreshed by the
-  // current page (e.g. Simulation page uses its own store, not sessionDetailStore).
   const lastSegment = location.pathname.split('/').at(-1) ?? '';
   const activeStepFromUrl: NavStep | null = URL_TO_STEP[lastSegment] ?? null;
   const isOnArtifacts = lastSegment === 'artifacts';
 
-  // Progress: use the higher of the store-reported stage vs the URL-implied stage.
-  // This ensures nav items aren't incorrectly disabled when the store is stale.
+  // Progress: the "high-water mark" — the furthest stage the session has reached.
+  // This allows the user to navigate back to any stage they've already visited.
   const storeStep: NavStep = session?.stage ? STAGE_TO_STEP[session.stage] : 'idea';
   const urlStep: NavStep = activeStepFromUrl ?? 'idea';
   const progressIdx = Math.max(NAV_ORDER.indexOf(storeStep), NAV_ORDER.indexOf(urlStep));
@@ -95,18 +93,19 @@ function SessionNav({ sessionId }: { sessionId: string }) {
 
       {SESSION_NAV_ITEMS.map(({ step, label, Icon, path }) => {
         const stepIdx = NAV_ORDER.indexOf(step);
-        // isActive: which step is the user currently viewing (URL-based)
         const isActive = (activeStepFromUrl ? step === activeStepFromUrl : step === storeStep) && !isOnArtifacts;
-        const isPast = stepIdx < progressIdx;
-        const isUpcoming = stepIdx > progressIdx;
+        const isReached = stepIdx <= progressIdx;
 
-        // Locked = past AND one-way (idea, brainstorm)
-        const isLocked = isPast && ONE_WAY_STEPS.has(step);
-        // Disabled = locked OR not yet reached
-        const isDisabled = isLocked || isUpcoming;
+        // Only lock idea and brainstorm once passed; all other reached steps stay navigable
+        const isLocked = !isReached || (stepIdx < progressIdx && ONE_WAY_STEPS.has(step));
+        const isDisabled = isLocked;
 
         const navClass = `nav-item${isActive ? ' active' : ''}`;
         const disabledStyle: React.CSSProperties = { opacity: 0.35, cursor: 'not-allowed', pointerEvents: 'none' };
+
+        // Past steps (reached but not active) get a subtle completed indicator
+        const isPast = isReached && !isActive && !isDisabled;
+        const pastStyle: React.CSSProperties = isPast ? { opacity: 0.85 } : {};
 
         return isDisabled ? (
           <div key={step} className={navClass} style={disabledStyle}>
@@ -114,7 +113,7 @@ function SessionNav({ sessionId }: { sessionId: string }) {
             <span>{label}</span>
           </div>
         ) : (
-          <Link key={step} to={path(sessionId)} className={navClass}>
+          <Link key={step} to={path(sessionId)} className={navClass} style={pastStyle}>
             <Icon size={20} />
             <span>{label}</span>
           </Link>

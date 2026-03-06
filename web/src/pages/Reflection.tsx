@@ -131,7 +131,16 @@ const Reflection = () => {
         <h1 className="page-title" style={{ fontSize: '1.5rem' }}>Reflection</h1>
         <button
           className="btn-primary"
-          onClick={() => navigate(`/session/${id}/agents`)}
+          onClick={async () => {
+            if (id) {
+              await fetch(`/api/sessions/${id}/stage`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ stage: 'reviewing' }),
+              }).catch(() => null);
+            }
+            navigate(`/session/${id}/agents`);
+          }}
           disabled={!isComplete}
           style={{ opacity: isComplete ? 1 : 0.5 }}
         >

@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Play, Pause, Square, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle, ArrowRight, GitFork } from 'lucide-react';
+import { Play, Pause, Square, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle, ArrowRight, GitFork, Zap } from 'lucide-react';
 import { useSimulationStore } from '../stores/simulationStore';
 import { useShallow } from 'zustand/react/shallow';
 import MarkdownText from '../components/MarkdownText';
@@ -29,7 +29,16 @@ const Simulation = () => {
 
   const [sessionStage, setSessionStage] = useState<string>('simulating');
   const [extraIterations, setExtraIterations] = useState(10);
+  const [autoProceed, setAutoProceed] = useState(() => localStorage.getItem('sim-auto-proceed') === 'true');
+  const autoProceedRef = useRef(autoProceed);
   const sseCleanupRef = useRef<(() => void) | null>(null);
+  const hasAutoProceeded = useRef(false);
+
+  // Keep ref in sync for use in effects without re-running them
+  useEffect(() => {
+    autoProceedRef.current = autoProceed;
+    localStorage.setItem('sim-auto-proceed', autoProceed ? 'true' : 'false');
+  }, [autoProceed]);
 
   useEffect(() => {
     if (!id) return;
@@ -60,6 +69,24 @@ const Simulation = () => {
   useEffect(() => {
     feedEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [feed.length]);
+
+  // Auto-proceed: when simulation finishes and toggle is on, navigate to reflection
+  const handleAutoProceed = useCallback(async () => {
+    if (!id || hasAutoProceeded.current) return;
+    hasAutoProceeded.current = true;
+    await fetch(`/api/sessions/${id}/stage`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stage: 'reflecting' }),
+    });
+    navigate(`/session/${id}/reflection`);
+  }, [id, navigate]);
+
+  useEffect(() => {
+    if (isComplete && !isRunning && autoProceedRef.current && !hasAutoProceeded.current) {
+      handleAutoProceed();
+    }
+  }, [isComplete, isRunning, handleAutoProceed]);
 
   const handlePauseResume = async () => {
     if (!id) return;
@@ -132,7 +159,40 @@ const Simulation = () => {
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '1rem' }}>
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+          {/* Auto-Proceed Toggle */}
+          <div
+            onClick={() => setAutoProceed(p => !p)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '0.5rem',
+              cursor: 'pointer', userSelect: 'none',
+              padding: '0.4rem 0.75rem', borderRadius: '8px',
+              background: autoProceed ? 'rgba(16, 185, 129, 0.15)' : 'var(--panel-alpha-05)',
+              border: `1px solid ${autoProceed ? 'rgba(16, 185, 129, 0.4)' : 'var(--glass-border)'}`,
+              transition: 'all 0.2s ease',
+            }}
+            title="When enabled, automatically proceed to Reflection when simulation completes"
+          >
+            <div style={{
+              width: '32px', height: '18px', borderRadius: '9px',
+              background: autoProceed ? 'var(--success)' : 'var(--panel-alpha-10)',
+              position: 'relative', transition: 'background 0.2s',
+              border: `1px solid ${autoProceed ? 'rgba(16, 185, 129, 0.5)' : 'var(--glass-border)'}`,
+            }}>
+              <div style={{
+                width: '14px', height: '14px', borderRadius: '50%',
+                background: autoProceed ? '#fff' : 'var(--text-dim)',
+                position: 'absolute', top: '1px',
+                left: autoProceed ? '16px' : '1px',
+                transition: 'left 0.2s ease, background 0.2s',
+              }} />
+            </div>
+            <Zap size={14} color={autoProceed ? 'var(--success)' : 'var(--text-dim)'} />
+            <span style={{ fontSize: '0.8rem', color: autoProceed ? 'var(--success)' : 'var(--text-dim)', whiteSpace: 'nowrap' }}>
+              Auto Proceed
+            </span>
+          </div>
+
           {(isRunning || isPaused) && !isComplete && (
             <button className="btn-secondary" onClick={handlePauseResume} style={{ width: '120px', justifyContent: 'center' }}>
               {isPaused ? <><Play size={18} /> Resume</> : <><Pause size={18} /> Pause</>}

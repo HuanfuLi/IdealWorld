@@ -36,6 +36,17 @@ const AgentReview = () => {
     loadAgents(id);
     loadReflections(id);
     loadSession(id);
+
+    // Auto-mark session as completed when visiting the review stage
+    fetch(`/api/sessions/${id}`).then(r => r.json()).then((s: { stage?: string }) => {
+      if (s.stage && s.stage !== 'completed' && s.stage !== 'reviewing') {
+        fetch(`/api/sessions/${id}/stage`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stage: 'completed' }),
+        }).catch(() => null);
+      }
+    }).catch(() => null);
   }, [id]);
 
   // Pre-select first alive agent
@@ -125,7 +136,7 @@ const AgentReview = () => {
 
   const handleEndSession = async () => {
     if (!id) return;
-    if (!window.confirm('Mark session as completed?')) return;
+    // Session is already auto-completed on page load; just navigate home
     await fetch(`/api/sessions/${id}/stage`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -139,7 +150,7 @@ const AgentReview = () => {
       <div className="page-header" style={{ marginBottom: '1rem' }}>
         <h1 className="page-title" style={{ fontSize: '1.5rem' }}>Agent Review</h1>
         <button className="btn-secondary" style={{ color: 'var(--success)' }} onClick={handleEndSession}>
-          <CheckCircle size={18} /> End Session
+          <CheckCircle size={18} /> Finish & Go Home
         </button>
       </div>
 
