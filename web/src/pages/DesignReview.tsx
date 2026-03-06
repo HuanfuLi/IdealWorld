@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Send, FileText, Users, Scale, Play, Loader2, AlertCircle, Bot, GitFork, RefreshCw } from 'lucide-react';
 import { useSessionDetailStore } from '../stores/sessionDetailStore';
+import MarkdownText from '../components/MarkdownText';
 
 const DesignReview = () => {
   const navigate = useNavigate();
@@ -162,9 +163,9 @@ const DesignReview = () => {
               <div>
                 <h2 style={{ color: 'var(--color-bright)', marginBottom: '1rem' }}>{session?.title}</h2>
                 {session?.societyOverview ? (
-                  <div style={{ lineHeight: 1.8, color: 'var(--text-muted)', whiteSpace: 'pre-wrap' }}>
+                  <MarkdownText style={{ color: 'var(--text-muted)' }}>
                     {session.societyOverview}
-                  </div>
+                  </MarkdownText>
                 ) : (
                   <p style={{ color: 'var(--text-dim)' }}>No overview available.</p>
                 )}
@@ -223,9 +224,9 @@ const DesignReview = () => {
               <div>
                 <h2 style={{ color: 'var(--color-bright)', marginBottom: '1rem' }}>Virtual Law</h2>
                 {session?.law ? (
-                  <div style={{ lineHeight: 1.8, color: 'var(--text-muted)', whiteSpace: 'pre-wrap' }}>
+                  <MarkdownText style={{ color: 'var(--text-muted)' }}>
                     {session.law}
-                  </div>
+                  </MarkdownText>
                 ) : (
                   <p style={{ color: 'var(--text-dim)' }}>No law available.</p>
                 )}
@@ -261,7 +262,13 @@ const DesignReview = () => {
                 <span style={{ fontSize: '0.8rem', color: msg.role === 'user' ? 'var(--primary)' : 'var(--text-muted)', marginBottom: '0.25rem', display: 'block' }}>
                   {msg.role === 'user' ? 'You' : 'Central Agent'}
                 </span>
-                <span style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{msg.content}</span>
+                <span style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                  {msg.role === 'assistant' ? (
+                    <MarkdownText>{msg.content}</MarkdownText>
+                  ) : (
+                    msg.content
+                  )}
+                </span>
               </div>
             ))}
 

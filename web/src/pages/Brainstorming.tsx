@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Send, CheckSquare, Square, Bot, Loader2, AlertCircle, RefreshCw, Check, Circle, Sparkles } from 'lucide-react';
 import { useSessionDetailStore } from '../stores/sessionDetailStore';
+import MarkdownText from '../components/MarkdownText';
 
 const STEPS = [
   { key: 'overview' as const, label: 'Society Overview' },
@@ -197,10 +198,13 @@ const Brainstorming = () => {
                     borderTopRightRadius: msg.role === 'user' ? 0 : '12px',
                     borderTopLeftRadius: msg.role === 'assistant' ? 0 : '12px',
                     maxWidth: '75%',
-                    whiteSpace: 'pre-wrap',
                     lineHeight: 1.5
                   }}>
-                    {msg.content}
+                    {msg.role === 'assistant' ? (
+                      <MarkdownText>{msg.content}</MarkdownText>
+                    ) : (
+                      <span style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>
+                    )}
                   </div>
                 </div>
               ))}

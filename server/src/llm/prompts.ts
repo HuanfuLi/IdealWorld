@@ -27,38 +27,53 @@ export function buildBrainstormMessages(
     ? `\n\nConversation so far:\n${transcriptLines.join('\n\n')}`
     : '';
 
+  // Build the dynamic JSON example showing current checklist values
+  const cl = {
+    governance: currentChecklist?.governance ?? false,
+    economy: currentChecklist?.economy ?? false,
+    legal: currentChecklist?.legal ?? false,
+    culture: currentChecklist?.culture ?? false,
+    infrastructure: currentChecklist?.infrastructure ?? false,
+  };
+  const allCurrentlyDone = Object.values(cl).every(Boolean);
+
   const systemPrompt = `You are the Central Agent for a society simulation. The user wants to simulate: "${seedIdea}"
 
-Your job is to gather enough information to design a complete society. Ask 2-3 focused questions per response covering these 5 areas:
+Your job is to gather enough information to design a complete society by discussing these 5 areas:
 1. governance - How the society is governed, decision-making structures
 2. economy - Economic system, resource distribution, trade
 3. legal - Laws, justice system, rights and obligations
 4. culture - Values, traditions, social norms, education
 5. infrastructure - Physical environment, technology level, basic services
 
-Current coverage status (DO NOT reset items already marked confirmed):
+Current coverage status (DO NOT reset items already marked ✓ confirmed):
 ${checklistStatus}${transcriptSection}
 
 You MUST respond with ONLY valid JSON (no markdown, no preamble):
 {
-  "reply": "your conversational response with 2-3 focused questions",
+  "reply": "your conversational response",
   "checklist": {
-    "governance": false,
-    "economy": false,
-    "legal": false,
-    "culture": false,
-    "infrastructure": false
+    "governance": ${cl.governance},
+    "economy": ${cl.economy},
+    "legal": ${cl.legal},
+    "culture": ${cl.culture},
+    "infrastructure": ${cl.infrastructure}
   },
-  "readyForDesign": false
+  "readyForDesign": ${allCurrentlyDone}
 }
 
-Rules:
-- Carry forward all confirmed items from the coverage status above — never set a confirmed area back to false
-- Set additional items to true only when that area has been sufficiently discussed in THIS conversation
-- readyForDesign must only be true when ALL 5 checklist items are true
-- Build on what has already been discussed; do not repeat questions already answered
-- Be encouraging and curious in your reply
-- Keep replies concise (under 200 words)`;
+CRITICAL CHECKLIST RULES (follow these exactly):
+1. Every item marked ✓ confirmed above MUST stay true — NEVER set a confirmed area back to false.
+2. When the user's message provides meaningful information about an area (even briefly), set that area to true. You do NOT need exhaustive detail — a clear direction or preference is enough.
+3. If the user provides information covering multiple areas at once, mark ALL relevant areas as true in a single response.
+4. readyForDesign MUST be true when ALL 5 checklist items are true. Do not withhold readyForDesign if all items are confirmed.
+5. When all 5 items are already confirmed, set readyForDesign to true and tell the user they can proceed to design.
+
+CONVERSATION RULES:
+- Ask 2-3 focused questions about areas that are still NOT confirmed.
+- Build on what has already been discussed; do not repeat questions already answered.
+- Be encouraging and curious in your reply.
+- Keep replies concise (under 250 words).`;
 
   const messages: LLMMessage[] = [{ role: 'system', content: systemPrompt }];
 
@@ -738,11 +753,11 @@ export function buildRefineMessages(
 
 Seed idea: ${seedIdea}
 
-Current overview (excerpt):
+Current overview:
 ${overview.slice(0, 3000)}
 
-Current law (excerpt):
-${law.slice(0, 3000)}
+Current law:
+${law.slice(0, 5000)}
 
 Current agents (${agents.length} total):
 ${agentRoster}
@@ -754,7 +769,7 @@ You MUST respond with ONLY valid JSON (no markdown, no preamble, no code fences)
   "reply": "string - explain what changes you made",
   "artifactsUpdated": [],
   "updatedOverview": null,
-  "lawChanges": null,
+  "updatedLaw": null,
   "agentChanges": {
     "add": [],
     "remove": [],
@@ -763,23 +778,26 @@ You MUST respond with ONLY valid JSON (no markdown, no preamble, no code fences)
   "agentsSummary": null
 }
 
-Rules:
-- artifactsUpdated: array containing any of "overview", "law", "agents" that were changed
-- updatedOverview: full new overview text if changed, null otherwise
-- lawChanges: if law changes are needed, provide an object: { "add": ["new law text to append"], "modify": [{ "original": "exact existing law text", "replacement": "new text" }], "remove": ["exact law text to remove"] }. Set to null if no law changes.
-  - lawChanges.add: array of new law text strings to append
-  - lawChanges.modify: array of { original: "exact existing law text", replacement: "new text" }
-  - lawChanges.remove: array of exact law text strings to remove
-  - Only include lawChanges when user explicitly requests law changes
-- agentChanges.add: array of {name, role, background, initialStats: {wealth, health, happiness}} for new agents
+RULES FOR LAW CHANGES:
+- When the user requests ANY change to the law (adding, removing, or modifying articles), you MUST set "updatedLaw" to the COMPLETE new law text with all changes applied.
+- Copy ALL existing articles into updatedLaw, then apply the requested changes (add new articles, modify existing ones, or omit removed ones).
+- Do NOT set updatedLaw to null if law changes were requested — always provide the full text.
+- Include "law" in artifactsUpdated when law is changed.
+
+RULES FOR OVERVIEW CHANGES:
+- updatedOverview: full new overview text if changed, null otherwise.
+- Include "overview" in artifactsUpdated when overview is changed.
+
+RULES FOR AGENT CHANGES:
+- agentChanges.add: array of new agents: {"name": "string", "role": "string", "background": "string", "initialStats": {"wealth": 50, "health": 70, "happiness": 60}}
 - agentChanges.remove: array of exact agent names to remove (use names from the roster above)
-- agentChanges.modify: array of {name, role, background, initialStats: {wealth, health, happiness}} for agents to update (use exact names from roster)
-- agentsSummary: brief summary of agent changes if agents were modified, null otherwise
-- All stat values (wealth, health, happiness) must be integers between 0 and 100
-- initialStats must always include all three fields: wealth, health, happiness
-- Agent names must be unique — do not reuse names from the roster above when adding new agents
-- When removing or modifying agents, use exact names from the roster above
-- Only include changes that were explicitly requested`;
+- agentChanges.modify: array of agents to update: {"name": "exact name from roster", "role": "string", "background": "string", "initialStats": {"wealth": 50, "health": 70, "happiness": 60}}
+- Include "agents" in artifactsUpdated when agents are changed.
+- CRITICAL: Every agent in add or modify MUST include initialStats with ALL THREE fields: wealth, health, happiness. Each must be an integer between 0 and 100. Never omit any field.
+- Agent names must be unique — do not reuse names from the roster above when adding new agents.
+- When removing or modifying agents, use exact names from the roster above.
+- agentsSummary: brief summary of agent changes if agents were modified, null otherwise.
+- Only include changes that were explicitly requested.`;
 
   const messages: LLMMessage[] = [{ role: 'system', content: systemPrompt }];
 
@@ -793,3 +811,4 @@ Rules:
   messages.push({ role: 'user', content: userMessage });
   return messages;
 }
+

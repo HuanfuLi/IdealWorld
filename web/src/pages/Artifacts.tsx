@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { Search, FileText, Download, Copy, FolderOpen, Loader2, CheckCircle } from 'lucide-react';
+import MarkdownText from '../components/MarkdownText';
 
 interface ArtifactItem {
   id: string;
@@ -27,44 +28,7 @@ const GROUPS: ArtifactGroup[] = [
   { label: 'Q&A', types: ['qa-transcript'] },
 ];
 
-// ── Markdown renderer (minimal, no deps) ────────────────────────────────────
 
-function renderMarkdown(md: string): React.ReactNode[] {
-  const lines = md.split('\n');
-  const nodes: React.ReactNode[] = [];
-  let i = 0;
-
-  const parseInline = (text: string): React.ReactNode => {
-    const parts = text.split(/(\*\*[^*]+\*\*)/g);
-    return parts.map((p, j) =>
-      p.startsWith('**') && p.endsWith('**')
-        ? <strong key={j}>{p.slice(2, -2)}</strong>
-        : p
-    );
-  };
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    if (line.startsWith('# ')) {
-      nodes.push(<h1 key={i} style={{ color: 'var(--color-bright)', fontSize: '1.6rem', marginBottom: '1rem', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.75rem' }}>{line.slice(2)}</h1>);
-    } else if (line.startsWith('## ')) {
-      nodes.push(<h2 key={i} style={{ color: 'var(--color-bright)', fontSize: '1.2rem', marginTop: '1.5rem', marginBottom: '0.75rem' }}>{line.slice(3)}</h2>);
-    } else if (line.startsWith('### ')) {
-      nodes.push(<h3 key={i} style={{ color: 'var(--primary)', fontSize: '1rem', marginTop: '1.25rem', marginBottom: '0.5rem' }}>{line.slice(4)}</h3>);
-    } else if (line.startsWith('- ')) {
-      nodes.push(<li key={i} style={{ marginLeft: '1.25rem', marginBottom: '0.25rem', color: 'var(--text-muted)' }}>{parseInline(line.slice(2))}</li>);
-    } else if (line === '---') {
-      nodes.push(<hr key={i} style={{ border: 'none', borderTop: '1px solid var(--glass-border)', margin: '1.5rem 0' }} />);
-    } else if (line.trim() === '') {
-      nodes.push(<div key={i} style={{ height: '0.5rem' }} />);
-    } else {
-      nodes.push(<p key={i} style={{ color: 'var(--text-muted)', lineHeight: 1.7, marginBottom: '0.5rem' }}>{parseInline(line)}</p>);
-    }
-    i++;
-  }
-  return nodes;
-}
 
 // ── Main component ───────────────────────────────────────────────────────────
 
@@ -238,7 +202,7 @@ const Artifacts = () => {
               </div>
 
               <div style={{ flex: 1, overflowY: 'auto', padding: '2rem 3rem', lineHeight: 1.8 }}>
-                {renderMarkdown(activeArtifact.content)}
+                <MarkdownText>{activeArtifact.content}</MarkdownText>
               </div>
             </>
           ) : (

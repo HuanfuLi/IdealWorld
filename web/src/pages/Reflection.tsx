@@ -5,6 +5,7 @@ import { useReflectionStore } from '../stores/reflectionStore';
 import { useSimulationStore } from '../stores/simulationStore';
 import { useSessionDetailStore } from '../stores/sessionDetailStore';
 import { LineChart } from '../components/LineChart';
+import MarkdownText from '../components/MarkdownText';
 import type { IterationStats } from '@idealworld/shared';
 
 interface AgentStatsHistory {
@@ -146,8 +147,8 @@ const Reflection = () => {
             {isEvaluating
               ? 'Central Agent evaluating society…'
               : currentPass
-              ? `Pass ${currentPass}: collecting agent reflections (${completedCount}/${totalAgents})`
-              : 'Starting reflection…'}
+                ? `Pass ${currentPass}: collecting agent reflections (${completedCount}/${totalAgents})`
+                : 'Starting reflection…'}
           </span>
         </div>
       )}
@@ -186,7 +187,7 @@ const Reflection = () => {
             {evaluation && (
               <>
                 <h3 style={{ color: 'var(--color-bright)', marginBottom: '0.75rem' }}>Overall Verdict</h3>
-                <p style={{ marginBottom: '2rem' }}>{evaluation.verdict}</p>
+                <MarkdownText>{evaluation.verdict}</MarkdownText>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '2rem' }}>
                   <div style={{ background: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '1.25rem', borderRadius: '12px' }}>
@@ -249,7 +250,7 @@ const Reflection = () => {
                 )}
 
                 <h3 style={{ color: 'var(--color-bright)', marginBottom: '0.75rem' }}>Analysis</h3>
-                <p style={{ whiteSpace: 'pre-wrap' }}>{evaluation.analysis}</p>
+                <MarkdownText>{evaluation.analysis}</MarkdownText>
               </>
             )}
           </div>

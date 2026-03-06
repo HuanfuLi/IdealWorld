@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowRight, CheckSquare, Square, MessageSquare, Send, Users, Clock } from 'lucide-react';
 import { useCompareStore } from '../stores/compareStore';
+import MarkdownText from '../components/MarkdownText';
 import type { SessionMetadata, ComparisonDimension } from '@idealworld/shared';
 
 const stageBadge: Record<string, { label: string; cls: string }> = {
@@ -39,7 +40,7 @@ function DimensionRow({ dim, idx }: { dim: ComparisonDimension; idx: number }) {
       </div>
       {open && (
         <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', lineHeight: 1.6, margin: 0, paddingLeft: '180px' }}>
-          {dim.analysis}
+          <MarkdownText>{dim.analysis}</MarkdownText>
         </p>
       )}
     </div>
@@ -311,9 +312,7 @@ const CompareSessions = () => {
           {/* Narrative */}
           <div className="glass-panel" style={{ padding: '1.5rem', marginBottom: '2rem' }}>
             <h3 style={{ fontSize: '1rem', color: 'var(--color-bright)', marginBottom: '1rem' }}>Central Analysis</h3>
-            {comparison.narrative.split('\n').filter(p => p.trim()).map((para, i) => (
-              <p key={i} style={{ color: 'var(--text-muted)', lineHeight: 1.7, marginBottom: '0.75rem' }}>{para}</p>
-            ))}
+            <MarkdownText>{comparison.narrative}</MarkdownText>
           </div>
 
           {/* Verdict callout */}
@@ -325,7 +324,7 @@ const CompareSessions = () => {
             marginBottom: '2rem',
           }}>
             <p style={{ color: 'var(--color-bright)', fontWeight: 'bold', marginBottom: '0.25rem' }}>Verdict</p>
-            <p style={{ color: 'var(--text-main)', lineHeight: 1.6 }}>{comparison.verdict}</p>
+            <MarkdownText>{comparison.verdict}</MarkdownText>
           </div>
 
           {/* Follow-up chat */}
@@ -348,7 +347,11 @@ const CompareSessions = () => {
                     }}
                   >
                     <p style={{ color: msg.role === 'user' ? 'var(--text-main)' : 'var(--color-bright)', fontSize: '0.9rem', lineHeight: 1.6 }}>
-                      {msg.content}
+                      {msg.role === 'assistant' ? (
+                        <MarkdownText>{msg.content}</MarkdownText>
+                      ) : (
+                        msg.content
+                      )}
                     </p>
                   </div>
                 ))}

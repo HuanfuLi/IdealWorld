@@ -39,14 +39,36 @@ export async function brainstorm(
       readyForDesign: boolean;
     }>(raw);
   } catch {
+    // Build a fallback checklist that preserves already-confirmed items
+    const fallbackChecklist: BrainstormChecklist = {
+      governance: currentChecklist?.governance ?? false,
+      economy: currentChecklist?.economy ?? false,
+      legal: currentChecklist?.legal ?? false,
+      culture: currentChecklist?.culture ?? false,
+      infrastructure: currentChecklist?.infrastructure ?? false,
+    };
+
     // If JSON extraction fails, try regex extraction of the reply field
     const replyMatch = raw.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/);
     if (replyMatch) {
       let extractedReply: string;
       try { extractedReply = JSON.parse(`"${replyMatch[1]}"`); } catch { extractedReply = replyMatch[1]; }
+
+      // Try to extract individual checklist booleans from the raw text
+      const extractBool = (key: string): boolean | undefined => {
+        const m = raw.match(new RegExp(`"${key}"\\s*:\\s*(true|false)`));
+        return m ? m[1] === 'true' : undefined;
+      };
+
       parsed = {
         reply: extractedReply,
-        checklist: { governance: false, economy: false, legal: false, culture: false, infrastructure: false },
+        checklist: {
+          governance: extractBool('governance') ?? fallbackChecklist.governance,
+          economy: extractBool('economy') ?? fallbackChecklist.economy,
+          legal: extractBool('legal') ?? fallbackChecklist.legal,
+          culture: extractBool('culture') ?? fallbackChecklist.culture,
+          infrastructure: extractBool('infrastructure') ?? fallbackChecklist.infrastructure,
+        },
         readyForDesign: false,
       };
     } else {
@@ -54,22 +76,22 @@ export async function brainstorm(
       const sanitized = raw.replace(/^[\s\n]*[{\[]+/, '').replace(/[}\]]+[\s\n]*$/, '').trim().slice(0, 500);
       parsed = {
         reply: sanitized || 'I received your message but had trouble formatting my response. Could you try again?',
-        checklist: { governance: false, economy: false, legal: false, culture: false, infrastructure: false },
+        checklist: fallbackChecklist,
         readyForDesign: false,
       };
     }
   }
 
-  // Force readyForDesign false if any checklist item is still false
-  const checklist = parsed.checklist ?? {
-    governance: false,
-    economy: false,
-    legal: false,
-    culture: false,
-    infrastructure: false,
+  // Force-merge: once an item is confirmed (in currentChecklist), it stays true
+  const checklist: BrainstormChecklist = {
+    governance: (currentChecklist?.governance || parsed.checklist?.governance) ?? false,
+    economy: (currentChecklist?.economy || parsed.checklist?.economy) ?? false,
+    legal: (currentChecklist?.legal || parsed.checklist?.legal) ?? false,
+    culture: (currentChecklist?.culture || parsed.checklist?.culture) ?? false,
+    infrastructure: (currentChecklist?.infrastructure || parsed.checklist?.infrastructure) ?? false,
   };
   const allDone = Object.values(checklist).every(Boolean);
-  const readyForDesign = allDone && (parsed.readyForDesign ?? false);
+  const readyForDesign = allDone; // If all items are confirmed, we're ready
 
   return { reply: parsed.reply, checklist, readyForDesign };
 }
@@ -250,12 +272,13 @@ export async function refine(
     userMessage
   );
 
-  const raw = await withRetry(() => provider.chat(messages, { maxTokens: 8192 }));
+  const raw = await withRetry(() => provider.chat(messages, { maxTokens: 16384 }));
   const parsed = parseJSON<{
     reply: string;
     artifactsUpdated: Array<'overview' | 'law' | 'agents'>;
     updatedOverview: string | null;
     updatedLaw?: string | null;
+    // Backward compat: old diff-based format
     lawChanges?: {
       add?: string[];
       modify?: Array<{ original: string; replacement: string }>;
@@ -269,43 +292,75 @@ export async function refine(
     agentsSummary: string | null;
   }>(raw);
 
-  // Helper: clamp stat values to 0-100 with defaults
-  const clampStats = (s: Partial<{ wealth: number; health: number; happiness: number }> | undefined) => ({
-    wealth: Math.max(0, Math.min(100, Math.round(s?.wealth ?? 50))),
-    health: Math.max(0, Math.min(100, Math.round(s?.health ?? 70))),
-    happiness: Math.max(0, Math.min(100, Math.round(s?.happiness ?? 60))),
-  });
+  // Helper: clamp stat values to 0-100 with defaults, handling any partial/missing data
+  const clampStats = (s: unknown) => {
+    const obj = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>;
+    return {
+      wealth: Math.max(0, Math.min(100, Math.round(Number(obj.wealth) || 50))),
+      health: Math.max(0, Math.min(100, Math.round(Number(obj.health) || 70))),
+      happiness: Math.max(0, Math.min(100, Math.round(Number(obj.happiness) || 60))),
+    };
+  };
 
   const now = new Date().toISOString();
   const updates: Record<string, unknown> = { updatedAt: now };
 
-  if (parsed.updatedOverview) {
+  // Track what was actually updated (don't rely solely on LLM's artifactsUpdated)
+  const actuallyUpdated: Array<'overview' | 'law' | 'agents'> = [];
+
+  // Apply overview changes
+  if (parsed.updatedOverview && typeof parsed.updatedOverview === 'string' && parsed.updatedOverview.trim().length > 0) {
     updates.societyOverview = parsed.updatedOverview;
+    if (!actuallyUpdated.includes('overview')) actuallyUpdated.push('overview');
   }
 
-  // Apply law changes: prefer diff-based lawChanges, fall back to updatedLaw
-  if (parsed.lawChanges) {
+  // Apply law changes: prefer full-text updatedLaw, fall back to diff-based lawChanges
+  if (parsed.updatedLaw && typeof parsed.updatedLaw === 'string' && parsed.updatedLaw.trim().length > 0) {
+    // Full replacement — the robust path
+    updates.law = parsed.updatedLaw.trim();
+    if (!actuallyUpdated.includes('law')) actuallyUpdated.push('law');
+    console.log('[refine] Law updated via full-text replacement');
+  } else if (parsed.lawChanges) {
+    // Backward compat: diff-based approach (fragile, but try it)
     let currentLaw = session.law ?? '';
     const lc = parsed.lawChanges;
-    if (lc.remove?.length) {
-      for (const text of lc.remove) {
-        currentLaw = currentLaw.replace(text, '');
-      }
+    let changed = false;
+
+    if (lc.add?.length) {
+      currentLaw = currentLaw.trimEnd() + '\n\n' + lc.add.join('\n\n');
+      changed = true;
     }
     if (lc.modify?.length) {
       for (const m of lc.modify) {
-        currentLaw = currentLaw.replace(m.original, m.replacement);
+        if (m.original && m.replacement && currentLaw.includes(m.original)) {
+          currentLaw = currentLaw.replace(m.original, m.replacement);
+          changed = true;
+        } else {
+          console.warn(`[refine] lawChanges.modify: could not find exact match for: "${m.original?.slice(0, 80)}..."`);
+        }
       }
     }
-    if (lc.add?.length) {
-      currentLaw = currentLaw.trimEnd() + '\n\n' + lc.add.join('\n\n');
+    if (lc.remove?.length) {
+      for (const text of lc.remove) {
+        if (currentLaw.includes(text)) {
+          currentLaw = currentLaw.replace(text, '');
+          changed = true;
+        } else {
+          console.warn(`[refine] lawChanges.remove: could not find exact match for: "${text?.slice(0, 80)}..."`);
+        }
+      }
     }
-    updates.law = currentLaw.trim();
-  } else if (parsed.updatedLaw) {
-    // Backward compat: LLM returned old format
-    updates.law = parsed.updatedLaw;
+
+    if (changed) {
+      updates.law = currentLaw.trim();
+      if (!actuallyUpdated.includes('law')) actuallyUpdated.push('law');
+      console.log('[refine] Law updated via diff-based changes');
+    } else {
+      console.warn('[refine] lawChanges provided but no changes could be applied (exact text not found)');
+    }
   }
 
+  // Write session updates to DB
   if (Object.keys(updates).length > 1) {
     await db.update(sessions).set(updates).where(eq(sessions.id, session.id));
   }
@@ -321,23 +376,34 @@ export async function refine(
         .delete(agents)
         .where(sql`${agents.sessionId} = ${session.id} AND ${agents.name} = ${name}`);
     }
+    if (!actuallyUpdated.includes('agents')) actuallyUpdated.push('agents');
   }
 
-  // Modify existing agents by name (with stat clamping)
+  // Modify existing agents by name (with robust stat clamping)
   if (agentChanges.modify?.length > 0) {
     for (const a of agentChanges.modify) {
+      if (!a.name || !existingNames.has(a.name)) {
+        console.warn(`[refine] agentChanges.modify: agent "${a.name}" not found in roster, skipping`);
+        continue;
+      }
       const clamped = clampStats(a.initialStats);
       const statsJson = JSON.stringify(clamped);
       await db
         .update(agents)
-        .set({ role: a.role, background: a.background, initialStats: statsJson, currentStats: statsJson })
+        .set({
+          role: a.role || undefined,
+          background: a.background || undefined,
+          initialStats: statsJson,
+          currentStats: statsJson,
+        })
         .where(sql`${agents.sessionId} = ${session.id} AND ${agents.name} = ${a.name}`);
     }
+    if (!actuallyUpdated.includes('agents')) actuallyUpdated.push('agents');
   }
 
-  // Add new agents (with stat clamping + deduplication)
+  // Add new agents (with robust stat clamping + deduplication)
   if (agentChanges.add?.length > 0) {
-    const deduped = agentChanges.add.filter(a => !existingNames.has(a.name));
+    const deduped = agentChanges.add.filter(a => a.name && !existingNames.has(a.name));
     if (deduped.length > 0) {
       const newRows = deduped.map(a => {
         const clamped = clampStats(a.initialStats);
@@ -345,7 +411,7 @@ export async function refine(
           id: uuidv4(),
           sessionId: session.id,
           name: a.name,
-          role: a.role,
+          role: a.role ?? 'citizen',
           background: a.background ?? '',
           initialStats: JSON.stringify(clamped),
           currentStats: JSON.stringify(clamped),
@@ -354,12 +420,18 @@ export async function refine(
         };
       });
       await db.insert(agents).values(newRows);
+      if (!actuallyUpdated.includes('agents')) actuallyUpdated.push('agents');
     }
   }
 
+  // Merge LLM-reported and actually-applied updates
+  const reportedUpdates = parsed.artifactsUpdated ?? [];
+  const mergedUpdates = [...new Set([...actuallyUpdated, ...reportedUpdates.filter(u => actuallyUpdated.includes(u))])];
+
   return {
     reply: parsed.reply,
-    artifactsUpdated: parsed.artifactsUpdated ?? [],
+    artifactsUpdated: mergedUpdates as Array<'overview' | 'law' | 'agents'>,
     agentsSummary: parsed.agentsSummary ?? null,
   };
 }
+

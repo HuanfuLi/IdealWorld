@@ -102,9 +102,19 @@ router.post('/', async (req, res) => {
 
       const updatedConfig: SessionConfig = {
         ...currentConfig,
-        checklist: { ...currentConfig.checklist, ...result.checklist },
+        checklist: {
+          governance: currentConfig.checklist.governance || result.checklist.governance,
+          economy: currentConfig.checklist.economy || result.checklist.economy,
+          legal: currentConfig.checklist.legal || result.checklist.legal,
+          culture: currentConfig.checklist.culture || result.checklist.culture,
+          infrastructure: currentConfig.checklist.infrastructure || result.checklist.infrastructure,
+        },
         readyForDesign: result.readyForDesign,
       };
+
+      // If all checklist items are true, force readyForDesign
+      const allConfirmed = Object.values(updatedConfig.checklist).every(Boolean);
+      if (allConfirmed) updatedConfig.readyForDesign = true;
 
       await db
         .update(sessions)

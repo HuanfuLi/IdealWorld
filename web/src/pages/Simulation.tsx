@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Play, Pause, Square, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle, ArrowRight, GitFork } from 'lucide-react';
 import { useSimulationStore } from '../stores/simulationStore';
 import { useShallow } from 'zustand/react/shallow';
+import MarkdownText from '../components/MarkdownText';
 
 const Simulation = () => {
   const navigate = useNavigate();
@@ -53,7 +54,7 @@ const Simulation = () => {
           useSimulationStore.setState({ isComplete: true });
         }
       }
-    }).catch(() => {});
+    }).catch(() => { });
   }, [id, isComplete]);
 
   useEffect(() => {
@@ -201,7 +202,7 @@ const Simulation = () => {
                     )}
                   </h4>
                   <p style={{ fontSize: '0.95rem', lineHeight: 1.5, color: '#e5e7eb' }}>
-                    {entry.narrativeSummary}
+                    <MarkdownText>{entry.narrativeSummary}</MarkdownText>
                   </p>
                 </div>
               </div>
@@ -209,7 +210,9 @@ const Simulation = () => {
             {isComplete && finalReport && (
               <div style={{ paddingLeft: '1rem', borderLeft: '2px solid var(--success)', marginTop: '0.5rem' }}>
                 <h4 style={{ fontSize: '0.9rem', color: 'var(--success)', marginBottom: '0.5rem' }}>Final Report</h4>
-                <p style={{ fontSize: '0.9rem', lineHeight: 1.6, color: '#e5e7eb', whiteSpace: 'pre-wrap' }}>{finalReport}</p>
+                <div style={{ fontSize: '0.9rem', lineHeight: 1.6, color: '#e5e7eb' }}>
+                  <MarkdownText>{finalReport}</MarkdownText>
+                </div>
               </div>
             )}
             <div ref={feedEndRef} />

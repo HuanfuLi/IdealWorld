@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Send, CheckCircle, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { useReflectionStore } from '../stores/reflectionStore';
 import { useSessionDetailStore } from '../stores/sessionDetailStore';
+import MarkdownText from '../components/MarkdownText';
 import type { Agent } from '@idealworld/shared';
 
 interface ChatMsg {
@@ -114,9 +115,9 @@ const AgentReview = () => {
     search.trim() === ''
       ? list
       : list.filter(a =>
-          a.name.toLowerCase().includes(search.toLowerCase()) ||
-          a.role.toLowerCase().includes(search.toLowerCase())
-        );
+        a.name.toLowerCase().includes(search.toLowerCase()) ||
+        a.role.toLowerCase().includes(search.toLowerCase())
+      );
 
   const activeAgent = agents.find(a => a.id === activeAgentId);
   const currentMessages = activeAgentId ? (chatsByAgent[activeAgentId] ?? []) : [];
@@ -275,7 +276,11 @@ const AgentReview = () => {
                       lineHeight: 1.5,
                       color: 'var(--text-main)',
                     }}>
-                      {msg.content}
+                      {msg.role === 'agent' ? (
+                        <MarkdownText>{msg.content}</MarkdownText>
+                      ) : (
+                        <span style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>
+                      )}
                     </div>
                   </div>
                 ))}
