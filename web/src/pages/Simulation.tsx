@@ -45,26 +45,47 @@ const Simulation = () => {
     reset();
     loadAgents(id);
     loadHistory(id);
+
+    // Immediately fetch session state to restore isRunning/isPaused/totalIterations
+    // before the first SSE event arrives (which can take a long time during iterations)
+    fetch(`/api/sessions/${id}`)
+      .then(r => r.json())
+      .then((s: { stage?: string; config?: { totalIterations?: number } | null }) => {
+        if (s.stage) setSessionStage(s.stage);
+
+        const targetIters = s.config?.totalIterations ?? 0;
+
+        if (s.stage === 'simulating') {
+          // Simulation is actively running; restore the running state immediately
+          useSimulationStore.setState(prev => ({
+            isRunning: true,
+            isPaused: false,
+            isComplete: false,
+            // Use config's totalIterations as the denominator for progress bar
+            totalIterations: targetIters > 0 ? targetIters : prev.totalIterations,
+          }));
+        } else if (s.stage === 'simulation-paused') {
+          useSimulationStore.setState(prev => ({
+            isRunning: false,
+            isPaused: true,
+            isComplete: false,
+            totalIterations: targetIters > 0 ? targetIters : prev.totalIterations,
+          }));
+        } else if (s.stage && s.stage !== 'simulating' && s.stage !== 'simulation-paused') {
+          // Simulation already finished
+          const state = useSimulationStore.getState();
+          if (!state.isRunning && !state.isComplete && state.feed.length > 0) {
+            useSimulationStore.setState({ isComplete: true });
+          }
+        }
+      })
+      .catch(() => { });
+
     // Connect SSE for live updates; will close gracefully if simulation already done
     const disconnect = connectSSE(id);
     sseCleanupRef.current = disconnect;
     return disconnect;
   }, [id]);
-
-  // Check session stage to mark complete if simulation is already done (page refresh case)
-  useEffect(() => {
-    if (!id) return;
-    fetch(`/api/sessions/${id}`).then(r => r.json()).then((s: { stage?: string }) => {
-      if (s.stage) setSessionStage(s.stage);
-      if (s.stage && s.stage !== 'simulating' && s.stage !== 'simulation-paused') {
-        // Simulation already finished
-        const state = useSimulationStore.getState();
-        if (!state.isRunning && !state.isComplete && state.feed.length > 0) {
-          useSimulationStore.setState({ isComplete: true });
-        }
-      }
-    }).catch(() => { });
-  }, [id, isComplete]);
 
   useEffect(() => {
     feedEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -166,7 +187,7 @@ const Simulation = () => {
             style={{
               display: 'flex', alignItems: 'center', gap: '0.5rem',
               cursor: 'pointer', userSelect: 'none',
-              padding: '0.4rem 0.75rem', borderRadius: '8px',
+              padding: '0.75rem 0.75rem', borderRadius: '8px',
               background: autoProceed ? 'rgba(16, 185, 129, 0.15)' : 'var(--panel-alpha-05)',
               border: `1px solid ${autoProceed ? 'rgba(16, 185, 129, 0.4)' : 'var(--glass-border)'}`,
               transition: 'all 0.2s ease',
