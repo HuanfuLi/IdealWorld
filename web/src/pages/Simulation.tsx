@@ -27,7 +27,10 @@ const Simulation = () => {
     continueSimulation: s.continueSimulation, forkSimulation: s.forkSimulation,
   })));
 
-  const [sessionStage, setSessionStage] = useState<string>('simulating');
+  // Initialize to '' so auto-proceed never fires before the session fetch resolves.
+  // If initialized to 'simulating', a race between the Zustand isComplete update and
+  // the local setSessionStage call could trigger auto-proceed with a stale stage value.
+  const [sessionStage, setSessionStage] = useState<string>('');
   const [extraIterations, setExtraIterations] = useState(10);
   const [autoProceed, setAutoProceed] = useState(() => localStorage.getItem('sim-auto-proceed') === 'true');
   const autoProceedRef = useRef(autoProceed);
@@ -75,7 +78,11 @@ const Simulation = () => {
           // Simulation already finished
           const state = useSimulationStore.getState();
           if (!state.isRunning && !state.isComplete && state.feed.length > 0) {
-            useSimulationStore.setState({ isComplete: true });
+            useSimulationStore.setState({
+              isComplete: true,
+              // For completed sims, use config target or fall back to feed length
+              totalIterations: targetIters > 0 ? targetIters : state.feed.length,
+            });
           }
         }
       })
@@ -91,9 +98,15 @@ const Simulation = () => {
     feedEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [feed.length]);
 
-  // Auto-proceed: when simulation finishes and toggle is on, navigate to reflection
+  // Auto-proceed: when simulation finishes and toggle is on, navigate to reflection.
+  // Only fires when the session is still in a simulation stage — prevents triggering
+  // when the user navigates back to this page after reflection/review has started.
+  const simulationStages = ['simulating', 'simulation-paused', 'simulation-complete'];
+
   const handleAutoProceed = useCallback(async () => {
     if (!id || hasAutoProceeded.current) return;
+    // Hard guard: never auto-navigate away if we're already past the simulation stage
+    if (!simulationStages.includes(sessionStage)) return;
     hasAutoProceeded.current = true;
     await fetch(`/api/sessions/${id}/stage`, {
       method: 'PATCH',
@@ -101,13 +114,16 @@ const Simulation = () => {
       body: JSON.stringify({ stage: 'reflecting' }),
     });
     navigate(`/session/${id}/reflection`);
-  }, [id, navigate]);
+  }, [id, navigate, sessionStage]);
 
   useEffect(() => {
-    if (isComplete && !isRunning && autoProceedRef.current && !hasAutoProceeded.current) {
+    // Only auto-proceed when in an active simulation stage — skip if user navigated
+    // back here from a later stage (reflecting, reviewing, completed, etc.)
+    if (isComplete && !isRunning && autoProceedRef.current && !hasAutoProceeded.current
+      && simulationStages.includes(sessionStage)) {
       handleAutoProceed();
     }
-  }, [isComplete, isRunning, handleAutoProceed]);
+  }, [isComplete, isRunning, handleAutoProceed, sessionStage]);
 
   const handlePauseResume = async () => {
     if (!id) return;
@@ -366,39 +382,42 @@ const Simulation = () => {
               <Users size={18} /> Agent Status
             </h3>
           </div>
-          <div style={{ flex: 1, padding: '1.5rem', overflowY: 'auto' }}>
-            {agents.length > 0 ? (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '2rem' }}>
-                {agents.map(a => (
-                  <div
-                    key={a.id}
-                    style={{
-                      width: '14px', height: '14px',
-                      borderRadius: '50%',
-                      background: getAgentColor(a),
-                      boxShadow: a.isAlive ? `0 0 5px ${getAgentColor(a)}` : 'none',
-                      cursor: 'pointer',
-                      opacity: a.isAlive ? 1 : 0.3,
-                    }}
-                    title={`${a.name} (${a.role}) — W:${a.currentStats.wealth} H:${a.currentStats.health} Hap:${a.currentStats.happiness}${!a.isAlive ? ' [dead]' : ''}`}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div style={{ marginBottom: '2rem', color: 'var(--text-dim)', fontSize: '0.85rem' }}>
-                Agent data loading…
-              </div>
-            )}
+          <div style={{ flex: 1, padding: '1.5rem', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {/* Agent dots — fixed height, no internal scroll needed */}
+            <div style={{ flexShrink: 0 }}>
+              {agents.length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
+                  {agents.map(a => (
+                    <div
+                      key={a.id}
+                      style={{
+                        width: '14px', height: '14px',
+                        borderRadius: '50%',
+                        background: getAgentColor(a),
+                        boxShadow: a.isAlive ? `0 0 5px ${getAgentColor(a)}` : 'none',
+                        cursor: 'pointer',
+                        opacity: a.isAlive ? 1 : 0.3,
+                      }}
+                      title={`${a.name} (${a.role}) — W:${a.currentStats.wealth} H:${a.currentStats.health} Hap:${a.currentStats.happiness}${!a.isAlive ? ' [dead]' : ''}`}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div style={{ marginBottom: '1rem', color: 'var(--text-dim)', fontSize: '0.85rem' }}>
+                  Agent data loading…
+                </div>
+              )}
+              <hr style={{ border: 'none', borderTop: '1px solid var(--glass-border)', margin: '0 0 1rem' }} />
+              <h4 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem', textTransform: 'uppercase' as const }}>
+                Lifecycle Events
+              </h4>
+            </div>
 
-            <hr style={{ border: 'none', borderTop: '1px solid var(--glass-border)', margin: '0 0 1rem' }} />
-
-            <h4 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem', textTransform: 'uppercase' as const }}>
-              Lifecycle Events
-            </h4>
+            {/* Lifecycle events — expands to fill all remaining space */}
             {allLifecycleEvents.length === 0 ? (
               <div style={{ fontSize: '0.9rem', color: 'var(--text-dim)' }}>No events yet.</div>
             ) : (
-              <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+              <div style={{ flex: 1, overflowY: 'auto' }}>
                 {allLifecycleEvents.map((e, idx) => (
                   <div key={idx} style={{ fontSize: '0.9rem', color: 'var(--text-dim)', paddingBottom: '0.5rem' }}>
                     <span style={{ color: 'var(--text-muted)' }}>Iter {e.iterNum}:</span>{' '}

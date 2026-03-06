@@ -67,7 +67,7 @@ export async function runReflection(sessionId: string): Promise<void> {
     const pass1Tasks = citizenAgents.map(agent => async () => {
       try {
         const messages = buildAgentReflectionPrompt(agent, session, iterationSummaries);
-        const raw = await provider.chat(messages, { model: settings.centralAgentModel });
+        const raw = await citizenProv.chat(messages, { model: settings.citizenAgentModel });
         const { pass1 } = parseAgentReflection(raw);
         pass1Map.set(agent.id, pass1);
 

@@ -110,7 +110,6 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
         feed,
         statsHistory,
         currentIteration: iters[iters.length - 1].number,
-        totalIterations: iters.length,
       });
     } catch { /* ignore */ }
   },
@@ -133,7 +132,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       set(state => {
         // Clone mutable state we'll update across the batch
         let { isRunning, isPaused, isComplete, currentIteration, totalIterations,
-              pendingIntents, feed, statsHistory, finalReport, error } = state;
+          pendingIntents, feed, statsHistory, finalReport, error } = state;
 
         // Process as mutable copies to avoid intermediate object allocations
         feed = [...feed];
