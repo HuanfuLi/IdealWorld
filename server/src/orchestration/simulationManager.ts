@@ -21,7 +21,7 @@ interface SimulationState {
 
 export type SimulationEvent =
   | { type: 'iteration-start'; iteration: number; total: number }
-  | { type: 'agent-intent'; agentId: string; agentName: string; intent: string }
+  | { type: 'agent-intent'; agentId: string; agentName: string; intent: string; actionCode: string; actionTarget: string | null }
   | { type: 'resolution'; iteration: number; narrativeSummary: string; lifecycleEvents: unknown[] }
   | { type: 'iteration-complete'; iteration: number; stats: Record<string, unknown> }
   | { type: 'simulation-complete'; finalReport: string }

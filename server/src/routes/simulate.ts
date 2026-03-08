@@ -10,7 +10,7 @@
  * GET    /stream  — SSE event stream
  */
 import { Router } from 'express';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db, sqlite } from '../db/index.js';
 import {
   iterations, agentIntents, resolvedActions,
@@ -64,6 +64,12 @@ router.post('/', async (req, res) => {
     return res.status(409).json({ error: 'Simulation already running' });
   }
 
+  // Persist totalIterations in session config so resume-after-restart can compute remaining count
+  const existingConfig = (session.config as Record<string, unknown> | null) ?? {};
+  const updatedConfig = JSON.stringify({ ...existingConfig, totalIterations });
+  sqlite.prepare(`UPDATE sessions SET config = ?, updated_at = ? WHERE id = ?`)
+    .run(updatedConfig, new Date().toISOString(), id);
+
   // Fire-and-forget: run in background
   runSimulation(id, totalIterations).catch(err =>
     console.error('[simulate route] unhandled error:', err)
@@ -84,13 +90,42 @@ router.post('/pause', (req, res) => {
 });
 
 // POST /simulate/resume
-router.post('/resume', (req, res) => {
+router.post('/resume', async (req, res) => {
   const { id } = req.params as { id: string };
-  const status = simulationManager.getStatus(id);
-  if (status !== 'paused') {
-    return res.status(409).json({ error: 'Simulation is not paused' });
+  const memStatus = simulationManager.getStatus(id);
+
+  if (memStatus === 'running') {
+    return res.status(409).json({ error: 'Simulation is already running' });
   }
-  simulationManager.resume(id);
+
+  if (memStatus === 'paused') {
+    // Normal case: in-memory runner is paused, just signal it to continue
+    simulationManager.resume(id);
+    return res.json({ ok: true });
+  }
+
+  // memStatus === 'idle': runner is gone (server restart). Check DB for paused stage.
+  const session = await sessionRepo.getById(id);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+  if (session.stage !== 'simulation-paused') {
+    return res.status(409).json({ error: 'No paused simulation to resume' });
+  }
+
+  // Compute how many iterations remain
+  const [maxRow] = await db
+    .select({ max: sql<number>`max(${iterations.iterationNumber})` })
+    .from(iterations)
+    .where(eq(iterations.sessionId, id));
+  const completedCount = maxRow?.max ?? 0;
+  const config = (session.config as Record<string, unknown> | null) ?? {};
+  const plannedTotal = typeof config.totalIterations === 'number' ? config.totalIterations : 20;
+  const remaining = Math.max(1, plannedTotal - completedCount);
+
+  // Restart runner fire-and-forget
+  runSimulation(id, remaining).catch(err =>
+    console.error('[resume route] unhandled error:', err)
+  );
+
   return res.json({ ok: true });
 });
 

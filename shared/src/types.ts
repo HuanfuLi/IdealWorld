@@ -142,6 +142,9 @@ export interface IterationStats {
   giniWealth?: number;
   /** Gini coefficient for happiness inequality */
   giniHappiness?: number;
+  /** Society-wide averages for hidden biological signals */
+  avgCortisol?: number;
+  avgDopamine?: number;
 }
 
 export interface SocietyDesign {

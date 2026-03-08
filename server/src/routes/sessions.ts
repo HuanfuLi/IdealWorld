@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { eq, asc, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { sessions, agents, iterations, chatMessages } from '../db/schema.js';
+import { sessions, agents, iterations, chatMessages, agentIntents } from '../db/schema.js';
 import { v4 as uuidv4 } from 'uuid';
 import type { SessionMetadata, SessionDetail, Agent, ChatMessage, Stage } from '@idealworld/shared';
 
@@ -158,6 +158,50 @@ router.get('/:id/agents', async (req, res) => {
   } catch (err) {
     console.error('GET /sessions/:id/agents error:', err);
     res.status(500).json({ error: 'Failed to load agents' });
+  }
+});
+
+// GET /api/sessions/:id/agent-intents — all stored agent intents grouped by agent
+router.get('/:id/agent-intents', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const rows = await db
+      .select({
+        agentId: agentIntents.agentId,
+        agentName: agents.name,
+        role: agents.role,
+        actionCode: agentIntents.actionCode,
+        actionTarget: agentIntents.actionTarget,
+        intent: agentIntents.intent,
+        iterationNumber: iterations.iterationNumber,
+      })
+      .from(agentIntents)
+      .innerJoin(agents, eq(agentIntents.agentId, agents.id))
+      .leftJoin(iterations, eq(agentIntents.iterationId, iterations.id))
+      .where(eq(agentIntents.sessionId, id))
+      .orderBy(asc(iterations.iterationNumber));
+
+    // Group by agentId preserving insertion order
+    const byAgent = new Map<string, {
+      agentId: string; agentName: string; role: string;
+      intents: Array<{ iterationNumber: number; actionCode: string; actionTarget: string | null; narrative: string }>;
+    }>();
+    for (const row of rows) {
+      if (!byAgent.has(row.agentId)) {
+        byAgent.set(row.agentId, { agentId: row.agentId, agentName: row.agentName, role: row.role, intents: [] });
+      }
+      byAgent.get(row.agentId)!.intents.push({
+        iterationNumber: row.iterationNumber ?? 0,
+        actionCode: row.actionCode ?? 'NONE',
+        actionTarget: row.actionTarget ?? null,
+        narrative: row.intent,
+      });
+    }
+
+    res.json({ agents: Array.from(byAgent.values()) });
+  } catch (err) {
+    console.error('GET /sessions/:id/agent-intents error:', err);
+    res.status(500).json({ error: 'Failed to load agent intents' });
   }
 });
 

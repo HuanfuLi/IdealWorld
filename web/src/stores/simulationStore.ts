@@ -4,7 +4,7 @@ import type { Agent, Iteration, IterationStats } from '@idealworld/shared';
 // SSE event shapes mirroring server's SimulationEvent union
 type SSEEvent =
   | { type: 'iteration-start'; iteration: number; total: number }
-  | { type: 'agent-intent'; agentId: string; agentName: string; intent: string }
+  | { type: 'agent-intent'; agentId: string; agentName: string; intent: string; actionCode: string; actionTarget: string | null }
   | { type: 'resolution'; iteration: number; narrativeSummary: string; lifecycleEvents: LifecycleEvent[] }
   | { type: 'iteration-complete'; iteration: number; stats: IterationStats }
   | { type: 'simulation-complete'; finalReport: string }
@@ -16,6 +16,15 @@ export interface LifecycleEvent {
   type: 'death' | 'role_change';
   agentId: string;
   detail: string;
+}
+
+export interface AgentIntentRecord {
+  agentId: string;
+  agentName: string;
+  iterationNumber: number;
+  actionCode: string;
+  actionTarget: string | null;
+  narrative: string;
 }
 
 export interface IterationFeed {
@@ -35,7 +44,9 @@ interface SimulationStore {
 
   // Live feed
   feed: IterationFeed[];
-  pendingIntents: Record<string, string>; // agentId → intent
+  pendingIntents: Record<string, string>; // agentId → narrative
+  pendingActionCodes: Record<string, { actionCode: string; actionTarget: string | null }>;
+  agentIntentHistory: Record<string, AgentIntentRecord[]>; // agentId → sorted history
 
   // Stats history
   statsHistory: IterationStats[];
@@ -52,6 +63,7 @@ interface SimulationStore {
   // Actions
   loadAgents: (sessionId: string) => Promise<void>;
   loadHistory: (sessionId: string) => Promise<void>;
+  loadIntentHistory: (sessionId: string) => Promise<void>;
   connectSSE: (sessionId: string) => () => void;
   pause: (sessionId: string) => Promise<void>;
   resume: (sessionId: string) => Promise<void>;
@@ -70,6 +82,8 @@ const initialState = {
   totalIterations: 0,
   feed: [] as IterationFeed[],
   pendingIntents: {} as Record<string, string>,
+  pendingActionCodes: {} as Record<string, { actionCode: string; actionTarget: string | null }>,
+  agentIntentHistory: {} as Record<string, AgentIntentRecord[]>,
   statsHistory: [] as IterationStats[],
   agents: [] as Agent[],
   finalReport: null as string | null,
@@ -116,6 +130,31 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
     } catch { /* ignore */ }
   },
 
+  loadIntentHistory: async (sessionId: string) => {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/agent-intents`);
+      if (!res.ok) return;
+      const data = await res.json() as {
+        agents: Array<{
+          agentId: string; agentName: string; role: string;
+          intents: Array<{ iterationNumber: number; actionCode: string; actionTarget: string | null; narrative: string }>;
+        }>;
+      };
+      const history: Record<string, AgentIntentRecord[]> = {};
+      for (const a of data.agents) {
+        history[a.agentId] = a.intents.map(i => ({
+          agentId: a.agentId,
+          agentName: a.agentName,
+          iterationNumber: i.iterationNumber,
+          actionCode: i.actionCode,
+          actionTarget: i.actionTarget,
+          narrative: i.narrative,
+        }));
+      }
+      set({ agentIntentHistory: history });
+    } catch { /* ignore */ }
+  },
+
   connectSSE: (sessionId: string) => {
     const es = new EventSource(`/api/sessions/${sessionId}/simulate/stream`);
 
@@ -134,11 +173,14 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       set(state => {
         // Clone mutable state we'll update across the batch
         let { isRunning, isPaused, isComplete, currentIteration, totalIterations,
-          pendingIntents, feed, statsHistory, finalReport, error } = state;
+          pendingIntents, pendingActionCodes, agentIntentHistory,
+          feed, statsHistory, finalReport, error } = state;
 
         // Process as mutable copies to avoid intermediate object allocations
         feed = [...feed];
         pendingIntents = { ...pendingIntents };
+        pendingActionCodes = { ...pendingActionCodes };
+        agentIntentHistory = { ...agentIntentHistory };
 
         for (const event of batch) {
           switch (event.type) {
@@ -148,11 +190,27 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
               currentIteration = event.iteration;
               totalIterations = event.total;
               pendingIntents = {};
+              pendingActionCodes = {};
               break;
 
-            case 'agent-intent':
+            case 'agent-intent': {
               pendingIntents[event.agentId] = event.intent;
+              pendingActionCodes[event.agentId] = { actionCode: event.actionCode, actionTarget: event.actionTarget };
+              // Accumulate in history (deduplicate by agentId + iterationNumber)
+              const agentHistory = agentIntentHistory[event.agentId] ?? [];
+              const alreadyRecorded = agentHistory.some(r => r.iterationNumber === currentIteration);
+              if (!alreadyRecorded && currentIteration > 0) {
+                agentIntentHistory[event.agentId] = [...agentHistory, {
+                  agentId: event.agentId,
+                  agentName: event.agentName,
+                  iterationNumber: currentIteration,
+                  actionCode: event.actionCode,
+                  actionTarget: event.actionTarget,
+                  narrative: event.intent,
+                }];
+              }
               break;
+            }
 
             case 'resolution': {
               const entry: IterationFeed = {
@@ -212,7 +270,8 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
         return {
           isRunning, isPaused, isComplete, currentIteration, totalIterations,
-          pendingIntents, feed, statsHistory, finalReport, error,
+          pendingIntents, pendingActionCodes, agentIntentHistory,
+          feed, statsHistory, finalReport, error,
         };
       });
 
@@ -253,8 +312,10 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   },
 
   resume: async (sessionId: string) => {
-    await fetch(`/api/sessions/${sessionId}/simulate/resume`, { method: 'POST' });
-    set({ isPaused: false, isRunning: true });
+    const res = await fetch(`/api/sessions/${sessionId}/simulate/resume`, { method: 'POST' });
+    if (res.ok) {
+      set({ isPaused: false, isRunning: true });
+    }
   },
 
   abort: async (sessionId: string) => {

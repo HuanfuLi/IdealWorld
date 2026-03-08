@@ -96,11 +96,15 @@ function computeStats(agents: Agent[], iterationNumber: number): IterationStats 
       totalCount: agents.length,
       giniWealth: 0,
       giniHappiness: 0,
+      avgCortisol: 0,
+      avgDopamine: 0,
     };
   }
   const wArr = alive.map(a => a.currentStats.wealth);
   const hArr = alive.map(a => a.currentStats.health);
   const hapArr = alive.map(a => a.currentStats.happiness);
+  const cortArr = alive.map(a => a.currentStats.cortisol ?? 0);
+  const dopArr = alive.map(a => a.currentStats.dopamine ?? 0);
   return {
     iterationNumber,
     avgWealth: Math.round(wArr.reduce((s, v) => s + v, 0) / alive.length),
@@ -113,6 +117,8 @@ function computeStats(agents: Agent[], iterationNumber: number): IterationStats 
     totalCount: agents.length,
     giniWealth: gini(wArr),
     giniHappiness: gini(hapArr),
+    avgCortisol: Math.round(cortArr.reduce((s, v) => s + v, 0) / alive.length),
+    avgDopamine: Math.round(dopArr.reduce((s, v) => s + v, 0) / alive.length),
   };
 }
 
@@ -391,15 +397,19 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           agentId: intent.agentId,
           agentName: intent.agentName,
           intent: intent.intent,
+          actionCode: intent.actionCode ?? 'NONE',
+          actionTarget: intent.actionTarget ?? null,
         });
       }
 
       // Enqueue intent rows for async batch flush (non-blocking)
-      const intentCols = ['id', 'session_id', 'agent_id', 'iteration_id', 'intent', 'reasoning', 'created_at'];
+      const intentCols = ['id', 'session_id', 'agent_id', 'iteration_id', 'intent', 'reasoning', 'action_code', 'action_target', 'created_at'];
       for (const intent of intents) {
         asyncLogFlusher.enqueue('agent_intents', intentCols, [
           uuidv4(), sessionId, intent.agentId, iterationId,
-          intent.intent, intent.reasoning ?? '', now,
+          intent.intent, intent.reasoning ?? '',
+          intent.actionCode ?? 'NONE', intent.actionTarget ?? null,
+          now,
         ]);
       }
 

@@ -36,6 +36,8 @@ export const agentIntents = sqliteTable('agent_intents', {
   iterationId: text('iteration_id'),
   intent: text('intent').notNull(),
   reasoning: text('reasoning'),
+  actionCode: text('action_code').notNull().default('NONE'),
+  actionTarget: text('action_target'),
   createdAt: text('created_at').notNull(),
 });
 

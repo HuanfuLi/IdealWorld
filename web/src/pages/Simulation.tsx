@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Play, Pause, Square, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle, ArrowRight, GitFork, Zap } from 'lucide-react';
-import { useSimulationStore } from '../stores/simulationStore';
+import { Play, Pause, Square, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle, ArrowRight, GitFork, Zap, ChevronDown, ChevronRight } from 'lucide-react';
+import { useSimulationStore, type AgentIntentRecord } from '../stores/simulationStore';
 import { useShallow } from 'zustand/react/shallow';
 import MarkdownText from '../components/MarkdownText';
 
@@ -27,11 +27,20 @@ const Simulation = () => {
     continueSimulation: s.continueSimulation, forkSimulation: s.forkSimulation,
   })));
 
+  const { pendingActionCodes, agentIntentHistory, loadIntentHistory } = useSimulationStore(
+    useShallow(s => ({
+      pendingActionCodes: s.pendingActionCodes,
+      agentIntentHistory: s.agentIntentHistory,
+      loadIntentHistory: s.loadIntentHistory,
+    }))
+  );
+
   // Initialize to '' so auto-proceed never fires before the session fetch resolves.
   // If initialized to 'simulating', a race between the Zustand isComplete update and
   // the local setSessionStage call could trigger auto-proceed with a stale stage value.
   const [sessionStage, setSessionStage] = useState<string>('');
   const [extraIterations, setExtraIterations] = useState(10);
+  const [agentStatusTab, setAgentStatusTab] = useState<'lifecycle' | 'intents'>('intents');
   const [autoProceed, setAutoProceed] = useState(() => localStorage.getItem('sim-auto-proceed') === 'true');
   const autoProceedRef = useRef(autoProceed);
   const sseCleanupRef = useRef<(() => void) | null>(null);
@@ -50,6 +59,7 @@ const Simulation = () => {
     const init = async () => {
       await loadAgents(id);
       await loadHistory(id);
+      await loadIntentHistory(id);
 
       try {
         const r = await fetch(`/api/sessions/${id}`);
@@ -354,6 +364,24 @@ const Simulation = () => {
                   max={latestStats.maxHappiness}
                   history={statsHistory.map(s => s.avgHappiness)}
                 />
+                {latestStats.avgCortisol !== undefined && (
+                  <StatCard
+                    label="Cortisol"
+                    color="#f97316"
+                    icon={<Activity size={16} />}
+                    avg={latestStats.avgCortisol}
+                    history={statsHistory.map(s => s.avgCortisol ?? 0)}
+                  />
+                )}
+                {latestStats.avgDopamine !== undefined && (
+                  <StatCard
+                    label="Dopamine"
+                    color="#a78bfa"
+                    icon={<Zap size={16} />}
+                    avg={latestStats.avgDopamine}
+                    history={statsHistory.map(s => s.avgDopamine ?? 0)}
+                  />
+                )}
                 <div style={{ background: 'var(--panel-alpha-05)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--glass-border)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Users size={16} /> Population</span>
@@ -409,27 +437,46 @@ const Simulation = () => {
                   Agent data loading…
                 </div>
               )}
-              <hr style={{ border: 'none', borderTop: '1px solid var(--glass-border)', margin: '0 0 1rem' }} />
-              <h4 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem', textTransform: 'uppercase' as const }}>
-                Lifecycle Events
-              </h4>
-            </div>
-
-            {/* Lifecycle events — expands to fill all remaining space */}
-            {allLifecycleEvents.length === 0 ? (
-              <div style={{ fontSize: '0.9rem', color: 'var(--text-dim)' }}>No events yet.</div>
-            ) : (
-              <div style={{ flex: 1, overflowY: 'auto' }}>
-                {allLifecycleEvents.map((e, idx) => (
-                  <div key={idx} style={{ fontSize: '0.9rem', color: 'var(--text-dim)', paddingBottom: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Iter {e.iterNum}:</span>{' '}
-                    <span style={{ color: e.type === 'death' ? 'var(--danger)' : 'var(--primary)' }}>
-                      {e.type === 'death' ? '💀' : '🔄'}
-                    </span>{' '}
-                    {e.detail}
-                  </div>
+              {/* Tab bar */}
+              <div style={{ display: 'flex', borderBottom: '1px solid var(--glass-border)', marginBottom: '0.75rem', gap: 0 }}>
+                {(['intents', 'lifecycle'] as const).map(tab => (
+                  <button key={tab} onClick={() => setAgentStatusTab(tab)} style={{
+                    flex: 1, padding: '0.4rem 0', fontSize: '0.75rem', fontWeight: 600,
+                    textTransform: 'uppercase', letterSpacing: '0.05em', cursor: 'pointer',
+                    border: 'none', borderBottom: `2px solid ${agentStatusTab === tab ? 'var(--primary)' : 'transparent'}`,
+                    background: 'transparent', color: agentStatusTab === tab ? 'var(--primary)' : 'var(--text-dim)',
+                    transition: 'color 0.15s, border-color 0.15s',
+                  }}>
+                    {tab === 'intents' ? 'Intents' : 'Lifecycle'}
+                  </button>
                 ))}
               </div>
+            </div>
+
+            {/* Tab content — expands to fill remaining space */}
+            {agentStatusTab === 'lifecycle' ? (
+              allLifecycleEvents.length === 0 ? (
+                <div style={{ fontSize: '0.9rem', color: 'var(--text-dim)' }}>No events yet.</div>
+              ) : (
+                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+                  {allLifecycleEvents.map((e, idx) => (
+                    <div key={idx} style={{ fontSize: '0.9rem', color: 'var(--text-dim)', paddingBottom: '0.5rem' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Iter {e.iterNum}:</span>{' '}
+                      <span style={{ color: e.type === 'death' ? 'var(--danger)' : 'var(--primary)' }}>
+                        {e.type === 'death' ? '💀' : '🔄'}
+                      </span>{' '}
+                      {e.detail}
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : (
+              <AgentIntentPanel
+                agents={agents}
+                agentIntentHistory={agentIntentHistory}
+                pendingActionCodes={pendingActionCodes}
+                currentIteration={currentIteration}
+              />
             )}
           </div>
         </div>
@@ -504,13 +551,191 @@ const Simulation = () => {
   );
 };
 
+// ── Action Code Styling ───────────────────────────────────────────────────────
+
+const ACTION_COLORS: Record<string, string> = {
+  WORK: '#10b981', PRODUCE: '#059669', EAT: '#84cc16',
+  TRADE: '#f59e0b', POST_BUY_ORDER: '#d97706', POST_SELL_ORDER: '#b45309', SET_WAGE: '#92400e',
+  REST: '#60a5fa', INVEST: '#818cf8',
+  STRIKE: '#f97316', CONSUME: '#a78bfa',
+  STEAL: '#ef4444', SABOTAGE: '#dc2626',
+  HELP: '#ec4899',
+  NONE: '#6b7280',
+};
+
+function actionBadge(actionCode: string, actionTarget: string | null) {
+  const color = ACTION_COLORS[actionCode] ?? ACTION_COLORS.NONE;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
+      <span style={{
+        background: `${color}22`, border: `1px solid ${color}66`, color,
+        borderRadius: '4px', padding: '1px 6px', fontSize: '0.72rem', fontWeight: 700,
+        letterSpacing: '0.04em', fontFamily: 'monospace',
+      }}>{actionCode}</span>
+      {actionTarget && (
+        <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>→ {actionTarget}</span>
+      )}
+    </span>
+  );
+}
+
+// ── AgentIntentPanel ──────────────────────────────────────────────────────────
+
+interface AgentIntentPanelProps {
+  agents: Array<{ id: string; name: string; role: string; isAlive: boolean }>;
+  agentIntentHistory: Record<string, AgentIntentRecord[]>;
+  pendingActionCodes: Record<string, { actionCode: string; actionTarget: string | null }>;
+  currentIteration: number;
+}
+
+function AgentIntentPanel({ agents, agentIntentHistory, pendingActionCodes, currentIteration }: AgentIntentPanelProps) {
+  const citizenAgents = agents.filter(a => !(a as any).isCentralAgent);
+  const sorted = [...citizenAgents].sort((a, b) => {
+    if (a.isAlive !== b.isAlive) return a.isAlive ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  if (sorted.length === 0) {
+    return <div style={{ fontSize: '0.9rem', color: 'var(--text-dim)' }}>No agents yet.</div>;
+  }
+
+  return (
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      {sorted.map(agent => (
+        <div key={agent.id} style={{ marginBottom: '0.5rem' }}>
+          <AgentIntentCard
+            agent={agent}
+            history={agentIntentHistory[agent.id] ?? []}
+            pending={pendingActionCodes[agent.id] ?? null}
+            currentIteration={currentIteration}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── AgentIntentCard ───────────────────────────────────────────────────────────
+
+interface AgentIntentCardProps {
+  agent: { id: string; name: string; role: string; isAlive: boolean };
+  history: AgentIntentRecord[];
+  pending: { actionCode: string; actionTarget: string | null } | null;
+  currentIteration: number;
+}
+
+function AgentIntentCard({ agent, history, pending, currentIteration }: AgentIntentCardProps) {
+  const [expanded, setExpanded] = useState(false);
+  const [expandedIntents, setExpandedIntents] = useState<Set<number>>(new Set());
+
+  // Current action: live pending if it exists, otherwise last in history
+  const latestRecord = history[history.length - 1] ?? null;
+  const currentActionCode = pending?.actionCode ?? latestRecord?.actionCode ?? null;
+  const currentActionTarget = pending !== null ? pending.actionTarget : latestRecord?.actionTarget ?? null;
+
+  const toggleIntent = (iterNum: number) => {
+    setExpandedIntents(prev => {
+      const next = new Set(prev);
+      if (next.has(iterNum)) next.delete(iterNum);
+      else next.add(iterNum);
+      return next;
+    });
+  };
+
+  // Show history in reverse chronological order
+  const historyDesc = [...history].reverse();
+
+  return (
+    <div style={{
+      border: '1px solid var(--glass-border)',
+      borderRadius: '8px',
+      background: agent.isAlive ? 'var(--panel-alpha-05)' : 'rgba(0,0,0,0.1)',
+      opacity: agent.isAlive ? 1 : 0.55,
+      overflow: 'hidden',
+    }}>
+      {/* Card header */}
+      <div style={{ padding: '0.5rem 0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', marginBottom: '0.25rem' }}>
+            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: agent.isAlive ? 'var(--color-bright)' : 'var(--text-dim)' }}>
+              {agent.name}
+            </span>
+            {!agent.isAlive && <span style={{ fontSize: '0.68rem', color: 'var(--danger)' }}>†</span>}
+          </div>
+          {currentActionCode ? (
+            actionBadge(currentActionCode, currentActionTarget)
+          ) : (
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>No action yet</span>
+          )}
+        </div>
+        {history.length > 0 && (
+          <button
+            onClick={() => setExpanded(e => !e)}
+            style={{
+              background: 'transparent', border: '1px solid var(--glass-border)',
+              borderRadius: '6px', padding: '0.2rem 0.5rem', cursor: 'pointer',
+              color: 'var(--text-muted)', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.2rem',
+              whiteSpace: 'nowrap', flexShrink: 0,
+            }}
+          >
+            {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            {history.length}
+          </button>
+        )}
+      </div>
+
+      {/* Expanded history */}
+      {expanded && history.length > 0 && (
+        <div style={{ borderTop: '1px solid var(--glass-border)', padding: '0.5rem 0.75rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+          {historyDesc.map(record => {
+            const isOpen = expandedIntents.has(record.iterationNumber);
+            return (
+              <div key={record.iterationNumber}
+                style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--glass-border)' }}
+              >
+                <div
+                  onClick={() => toggleIntent(record.iterationNumber)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                    padding: '0.3rem 0.5rem', cursor: 'pointer',
+                    background: isOpen ? 'var(--panel-alpha-10)' : 'transparent',
+                    userSelect: 'none',
+                  }}
+                >
+                  {isOpen ? <ChevronDown size={11} color="var(--text-dim)" /> : <ChevronRight size={11} color="var(--text-dim)" />}
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', minWidth: '3.5rem' }}>
+                    Iter {record.iterationNumber}
+                  </span>
+                  {actionBadge(record.actionCode, record.actionTarget)}
+                </div>
+                {isOpen && record.narrative && (
+                  <div style={{
+                    padding: '0.4rem 0.75rem 0.4rem 1.5rem',
+                    fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.5,
+                    borderTop: '1px solid var(--glass-border)',
+                    background: 'var(--panel-alpha-05)',
+                  }}>
+                    {record.narrative}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── StatCard ──────────────────────────────────────────────────────────────────
+
 interface StatCardProps {
   label: string;
   color: string;
   icon: React.ReactNode;
   avg: number;
-  min: number;
-  max: number;
+  min?: number;
+  max?: number;
   history: number[];
 }
 
@@ -530,9 +755,11 @@ function StatCard({ label, color, icon, avg, min, max, history }: StatCardProps)
           <div key={i} style={{ flex: 1, background: color, height: `${Math.round((v / peak) * 100)}%`, opacity: 0.6, minHeight: '2px' }} />
         ))}
       </div>
-      <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', textAlign: 'right' as const, marginTop: '0.5rem' }}>
-        min {min} / max {max}
-      </div>
+      {min !== undefined && max !== undefined && (
+        <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', textAlign: 'right' as const, marginTop: '0.5rem' }}>
+          min {min} / max {max}
+        </div>
+      )}
     </div>
   );
 }

@@ -165,5 +165,13 @@ export function runMigrations() {
       ON market_prices(session_id, iteration_number);
   `);
 
+  // Agent intents: add actionCode and actionTarget columns (idempotent)
+  try {
+    sqlite.exec(`ALTER TABLE agent_intents ADD COLUMN action_code TEXT NOT NULL DEFAULT 'NONE';`);
+  } catch { /* column already exists */ }
+  try {
+    sqlite.exec(`ALTER TABLE agent_intents ADD COLUMN action_target TEXT;`);
+  } catch { /* column already exists */ }
+
   console.log('Database migrations applied.');
 }
