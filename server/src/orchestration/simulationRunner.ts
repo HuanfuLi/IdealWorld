@@ -50,7 +50,7 @@ import { retryWithHealing } from '../llm/retryWithHealing.js';
 // Phase 1 Economy imports
 import { runEconomyIteration, initializeAgentEconomy, cleanupSessionEconomy, type EconomyAgentInput } from '../mechanics/economyEngine.js';
 import { economyRepo, type AgentEconomyState } from '../db/repos/economyRepo.js';
-import type { SkillMatrix, Inventory } from '@idealworld/shared';
+import type { SkillMatrix, Inventory, PriceIndex, ItemType } from '@idealworld/shared';
 import { DEFAULT_SKILL_MATRIX, DEFAULT_INVENTORY } from '@idealworld/shared';
 import { v4 as ecoUuid } from 'uuid';
 // Phase 3 Cognitive Engine imports
@@ -227,6 +227,9 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       }
     }
 
+    // Market board prices: seeded from DB on resume, updated at end of each iteration
+    let prevMarketPrices: PriceIndex[] = [];
+
     // Load previous summaries for final report if continuing
     if (startIter > 1) {
       const prevIters = await db.select({
@@ -242,6 +245,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       if (prevIters.length > 0) {
         previousSummary = prevIters[prevIters.length - 1].stateSummary;
       }
+      // Seed market board from last persisted price data
+      prevMarketPrices = await economyRepo.getLatestPriceIndices(sessionId);
     }
 
     for (let iterNum = startIter; iterNum <= endIter; iterNum++) {
@@ -373,10 +378,12 @@ export async function runSimulation(sessionId: string, totalIterations: number):
 
           // Single-pass: one LLM call returns structured JSON with narrative + actionCode.
           // Phase 3: pass role-restricted action set so elite agents see privileged actions.
+          // Market board: inject price data so the LLM can price orders rationally.
           const messages = buildNaturalIntentPrompt(
             agent, session, previousSummary, iterNum,
             economyContext, cognitiveContext, isFirstIteration, aliveAgentNames,
             getAllowedActions(agent.role),
+            prevMarketPrices,
           );
 
           // throwOnExhaustion: true — after all retries, throw instead of silently defaulting to REST.
@@ -399,6 +406,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             reasoning: parsed.reasoning,
             actionCode: parsed.actionCode,
             actionTarget: parsed.actionTarget,
+            orderParameters: parsed.orderParameters,
             parseMethod: 'structured',
           };
         } catch (err) {
@@ -511,10 +519,28 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       const intentMap = new Map(intents.map(i => [i.agentId, i]));
 
       // ── Phase 1: Run economy engine ─────────────────────────────────────
+      const VALID_ITEM_TYPES = new Set<string>(['food', 'tools', 'luxury_goods', 'raw_materials']);
       const economyInputs: EconomyAgentInput[] = aliveAgents.map(agent => {
         const agentIntent = intentMap.get(agent.id);
         const actionCode = (agentIntent?.actionCode ?? 'NONE') as ActionCode;
         const econState = agentEconomyMap.get(agent.id);
+
+        // Extract market order parameters from the LLM's structured output
+        const op = agentIntent?.orderParameters;
+        const orderDetails = (
+          op &&
+          (actionCode === 'POST_BUY_ORDER' || actionCode === 'POST_SELL_ORDER') &&
+          VALID_ITEM_TYPES.has(op.itemType)
+        ) ? {
+          itemType: op.itemType as ItemType,
+          price: op.price,
+          quantity: op.quantity,
+        } : undefined;
+
+        if (!orderDetails && (actionCode === 'POST_BUY_ORDER' || actionCode === 'POST_SELL_ORDER')) {
+          console.warn(`[Market] ${agent.name} chose ${actionCode} but provided no valid parameters — order skipped`);
+        }
+
         return {
           agentId: agent.id,
           agentName: agent.name,
@@ -523,6 +549,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           wealth: agent.currentStats.wealth,
           skills: econState?.skills ?? structuredClone(DEFAULT_SKILL_MATRIX),
           inventory: econState?.inventory ?? structuredClone(DEFAULT_INVENTORY),
+          orderDetails,
         };
       });
 
@@ -806,6 +833,10 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           row.action, row.outcome, row.resolvedAt,
         ]);
       }
+
+      // ── Update market board for next iteration ─────────────────────────────
+      // Full PriceIndex objects with demand/supply (in-memory, not persisted)
+      prevMarketPrices = economyResult.marketState.priceIndices;
 
       // Reload agents after updates
       agents = await agentRepo.listBySession(sessionId);

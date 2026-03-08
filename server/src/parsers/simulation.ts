@@ -9,6 +9,15 @@ export interface ParsedAgentIntent {
   reasoning: string;
   actionCode: ActionCode;
   actionTarget: string | null;
+  /**
+   * Required when actionCode is POST_BUY_ORDER or POST_SELL_ORDER.
+   * LLM must autonomously price market orders based on the Market Board.
+   */
+  orderParameters?: {
+    itemType: string;
+    quantity: number;
+    price: number;
+  };
 }
 
 export interface ParsedAgentOutcome {
@@ -105,11 +114,26 @@ export function parseSinglePassIntent(text: string): ParsedAgentIntent {
     ? String(rawTarget).trim() || null
     : null;
 
+  // Extract market order parameters (required for POST_BUY_ORDER / POST_SELL_ORDER)
+  let orderParameters: ParsedAgentIntent['orderParameters'];
+  const rawParams = raw.parameters as Record<string, unknown> | null | undefined;
+  if (rawParams && typeof rawParams === 'object') {
+    const rawItemType = String(rawParams.itemType ?? '').toLowerCase().replace(/\s+/g, '_');
+    const quantity = Math.max(1, Math.round(Number(rawParams.quantity ?? 1) || 1));
+    const price = Math.max(1, Math.round(Number(rawParams.price ?? 5) || 5));
+    // Only populate if itemType looks valid and this is a market order action
+    const MARKET_ACTIONS = new Set(['POST_BUY_ORDER', 'POST_SELL_ORDER']);
+    if (rawItemType && MARKET_ACTIONS.has(actionCode)) {
+      orderParameters = { itemType: rawItemType, quantity, price };
+    }
+  }
+
   return {
     intent: narrative || monologue.slice(0, 300),
     reasoning: monologue,
     actionCode,
     actionTarget,
+    orderParameters,
   };
 }
 

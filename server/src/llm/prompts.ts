@@ -1,7 +1,35 @@
 import type { LLMMessage, ContentBlock } from './types.js';
-import type { Agent, ChatMessage, Session, ComparisonResult, BrainstormChecklist } from '@idealworld/shared';
+import type { Agent, ChatMessage, Session, ComparisonResult, BrainstormChecklist, PriceIndex } from '@idealworld/shared';
 import type { ActionCode } from '../mechanics/actionCodes.js';
 import { getSubconsciousDrive } from '../mechanics/historicalRAG.js';
+
+/**
+ * Build a compact Market Board string from last iteration's price indices.
+ * Injected into agent prompts so the LLM can price orders rationally.
+ */
+function buildMarketBoardText(prices: PriceIndex[]): string {
+  const SYSTEM_SELL_CEILING = 15;
+  const SYSTEM_BUY_FLOOR = 2;
+
+  if (prices.length === 0) {
+    return `[MARKET BOARD — no prior trades]\nSystem baseline: emergency food available at ${SYSTEM_SELL_CEILING}w (ceiling). Raw materials bought at ${SYSTEM_BUY_FLOOR}w (floor).\nPricing guidance: food 5–12w, raw_materials 2–6w, tools 8–20w, luxury_goods 10–25w.`;
+  }
+
+  const lines = prices.map(p => {
+    const vol = p.volume > 0 ? `last ${p.lastPrice}w, avg ${p.vwap}w, ${p.volume} units traded` : 'no trades';
+    const balance =
+      p.totalDemand > p.totalSupply * 1.5 ? '⬆ HIGH DEMAND — price UP to sell faster' :
+      p.totalSupply > p.totalDemand * 1.5 ? '⬇ SURPLUS — price DOWN to move stock' :
+      '≈ balanced market';
+    return `  ${p.itemType}: ${vol} [${balance}]`;
+  });
+
+  return [
+    '[MARKET BOARD — last period]',
+    ...lines,
+    `System floor/ceiling: raw_materials ≥${SYSTEM_BUY_FLOOR}w, food ≤${SYSTEM_SELL_CEILING}w (emergency).`,
+  ].join('\n');
+}
 
 export function buildBrainstormMessages(
   seedIdea: string,
@@ -219,28 +247,18 @@ ${session.law?.slice(0, 400) ?? '(no laws)'}
 
 Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
 
-You must choose ONE action code from: WORK, TRADE, REST, STRIKE, STEAL, HELP, INVEST, CONSUME, PRODUCE, EAT, SABOTAGE.
+You must choose ONE action code from: WORK, REST, PRODUCE, POST_BUY_ORDER, POST_SELL_ORDER, STRIKE, STEAL, HELP, INVEST, SABOTAGE.
 
 You MUST respond with ONLY valid JSON (no markdown, no preamble):
 {
-  "actionCode": "WORK|TRADE|REST|STRIKE|STEAL|HELP|INVEST|CONSUME|PRODUCE|EAT|SABOTAGE",
+  "actionCode": "WORK|REST|PRODUCE|POST_BUY_ORDER|POST_SELL_ORDER|STRIKE|STEAL|HELP|INVEST|SABOTAGE",
   "actionTarget": "target agent name or null",
   "intent": "what you intend to do this iteration (1-3 sentences, first person)",
-  "reasoning": "your internal reasoning (1-2 sentences)"
+  "reasoning": "your internal reasoning (1-2 sentences)",
+  "parameters": { "itemType": "food|tools|luxury_goods|raw_materials", "quantity": 1, "price": 8 }
 }
 
-Action meanings:
-- WORK: perform your occupation for income
-- TRADE: exchange goods/services with another agent (set actionTarget)
-- REST: take time off to recover health and reduce stress
-- STRIKE: refuse to work, protest conditions
-- STEAL: take from another agent illegally (set actionTarget)
-- HELP: assist another agent at personal cost (set actionTarget)
-- INVEST: spend wealth now for future returns
-- CONSUME: spend wealth on personal comfort and health
-- PRODUCE: farm or craft goods — converts raw materials into food
-- EAT: consume extra food to recover health
-- SABOTAGE: destroy or disrupt an infrastructure target or enterprise (set actionTarget to target name or "infrastructure")`;
+Note: parameters is ONLY required for POST_BUY_ORDER and POST_SELL_ORDER. Eating and survival are handled automatically. Barter (TRADE) no longer exists.`;
 
   // Dynamic suffix: agent-specific, changes every call
   const cortisol = agent.currentStats.cortisol ?? 20;
@@ -319,25 +337,25 @@ ${previousSummary ? `What happened last iteration:\n${previousSummary.slice(0, 6
  * language output into a valid ActionCode.
  */
 /** Human-readable descriptions for every ActionCode, used to build role-specific action lists.
- * NOTE: EAT and CONSUME are intentionally excluded — survival metabolism is now automatic.
+ * NOTE: EAT, CONSUME, and TRADE are excluded — metabolism is automatic and all
+ *       item transfers now go through the order book at market prices.
  */
 const ACTION_DESCRIPTIONS: Partial<Record<ActionCode, string>> = {
-  WORK:           'WORK — performing your occupation, earning income, laboring, teaching, healing, guarding',
-  TRADE:          'TRADE — exchanging goods/services with a specific person (set actionTarget to their name)',
-  REST:           'REST — resting, sleeping, relaxing, wandering, meditating, praying',
-  STRIKE:         'STRIKE — protesting, refusing to work, rebelling, picketing, marching',
-  STEAL:          'STEAL — taking from someone illegally (set actionTarget to their name)',
-  HELP:           'HELP — aiding someone at personal cost, volunteering, donating (set actionTarget)',
-  INVEST:         'INVEST — saving money, depositing, speculating on future returns',
-  PRODUCE:        'PRODUCE — farming, crafting, manufacturing, building, forging goods to stockpile food',
-  POST_BUY_ORDER: 'POST_BUY_ORDER — placing a buy order on the open market',
-  POST_SELL_ORDER:'POST_SELL_ORDER — placing a sell order on the open market',
-  SET_WAGE:       'SET_WAGE — hiring someone or setting wages for a job',
-  SABOTAGE:       'SABOTAGE — deliberately disrupting or destroying another person\'s work (set actionTarget)',
-  EMBEZZLE:       'EMBEZZLE — [ELITE PRIVILEGE] skim funds from the communal treasury or state apparatus',
-  ADJUST_TAX:     'ADJUST_TAX — [ELITE PRIVILEGE] forcibly redistribute wealth via tax policy, extracting from lower classes',
-  SUPPRESS:       'SUPPRESS — [ELITE PRIVILEGE] deploy enforcement to penalise a specific citizen (set actionTarget)',
-  NONE:           'NONE — doing nothing meaningful this period',
+  WORK:           'WORK — wage labor: perform your occupation to earn Wealth directly. Your Health/time is consumed. No items produced to your inventory.',
+  REST:           'REST — rest, sleep, meditate, or recover. Restores Health and reduces Stress.',
+  PRODUCE:        'PRODUCE — independent production: farm, craft, mine, or build. Generates ITEMS (food, raw_materials, tools) directly into YOUR inventory. Earns 0 Wealth directly — sell via POST_SELL_ORDER to monetize.',
+  POST_BUY_ORDER: 'POST_BUY_ORDER — bid to purchase items from the market. SET parameters: itemType, quantity, price. Your Wealth is locked; if a seller matches your price, the trade executes and you receive items.',
+  POST_SELL_ORDER:'POST_SELL_ORDER — list your items for sale. SET parameters: itemType, quantity, price. Items are locked from your inventory; if a buyer matches, you receive Wealth.',
+  STRIKE:         'STRIKE — refuse to work, protest conditions, organize collective action.',
+  STEAL:          'STEAL — take Wealth or items from a specific person illegally (set actionTarget to their name). High risk.',
+  HELP:           'HELP — aid another citizen at personal cost (set actionTarget). Voluntary wealth transfer or labor.',
+  INVEST:         'INVEST — save or speculate to grow future returns.',
+  SET_WAGE:       'SET_WAGE — set a wage contract with a specific employee (set actionTarget). They receive Wealth each iteration.',
+  SABOTAGE:       'SABOTAGE — disrupt another person\'s enterprise or infrastructure (set actionTarget).',
+  EMBEZZLE:       'EMBEZZLE — [ELITE PRIVILEGE] skim Wealth from the communal treasury or state funds.',
+  ADJUST_TAX:     'ADJUST_TAX — [ELITE PRIVILEGE] forcibly extract Wealth from lower-class citizens via tax decree.',
+  SUPPRESS:       'SUPPRESS — [ELITE PRIVILEGE] deploy enforcement to penalise a specific citizen (set actionTarget).',
+  NONE:           'NONE — do nothing meaningful this period.',
 };
 
 export function buildNaturalIntentPrompt(
@@ -367,8 +385,13 @@ export function buildNaturalIntentPrompt(
    * to the agent, enforcing asymmetric class privileges in the prompt.
    */
   allowedActions?: readonly ActionCode[],
+  /**
+   * Market Board: last iteration's price indices for rational order pricing.
+   * Same data for all agents in an iteration — injected as a second cached ContentBlock.
+   */
+  marketPrices?: PriceIndex[],
 ): LLMMessage[] {
-  // Static prefix: identical across all agent calls in an iteration → cacheable
+  // Static prefix: identical across ALL sessions with the same idea/law excerpt → cacheable
   const staticPrefix = `You are a citizen living in a simulated society based on: "${session.idea}"
 
 Society overview (excerpt):
@@ -389,15 +412,22 @@ CRITICAL VOICE RULES — you MUST follow these exactly:
 - Be HEAVILY BIASED by your personal history and class position. Your perspective is not objective.
 - Do NOT use standard AI phrasing ("I felt a mix of...", "I realized...", "In that moment..."). That phrasing is FORBIDDEN.
 
+RATIONAL ACTOR RULE: You MUST review the Market Board below before acting. When using POST_SELL_ORDER or POST_BUY_ORDER, you MUST set a realistic price based on market data. If you price goods too high, no one buys and your items rot. If you price too low, you lose wealth. If your current production yields nothing valuable, switch strategies. Barter (TRADE) no longer exists — all transactions go through the market.
+
 You MUST respond with ONLY valid JSON — no markdown, no preamble, no code fences:
 {
   "internal_monologue": "Your private, raw, in-character thoughts — 2-3 sentences",
   "public_action_narrative": "What you are visibly doing this period — 1-2 sentences",
   "actionCode": "EXACTLY_ONE_OF_YOUR_ALLOWED_CODES",
-  "actionTarget": "AgentName or null"
+  "actionTarget": "AgentName or null",
+  "parameters": {
+    "itemType": "food|tools|luxury_goods|raw_materials — REQUIRED for POST_BUY_ORDER and POST_SELL_ORDER only, else omit",
+    "quantity": 1,
+    "price": 8
+  }
 }
 
-IMPORTANT: Only choose from the actionCodes listed under "Your allowed actions" in your status below. NEVER invent codes not on that list.`;
+IMPORTANT: Only choose from the actionCodes listed under "Your allowed actions" in your status below. NEVER invent codes not on that list. For POST_BUY_ORDER or POST_SELL_ORDER, the parameters field is MANDATORY and must include itemType, quantity, and price. For all other actions, omit the parameters field entirely.`;
 
   // Dynamic suffix: agent-specific, changes every call
   const cortisol = agent.currentStats.cortisol ?? 20;
@@ -505,8 +535,13 @@ ${iterationContext}${painOverride}${stressModifier}
 Your allowed actions (pick exactly one — NEVER invent codes not on this list):
 ${actionList}`;
 
+  // Market board block: same data for all agents this iteration → second cached block
+  // (cache hits for agents 2..N within same iteration, minimising prompt tokens)
+  const marketBoardText = buildMarketBoardText(marketPrices ?? []);
+
   const systemContent: ContentBlock[] = [
     { type: 'text', text: staticPrefix, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: marketBoardText, cache_control: { type: 'ephemeral' } },
     { type: 'text', text: dynamicSuffix },
   ];
 
@@ -523,6 +558,8 @@ export interface AgentIntent {
   reasoning: string;
   actionCode?: string;
   actionTarget?: string | null;
+  /** Market order parameters set by the LLM for POST_BUY_ORDER / POST_SELL_ORDER. */
+  orderParameters?: { itemType: string; quantity: number; price: number };
   /** Phase 2: raw natural language output from the Main Agent (before parsing). */
   rawNaturalLanguage?: string;
   /** Phase 2: method used to parse the intent (keyword, llm, fallback). */

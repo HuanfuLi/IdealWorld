@@ -56,6 +56,8 @@ export function normalizeActionCode(raw: string): ActionCode {
   // Fuzzy matching for common LLM outputs
   if (upper.includes('BUY')) return 'POST_BUY_ORDER';
   if (upper.includes('SELL')) return 'POST_SELL_ORDER';
+  // TRADE is no longer a valid action — redirect to market order (closest intent)
+  if (upper === 'TRADE' || upper.includes('BARTER') || upper.includes('EXCHANGE')) return 'POST_BUY_ORDER';
   if (upper.includes('PRODUCE') || upper.includes('FARM') || upper.includes('CRAFT')) return 'PRODUCE';
   if (upper.includes('EAT') || upper.includes('FEED')) return 'EAT';
   if (upper.includes('WAGE') || upper.includes('HIRE')) return 'SET_WAGE';
@@ -88,11 +90,12 @@ export function getRoleTier(role: string): RoleTier {
 }
 
 /** Actions every citizen can choose from.
- * NOTE: EAT and CONSUME are intentionally excluded — survival metabolism is now
- * handled automatically by the Passive Metabolism system each iteration.
+ * NOTE: EAT and CONSUME are excluded — survival metabolism is now automatic.
+ * NOTE: TRADE is excluded — all item transfers must go through the order book
+ *       so prices are set by supply/demand, not bilateral negotiation.
  */
 const BASE_ACTIONS: readonly ActionCode[] = [
-  'WORK', 'REST', 'PRODUCE', 'TRADE',
+  'WORK', 'REST', 'PRODUCE',
   'POST_BUY_ORDER', 'POST_SELL_ORDER',
   'STEAL', 'HELP', 'INVEST', 'NONE',
 ];

@@ -6,7 +6,7 @@
  *  - Economy snapshots per iteration
  *  - Market price history
  */
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc, sql } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { db, sqlite } from '../index.js';
 import { agentEconomy, economySnapshots, marketPrices } from '../schema.js';
@@ -223,6 +223,39 @@ export const economyRepo = {
         for (let i = 0; i < rows.length; i += 25) {
             await db.insert(marketPrices).values(rows.slice(i, i + 25));
         }
+    },
+
+    /**
+     * Get the most recent price index for every item type in a session.
+     * Used to inject market board context into LLM prompts.
+     */
+    async getLatestPriceIndices(sessionId: string): Promise<PriceIndex[]> {
+        // Get the max iteration number that has price data
+        const [maxRow] = await db
+            .select({ maxIter: sql<number>`max(${marketPrices.iterationNumber})` })
+            .from(marketPrices)
+            .where(eq(marketPrices.sessionId, sessionId));
+
+        const maxIter = maxRow?.maxIter;
+        if (!maxIter) return [];
+
+        const rows = await db.select()
+            .from(marketPrices)
+            .where(
+                and(
+                    eq(marketPrices.sessionId, sessionId),
+                    eq(marketPrices.iterationNumber, maxIter),
+                )
+            );
+
+        return rows.map(r => ({
+            itemType: r.itemType as PriceIndex['itemType'],
+            lastPrice: r.lastPrice,
+            vwap: r.vwap,
+            volume: r.volume,
+            totalDemand: 0,
+            totalSupply: 0,
+        }));
     },
 
     /**
