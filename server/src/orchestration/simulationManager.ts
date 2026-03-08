@@ -14,17 +14,20 @@ interface SimulationState {
   status: SimulationStatus;
   abortRequested: boolean;
   pauseRequested: boolean;
+  /** When true, abort also resets all simulation data and returns to design stage. */
+  resetRequested: boolean;
   clients: Set<Response>;
 }
 
 export type SimulationEvent =
   | { type: 'iteration-start'; iteration: number; total: number }
-  | { type: 'agent-intent'; agentId: string; agentName: string; intent: string }
+  | { type: 'agent-intent'; agentId: string; agentName: string; intent: string; actionCode: string; actionTarget: string | null }
   | { type: 'resolution'; iteration: number; narrativeSummary: string; lifecycleEvents: unknown[] }
   | { type: 'iteration-complete'; iteration: number; stats: Record<string, unknown> }
   | { type: 'simulation-complete'; finalReport: string }
   | { type: 'paused'; iteration: number }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'aborted-reset' };
 
 class SimulationManager {
   private sessions = new Map<string, SimulationState>();
@@ -35,6 +38,7 @@ class SimulationManager {
         status: 'idle',
         abortRequested: false,
         pauseRequested: false,
+        resetRequested: false,
         clients: new Set(),
       });
     }
@@ -74,6 +78,17 @@ class SimulationManager {
     }
   }
 
+  /** Signal abort AND mark that the caller wants a full reset to design stage. */
+  abortAndReset(sessionId: string): void {
+    const state = this.getOrCreate(sessionId);
+    state.abortRequested = true;
+    state.resetRequested = true;
+  }
+
+  isResetRequested(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.resetRequested ?? false;
+  }
+
   isPauseRequested(sessionId: string): boolean {
     return this.sessions.get(sessionId)?.pauseRequested ?? false;
   }
@@ -97,7 +112,7 @@ class SimulationManager {
       state.status = 'idle';
       state.abortRequested = false;
       state.pauseRequested = false;
-      // Drain clients — they'll receive the final event then disconnect
+      state.resetRequested = false;
     }
   }
 

@@ -24,6 +24,7 @@ const Brainstorming = () => {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const hasAutoSent = useRef(false);
+  const lastLoadedId = useRef<string | null>(null);
   const [input, setInput] = useState('');
 
   const {
@@ -41,6 +42,12 @@ const Brainstorming = () => {
 
   useEffect(() => {
     if (!id) return;
+    // Guard against StrictMode double-invocation: only run once per unique id.
+    // useRef persists across the simulated unmount/remount, so this correctly
+    // allows re-loading when the id genuinely changes while skipping the extra
+    // StrictMode call for the same id.
+    if (lastLoadedId.current === id) return;
+    lastLoadedId.current = id;
     reset();
     hasAutoSent.current = false;
     loadSession(id);

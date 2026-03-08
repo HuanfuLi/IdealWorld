@@ -36,6 +36,8 @@ export const agentIntents = sqliteTable('agent_intents', {
   iterationId: text('iteration_id'),
   intent: text('intent').notNull(),
   reasoning: text('reasoning'),
+  actionCode: text('action_code').notNull().default('NONE'),
+  actionTarget: text('action_target'),
   createdAt: text('created_at').notNull(),
 });
 
@@ -97,3 +99,44 @@ export const roleChanges = sqliteTable('role_changes', {
   iterationNumber: integer('iteration_number').notNull(),
   timestamp: text('timestamp').notNull(),
 });
+
+// ── Phase 1 Economy Tables ──────────────────────────────────────────────────
+
+/** Stores per-iteration economy snapshots (skills, inventory, market state). */
+export const economySnapshots = sqliteTable('economy_snapshots', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  iterationNumber: integer('iteration_number').notNull(),
+  /** JSON: full EconomySnapshot (market state, contracts, summary stats). */
+  snapshotData: text('snapshot_data').notNull().default('{}'),
+  timestamp: text('timestamp').notNull(),
+});
+
+/** Stores per-agent economy state (skills + inventory), updated each iteration. */
+export const agentEconomy = sqliteTable('agent_economy', {
+  id: text('id').primaryKey(),
+  agentId: text('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  /** JSON: SkillMatrix */
+  skills: text('skills').notNull().default('{}'),
+  /** JSON: Inventory */
+  inventory: text('inventory').notNull().default('{}'),
+  /** Last iteration this was updated. */
+  lastUpdated: integer('last_updated').notNull().default(0),
+});
+
+/** Stores market price history for charting/analytics. */
+export const marketPrices = sqliteTable('market_prices', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  iterationNumber: integer('iteration_number').notNull(),
+  /** Item type (food, tools, luxury_goods, raw_materials). */
+  itemType: text('item_type').notNull(),
+  /** Last traded price. */
+  lastPrice: real('last_price').notNull().default(0),
+  /** Volume-weighted average price. */
+  vwap: real('vwap').notNull().default(0),
+  /** Total volume traded. */
+  volume: integer('volume').notNull().default(0),
+});
+

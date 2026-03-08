@@ -1,21 +1,19 @@
 import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Play, Pause, Square, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle, ArrowRight, GitFork, Zap } from 'lucide-react';
-import { useSimulationStore } from '../stores/simulationStore';
+import { Play, Pause, Square, X, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle, ArrowRight, GitFork, Zap, ChevronDown, ChevronRight } from 'lucide-react';
+import { useSimulationStore, type AgentIntentRecord } from '../stores/simulationStore';
 import { useShallow } from 'zustand/react/shallow';
 import MarkdownText from '../components/MarkdownText';
 
 const Simulation = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
-  const feedEndRef = useRef<HTMLDivElement>(null);
-
   const {
     isRunning, isPaused, isComplete,
     currentIteration, totalIterations,
     feed, statsHistory, agents, finalReport, error,
     loadAgents, loadHistory, connectSSE,
-    pause, resume, abort, reset,
+    pause, resume, abort, abortAndReset, reset,
     continueSimulation, forkSimulation,
   } = useSimulationStore(useShallow(s => ({
     isRunning: s.isRunning, isPaused: s.isPaused, isComplete: s.isComplete,
@@ -23,15 +21,25 @@ const Simulation = () => {
     feed: s.feed, statsHistory: s.statsHistory, agents: s.agents,
     finalReport: s.finalReport, error: s.error,
     loadAgents: s.loadAgents, loadHistory: s.loadHistory, connectSSE: s.connectSSE,
-    pause: s.pause, resume: s.resume, abort: s.abort, reset: s.reset,
+    pause: s.pause, resume: s.resume, abort: s.abort, abortAndReset: s.abortAndReset, reset: s.reset,
     continueSimulation: s.continueSimulation, forkSimulation: s.forkSimulation,
   })));
+
+  const { pendingActionCodes, agentIntentHistory, loadIntentHistory } = useSimulationStore(
+    useShallow(s => ({
+      pendingActionCodes: s.pendingActionCodes,
+      agentIntentHistory: s.agentIntentHistory,
+      loadIntentHistory: s.loadIntentHistory,
+    }))
+  );
 
   // Initialize to '' so auto-proceed never fires before the session fetch resolves.
   // If initialized to 'simulating', a race between the Zustand isComplete update and
   // the local setSessionStage call could trigger auto-proceed with a stale stage value.
   const [sessionStage, setSessionStage] = useState<string>('');
   const [extraIterations, setExtraIterations] = useState(10);
+  const [agentStatusTab, setAgentStatusTab] = useState<'lifecycle' | 'intents'>('intents');
+  const [confirmDialog, setConfirmDialog] = useState<'end' | 'abort' | null>(null);
   const [autoProceed, setAutoProceed] = useState(() => localStorage.getItem('sim-auto-proceed') === 'true');
   const autoProceedRef = useRef(autoProceed);
   const sseCleanupRef = useRef<(() => void) | null>(null);
@@ -46,14 +54,15 @@ const Simulation = () => {
   useEffect(() => {
     if (!id) return;
     reset();
-    loadAgents(id);
-    loadHistory(id);
+    // Initialization: load history first, then restore session state
+    const init = async () => {
+      await loadAgents(id);
+      await loadHistory(id);
+      await loadIntentHistory(id);
 
-    // Immediately fetch session state to restore isRunning/isPaused/totalIterations
-    // before the first SSE event arrives (which can take a long time during iterations)
-    fetch(`/api/sessions/${id}`)
-      .then(r => r.json())
-      .then((s: { stage?: string; config?: { totalIterations?: number } | null }) => {
+      try {
+        const r = await fetch(`/api/sessions/${id}`);
+        const s = (await r.json()) as { stage?: string; config?: { totalIterations?: number } | null };
         if (s.stage) setSessionStage(s.stage);
 
         const targetIters = s.config?.totalIterations ?? 0;
@@ -64,7 +73,6 @@ const Simulation = () => {
             isRunning: true,
             isPaused: false,
             isComplete: false,
-            // Use config's totalIterations as the denominator for progress bar
             totalIterations: targetIters > 0 ? targetIters : prev.totalIterations,
           }));
         } else if (s.stage === 'simulation-paused') {
@@ -74,19 +82,20 @@ const Simulation = () => {
             isComplete: false,
             totalIterations: targetIters > 0 ? targetIters : prev.totalIterations,
           }));
-        } else if (s.stage && s.stage !== 'simulating' && s.stage !== 'simulation-paused') {
-          // Simulation already finished
+        } else if (s.stage === 'simulation-complete' || s.stage === 'reflecting' || s.stage === 'reflection-complete' || s.stage === 'reviewing' || s.stage === 'completed') {
+          // Simulation already finished — mark as complete regardless of feed
           const state = useSimulationStore.getState();
-          if (!state.isRunning && !state.isComplete && state.feed.length > 0) {
-            useSimulationStore.setState({
-              isComplete: true,
-              // For completed sims, use config target or fall back to feed length
-              totalIterations: targetIters > 0 ? targetIters : state.feed.length,
-            });
-          }
+          useSimulationStore.setState({
+            isRunning: false,
+            isPaused: false,
+            isComplete: true,
+            totalIterations: targetIters > 0 ? targetIters : (state.feed.length || state.totalIterations),
+          });
         }
-      })
-      .catch(() => { });
+      } catch { /* ignore fetch errors */ }
+    };
+
+    init();
 
     // Connect SSE for live updates; will close gracefully if simulation already done
     const disconnect = connectSSE(id);
@@ -94,9 +103,6 @@ const Simulation = () => {
     return disconnect;
   }, [id]);
 
-  useEffect(() => {
-    feedEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [feed.length]);
 
   // Auto-proceed: when simulation finishes and toggle is on, navigate to reflection.
   // Only fires when the session is still in a simulation stage — prevents triggering
@@ -131,9 +137,23 @@ const Simulation = () => {
     else await pause(id);
   };
 
+  const handleEndAndProceed = async () => {
+    if (!id) return;
+    sseCleanupRef.current?.();
+    await abort(id);
+    await fetch(`/api/sessions/${id}/stage`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stage: 'reflecting' }),
+    });
+    navigate(`/session/${id}/reflection`);
+  };
+
   const handleAbort = async () => {
     if (!id) return;
-    await abort(id);
+    sseCleanupRef.current?.();
+    reset();
+    await abortAndReset(id);
     navigate(`/session/${id}/design`);
   };
 
@@ -158,7 +178,6 @@ const Simulation = () => {
     [feed]
   );
 
-  const feedScrollRef = useRef<HTMLDivElement>(null);
 
   return (
     <div className="animate-fade-in" style={{ height: 'calc(100vh - 4rem)', display: 'flex', flexDirection: 'column' }}>
@@ -236,13 +255,24 @@ const Simulation = () => {
             </button>
           )}
           {!isComplete && (
-            <button
-              className="btn-secondary"
-              style={{ color: 'var(--danger)', borderColor: 'rgba(239,68,68,0.3)' }}
-              onClick={handleAbort}
-            >
-              <Square size={18} /> Abort
-            </button>
+            <>
+              <button
+                className="btn-secondary"
+                onClick={() => setConfirmDialog('end')}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                title="End simulation now and proceed to Reflection (keeps all completed iterations)"
+              >
+                <Square size={18} /> End & Proceed
+              </button>
+              <button
+                className="btn-secondary"
+                style={{ color: 'var(--danger)', borderColor: 'rgba(239,68,68,0.3)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                onClick={() => setConfirmDialog('abort')}
+                title="Cancel simulation and discard all data, returning to Design"
+              >
+                <X size={18} /> Abort
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -250,7 +280,15 @@ const Simulation = () => {
       {/* Error banner */}
       {error && (
         <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '8px', padding: '0.75rem 1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--danger)' }}>
-          <AlertCircle size={16} /> {error}
+          <AlertCircle size={16} style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1 }}>{error}</span>
+          <button
+            onClick={() => useSimulationStore.setState({ error: null })}
+            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--danger)', padding: '0', display: 'flex', alignItems: 'center', flexShrink: 0 }}
+            title="Dismiss"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -264,7 +302,7 @@ const Simulation = () => {
               <Activity size={18} color="var(--primary)" /> Live Feed
             </h3>
           </div>
-          <div ref={feedScrollRef} style={{ flex: 1, padding: '1rem', overflowY: 'auto' }}>
+          <div style={{ flex: 1, padding: '1rem', overflowY: 'auto' }}>
             {feed.length === 0 && !isRunning && (
               <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', textAlign: 'center', marginTop: '2rem' }}>
                 No iterations yet.
@@ -312,7 +350,6 @@ const Simulation = () => {
                 </div>
               </div>
             )}
-            <div ref={feedEndRef} />
           </div>
         </div>
 
@@ -352,6 +389,24 @@ const Simulation = () => {
                   max={latestStats.maxHappiness}
                   history={statsHistory.map(s => s.avgHappiness)}
                 />
+                {latestStats.avgCortisol !== undefined && (
+                  <StatCard
+                    label="Cortisol"
+                    color="#f97316"
+                    icon={<Activity size={16} />}
+                    avg={latestStats.avgCortisol}
+                    history={statsHistory.map(s => s.avgCortisol ?? 0)}
+                  />
+                )}
+                {latestStats.avgDopamine !== undefined && (
+                  <StatCard
+                    label="Dopamine"
+                    color="#a78bfa"
+                    icon={<Zap size={16} />}
+                    avg={latestStats.avgDopamine}
+                    history={statsHistory.map(s => s.avgDopamine ?? 0)}
+                  />
+                )}
                 <div style={{ background: 'var(--panel-alpha-05)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--glass-border)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}><Users size={16} /> Population</span>
@@ -407,27 +462,46 @@ const Simulation = () => {
                   Agent data loading…
                 </div>
               )}
-              <hr style={{ border: 'none', borderTop: '1px solid var(--glass-border)', margin: '0 0 1rem' }} />
-              <h4 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem', textTransform: 'uppercase' as const }}>
-                Lifecycle Events
-              </h4>
-            </div>
-
-            {/* Lifecycle events — expands to fill all remaining space */}
-            {allLifecycleEvents.length === 0 ? (
-              <div style={{ fontSize: '0.9rem', color: 'var(--text-dim)' }}>No events yet.</div>
-            ) : (
-              <div style={{ flex: 1, overflowY: 'auto' }}>
-                {allLifecycleEvents.map((e, idx) => (
-                  <div key={idx} style={{ fontSize: '0.9rem', color: 'var(--text-dim)', paddingBottom: '0.5rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Iter {e.iterNum}:</span>{' '}
-                    <span style={{ color: e.type === 'death' ? 'var(--danger)' : 'var(--primary)' }}>
-                      {e.type === 'death' ? '💀' : '🔄'}
-                    </span>{' '}
-                    {e.detail}
-                  </div>
+              {/* Tab bar */}
+              <div style={{ display: 'flex', borderBottom: '1px solid var(--glass-border)', marginBottom: '0.75rem', gap: 0 }}>
+                {(['intents', 'lifecycle'] as const).map(tab => (
+                  <button key={tab} onClick={() => setAgentStatusTab(tab)} style={{
+                    flex: 1, padding: '0.4rem 0', fontSize: '0.75rem', fontWeight: 600,
+                    textTransform: 'uppercase', letterSpacing: '0.05em', cursor: 'pointer',
+                    border: 'none', borderBottom: `2px solid ${agentStatusTab === tab ? 'var(--primary)' : 'transparent'}`,
+                    background: 'transparent', color: agentStatusTab === tab ? 'var(--primary)' : 'var(--text-dim)',
+                    transition: 'color 0.15s, border-color 0.15s',
+                  }}>
+                    {tab === 'intents' ? 'Intents' : 'Lifecycle'}
+                  </button>
                 ))}
               </div>
+            </div>
+
+            {/* Tab content — expands to fill remaining space */}
+            {agentStatusTab === 'lifecycle' ? (
+              allLifecycleEvents.length === 0 ? (
+                <div style={{ fontSize: '0.9rem', color: 'var(--text-dim)' }}>No events yet.</div>
+              ) : (
+                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+                  {allLifecycleEvents.map((e, idx) => (
+                    <div key={idx} style={{ fontSize: '0.9rem', color: 'var(--text-dim)', paddingBottom: '0.5rem' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Iter {e.iterNum}:</span>{' '}
+                      <span style={{ color: e.type === 'death' ? 'var(--danger)' : 'var(--primary)' }}>
+                        {e.type === 'death' ? '💀' : '🔄'}
+                      </span>{' '}
+                      {e.detail}
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : (
+              <AgentIntentPanel
+                agents={agents}
+                agentIntentHistory={agentIntentHistory}
+                pendingActionCodes={pendingActionCodes}
+                currentIteration={currentIteration}
+              />
             )}
           </div>
         </div>
@@ -498,17 +572,267 @@ const Simulation = () => {
           )}
         </div>
       )}
+      {/* Confirmation dialog */}
+      {confirmDialog && (
+        <ConfirmDialog
+          variant={confirmDialog}
+          onConfirm={() => {
+            setConfirmDialog(null);
+            if (confirmDialog === 'end') handleEndAndProceed();
+            else handleAbort();
+          }}
+          onCancel={() => setConfirmDialog(null)}
+        />
+      )}
     </div>
   );
 };
+
+// ── ConfirmDialog ─────────────────────────────────────────────────────────────
+
+interface ConfirmDialogProps {
+  variant: 'end' | 'abort';
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+function ConfirmDialog({ variant, onConfirm, onCancel }: ConfirmDialogProps) {
+  const isAbort = variant === 'abort';
+  return (
+    /* Backdrop */
+    <div
+      onClick={onCancel}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      {/* Panel */}
+      <div
+        onClick={e => e.stopPropagation()}
+        className="glass-panel"
+        style={{ width: '420px', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {isAbort
+            ? <X size={22} color="var(--danger)" />
+            : <Square size={22} color="var(--color-bright)" />}
+          <h3 style={{ fontSize: '1.1rem', margin: 0 }}>
+            {isAbort ? 'Abort Simulation?' : 'End & Proceed to Reflection?'}
+          </h3>
+        </div>
+
+        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
+          {isAbort
+            ? 'This will cancel the simulation and permanently discard all completed iterations. The session will return to the Design stage.'
+            : 'This will stop the simulation at the current iteration and immediately proceed to Reflection. All completed iterations will be preserved.'}
+        </p>
+
+        <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
+          <button className="btn-secondary" onClick={onCancel}>
+            Keep Running
+          </button>
+          <button
+            className={isAbort ? 'btn-secondary' : 'btn-primary'}
+            style={isAbort ? { color: 'var(--danger)', borderColor: 'rgba(239,68,68,0.4)' } : undefined}
+            onClick={onConfirm}
+          >
+            {isAbort ? <><X size={15} /> Abort</> : <><Square size={15} /> End & Proceed</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Action Code Styling ───────────────────────────────────────────────────────
+
+const ACTION_COLORS: Record<string, string> = {
+  WORK: '#10b981', PRODUCE: '#059669', EAT: '#84cc16',
+  TRADE: '#f59e0b', POST_BUY_ORDER: '#d97706', POST_SELL_ORDER: '#b45309', SET_WAGE: '#92400e',
+  REST: '#60a5fa', INVEST: '#818cf8',
+  STRIKE: '#f97316', CONSUME: '#a78bfa',
+  STEAL: '#ef4444', SABOTAGE: '#dc2626',
+  HELP: '#ec4899',
+  // Phase 3: elite privileged actions
+  EMBEZZLE: '#c084fc', ADJUST_TAX: '#e879f9', SUPPRESS: '#fb7185',
+  NONE: '#6b7280',
+};
+
+function actionBadge(actionCode: string, actionTarget: string | null) {
+  const color = ACTION_COLORS[actionCode] ?? ACTION_COLORS.NONE;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', flexWrap: 'wrap' }}>
+      <span style={{
+        background: `${color}22`, border: `1px solid ${color}66`, color,
+        borderRadius: '4px', padding: '1px 6px', fontSize: '0.72rem', fontWeight: 700,
+        letterSpacing: '0.04em', fontFamily: 'monospace',
+      }}>{actionCode}</span>
+      {actionTarget && (
+        <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>→ {actionTarget}</span>
+      )}
+    </span>
+  );
+}
+
+// ── AgentIntentPanel ──────────────────────────────────────────────────────────
+
+interface AgentIntentPanelProps {
+  agents: Array<{ id: string; name: string; role: string; isAlive: boolean }>;
+  agentIntentHistory: Record<string, AgentIntentRecord[]>;
+  pendingActionCodes: Record<string, { actionCode: string; actionTarget: string | null }>;
+  currentIteration: number;
+}
+
+function AgentIntentPanel({ agents, agentIntentHistory, pendingActionCodes, currentIteration }: AgentIntentPanelProps) {
+  const citizenAgents = agents.filter(a => !(a as any).isCentralAgent);
+  const sorted = [...citizenAgents].sort((a, b) => {
+    if (a.isAlive !== b.isAlive) return a.isAlive ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  if (sorted.length === 0) {
+    return <div style={{ fontSize: '0.9rem', color: 'var(--text-dim)' }}>No agents yet.</div>;
+  }
+
+  return (
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      {sorted.map(agent => (
+        <div key={agent.id} style={{ marginBottom: '0.5rem' }}>
+          <AgentIntentCard
+            agent={agent}
+            history={agentIntentHistory[agent.id] ?? []}
+            pending={pendingActionCodes[agent.id] ?? null}
+            currentIteration={currentIteration}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── AgentIntentCard ───────────────────────────────────────────────────────────
+
+interface AgentIntentCardProps {
+  agent: { id: string; name: string; role: string; isAlive: boolean };
+  history: AgentIntentRecord[];
+  pending: { actionCode: string; actionTarget: string | null } | null;
+  currentIteration: number;
+}
+
+function AgentIntentCard({ agent, history, pending, currentIteration }: AgentIntentCardProps) {
+  const [expanded, setExpanded] = useState(false);
+  const [expandedIntents, setExpandedIntents] = useState<Set<number>>(new Set());
+
+  // Current action: live pending if it exists, otherwise last in history
+  const latestRecord = history[history.length - 1] ?? null;
+  const currentActionCode = pending?.actionCode ?? latestRecord?.actionCode ?? null;
+  const currentActionTarget = pending !== null ? pending.actionTarget : latestRecord?.actionTarget ?? null;
+
+  const toggleIntent = (iterNum: number) => {
+    setExpandedIntents(prev => {
+      const next = new Set(prev);
+      if (next.has(iterNum)) next.delete(iterNum);
+      else next.add(iterNum);
+      return next;
+    });
+  };
+
+  // Show history in reverse chronological order
+  const historyDesc = [...history].reverse();
+
+  return (
+    <div style={{
+      border: '1px solid var(--glass-border)',
+      borderRadius: '8px',
+      background: agent.isAlive ? 'var(--panel-alpha-05)' : 'rgba(0,0,0,0.1)',
+      opacity: agent.isAlive ? 1 : 0.55,
+      overflow: 'hidden',
+    }}>
+      {/* Card header */}
+      <div style={{ padding: '0.5rem 0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', marginBottom: '0.25rem' }}>
+            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: agent.isAlive ? 'var(--color-bright)' : 'var(--text-dim)' }}>
+              {agent.name}
+            </span>
+            {!agent.isAlive && <span style={{ fontSize: '0.68rem', color: 'var(--danger)' }}>†</span>}
+          </div>
+          {currentActionCode ? (
+            actionBadge(currentActionCode, currentActionTarget)
+          ) : (
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>No action yet</span>
+          )}
+        </div>
+        {history.length > 0 && (
+          <button
+            onClick={() => setExpanded(e => !e)}
+            style={{
+              background: 'transparent', border: '1px solid var(--glass-border)',
+              borderRadius: '6px', padding: '0.2rem 0.5rem', cursor: 'pointer',
+              color: 'var(--text-muted)', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.2rem',
+              whiteSpace: 'nowrap', flexShrink: 0,
+            }}
+          >
+            {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            {history.length}
+          </button>
+        )}
+      </div>
+
+      {/* Expanded history */}
+      {expanded && history.length > 0 && (
+        <div style={{ borderTop: '1px solid var(--glass-border)', padding: '0.5rem 0.75rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+          {historyDesc.map(record => {
+            const isOpen = expandedIntents.has(record.iterationNumber);
+            return (
+              <div key={record.iterationNumber}
+                style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--glass-border)' }}
+              >
+                <div
+                  onClick={() => toggleIntent(record.iterationNumber)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                    padding: '0.3rem 0.5rem', cursor: 'pointer',
+                    background: isOpen ? 'var(--panel-alpha-10)' : 'transparent',
+                    userSelect: 'none',
+                  }}
+                >
+                  {isOpen ? <ChevronDown size={11} color="var(--text-dim)" /> : <ChevronRight size={11} color="var(--text-dim)" />}
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', minWidth: '3.5rem' }}>
+                    Iter {record.iterationNumber}
+                  </span>
+                  {actionBadge(record.actionCode, record.actionTarget)}
+                </div>
+                {isOpen && record.narrative && (
+                  <div style={{
+                    padding: '0.4rem 0.75rem 0.4rem 1.5rem',
+                    fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.5,
+                    borderTop: '1px solid var(--glass-border)',
+                    background: 'var(--panel-alpha-05)',
+                  }}>
+                    {record.narrative}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── StatCard ──────────────────────────────────────────────────────────────────
 
 interface StatCardProps {
   label: string;
   color: string;
   icon: React.ReactNode;
   avg: number;
-  min: number;
-  max: number;
+  min?: number;
+  max?: number;
   history: number[];
 }
 
@@ -528,9 +852,11 @@ function StatCard({ label, color, icon, avg, min, max, history }: StatCardProps)
           <div key={i} style={{ flex: 1, background: color, height: `${Math.round((v / peak) * 100)}%`, opacity: 0.6, minHeight: '2px' }} />
         ))}
       </div>
-      <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', textAlign: 'right' as const, marginTop: '0.5rem' }}>
-        min {min} / max {max}
-      </div>
+      {min !== undefined && max !== undefined && (
+        <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', textAlign: 'right' as const, marginTop: '0.5rem' }}>
+          min {min} / max {max}
+        </div>
+      )}
     </div>
   );
 }

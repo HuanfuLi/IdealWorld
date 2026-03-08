@@ -13,7 +13,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   baseUrl: 'http://localhost:1234/v1',
   centralAgentModel: 'claude-sonnet-4-6',
   citizenAgentModel: 'claude-haiku-4-5-20251001',
-  maxConcurrency: 10,
+  maxConcurrency: 3,
   citizenProvider: undefined,
   citizenApiKey: '',
   citizenBaseUrl: '',
