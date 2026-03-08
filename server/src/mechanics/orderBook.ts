@@ -17,6 +17,9 @@ import type {
     MarketState,
 } from '@idealworld/shared';
 import { ITEM_TYPES } from '@idealworld/shared';
+import { applyCommodityEffect, type CommodityCategory } from './physicsEngine.js';
+import { tickStateStore } from '../orchestration/tickStateStore.js';
+import { asyncLogFlusher } from '../db/asyncLogFlusher.js';
 
 // ── Order Book Data Structure ────────────────────────────────────────────────
 
@@ -130,11 +133,72 @@ export class OrderBook {
                     sell.filled = true;
                     sellIdx++;
                 }
+
+                // Apply commodity effect for the buyer
+                const categoryMap: Record<string, CommodityCategory> = {
+                    'food': 'Food',
+                    'raw_materials': 'Raw_Materials',
+                    'tools': 'Tech_Parts',
+                    'luxury_goods': 'Luxury_Services'
+                };
+                const category = categoryMap[itemType];
+                if (category) {
+                    this.onOrderMatched(buy.agentId, category, matchQty);
+                }
             }
         }
 
         this.tradeHistory.push(...matches);
         return matches;
+    }
+
+    private onOrderMatched(buyerId: string, category: CommodityCategory, quantity: number, buyerName?: string) {
+        const tickState = tickStateStore.get(buyerId);
+        if (!tickState) return;
+
+        for (let i = 0; i < quantity; i++) {
+            const { updatedNeeds, statDelta } = applyCommodityEffect(
+                { satiety: tickState.satiety, cortisol: tickState.cortisol, energy: tickState.energy },
+                { wealth: 0, health: 0, happiness: 0, cortisol: 0, dopamine: 0 }, // stats unused in applyCommodityEffect
+                category,
+            );
+            tickStateStore.set(buyerId, updatedNeeds);
+
+            // Queue stat delta for async DB flush
+            const now = new Date().toISOString();
+            asyncLogFlusher.enqueue('agent_actions',
+                ['id', 'session_id', 'agent_id', 'iteration_id', 'action', 'outcome', 'resolved_at'],
+                [
+                    uuidv4(), 'session-pending', buyerId, 'tick-pending',
+                    `Bought ${category}`,
+                    JSON.stringify({
+                        text: `Consumed ${category}`,
+                        wealthDelta: statDelta.wealthDelta,
+                        healthDelta: statDelta.healthDelta,
+                        happinessDelta: statDelta.happinessDelta,
+                        cortisolDelta: statDelta.cortisolDelta
+                    }),
+                    now
+                ]
+            );
+        }
+
+        // If Food was bought and agent had STARVATION interrupt — clear it
+        if (category === 'Food' && tickState.pendingInterrupt?.type === 'STARVATION') {
+            tickStateStore.set(buyerId, { pendingInterrupt: null });
+        }
+
+        // If Luxury_Services bought and agent had MENTAL_BREAK interrupt — clear it
+        if (category === 'Luxury_Services' && tickState.pendingInterrupt?.type === 'MENTAL_BREAK') {
+            tickStateStore.set(buyerId, { pendingInterrupt: null });
+        }
+
+        // Trigger LLM reprompt if interrupt was cleared (agent can now decide rationally)
+        if (tickState.pendingInterrupt === null) {
+            // Note: CONVERSATION.md says "promptQueue.set(buyerId, 'economic-trigger');"
+            // We'll queue it in tickStateStore's new economic triggers queue map or directly flag it
+            tickStateStore.queueEconomicTrigger(buyerId, 'interrupt-cleared');
+        }
     }
 
     /**

@@ -140,3 +140,44 @@ export const marketPrices = sqliteTable('market_prices', {
   volume: integer('volume').notNull().default(0),
 });
 
+// ── Phase 3: Tick System & Enterprise Data Model ────────────────────────────
+
+export const enterprises = sqliteTable('enterprises', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull(),
+  ownerId: text('owner_id').notNull(),
+  name: text('name').notNull(),
+  industry: text('industry').notNull(), // 'Agriculture' | 'Extraction' | 'Manufacturing' | 'Services'
+  outputCommodity: text('output_commodity').notNull(), // CommodityCategory
+  efficiencyMultiplier: real('efficiency_multiplier').notNull().default(2.5),
+  employeeIds: text('employee_ids').notNull().default('[]'), // JSON array
+  wagePer8Ticks: real('wage_per_8_ticks').notNull().default(0),
+  stockpile: real('stockpile').notNull().default(0),
+  foundedAt: integer('founded_at').notNull(),
+  isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
+});
+
+export const jobOffers = sqliteTable('job_offers', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull(),
+  enterpriseId: text('enterprise_id').notNull(),
+  ownerId: text('owner_id').notNull(),
+  industry: text('industry').notNull(),
+  wage: real('wage').notNull(),
+  minSkillReq: real('min_skill_req').notNull().default(0),
+  isOpen: integer('is_open', { mode: 'boolean' }).notNull().default(true),
+  postedAt: integer('posted_at').notNull(),
+  applicantIds: text('applicant_ids').notNull().default('[]'), // JSON array
+});
+
+export const agentTickState = sqliteTable('agent_tick_state', {
+  agentId: text('agent_id').notNull(),
+  sessionId: text('session_id').notNull(),
+  satiety: real('satiety').notNull().default(70),
+  cortisol: real('cortisol').notNull().default(20),
+  energy: real('energy').notNull().default(80),
+  activeTask: text('active_task'),  // JSON blob of ActiveTask | null
+  lastPromptedTick: integer('last_prompted_tick').notNull().default(0),
+  updatedAt: integer('updated_at').notNull(),
+});
+

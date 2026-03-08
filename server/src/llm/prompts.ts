@@ -1,34 +1,168 @@
 import type { LLMMessage, ContentBlock } from './types.js';
-import type { Agent, ChatMessage, Session, ComparisonResult, BrainstormChecklist, PriceIndex } from '@idealworld/shared';
+import type { Agent, ChatMessage, Session, ComparisonResult, BrainstormChecklist, PriceIndex, TickAgentState } from '@idealworld/shared';
 import type { ActionCode } from '../mechanics/actionCodes.js';
+import { getAllowedActions } from '../mechanics/actionCodes.js';
 import { getSubconsciousDrive } from '../mechanics/historicalRAG.js';
+import type { AgentEconomyState } from '../db/repos/economyRepo.js';
+import type { JobOffer } from '../db/repos/enterpriseRepo.js';
 
-/**
- * Build a compact Market Board string from last iteration's price indices.
- * Injected into agent prompts so the LLM can price orders rationally.
- */
-function buildMarketBoardText(prices: PriceIndex[]): string {
-  const SYSTEM_SELL_CEILING = 15;
-  const SYSTEM_BUY_FLOOR = 2;
+export type EconomicTriggerType =
+  | 'FIRED'
+  | 'JOB_APPLICATION'
+  | 'HIRED'
+  | 'WAGE_UPDATED'
+  | 'ENTERPRISE_BANKRUPT';
 
+export interface EconomicTrigger {
+  targetAgentId: string;
+  type: EconomicTriggerType;
+  contextData: Record<string, unknown>;
+  sourceTick: number;
+}
+
+export function buildEnhancedMarketBoard(prices: PriceIndex[]): string {
   if (prices.length === 0) {
-    return `[MARKET BOARD — no prior trades]\nSystem baseline: emergency food available at ${SYSTEM_SELL_CEILING}w (ceiling). Raw materials bought at ${SYSTEM_BUY_FLOOR}w (floor).\nPricing guidance: food 5–12w, raw_materials 2–6w, tools 8–20w, luxury_goods 10–25w.`;
+    return `[MARKET BOARD — no prior trades]
+  Food: no data (baseline 8–12w/unit) | UNKNOWN demand
+  Raw_Materials: no data (baseline 3–6w/unit) | UNKNOWN demand
+  Tech_Parts: no data (baseline 15–25w/unit) | UNKNOWN demand
+  Luxury_Services: no data (baseline 20–35w/unit) | UNKNOWN demand
+Note: High demand = price up opportunity. Surplus = price must drop to sell.`;
   }
 
-  const lines = prices.map(p => {
-    const vol = p.volume > 0 ? `last ${p.lastPrice}w, avg ${p.vwap}w, ${p.volume} units traded` : 'no trades';
-    const balance =
-      p.totalDemand > p.totalSupply * 1.5 ? '⬆ HIGH DEMAND — price UP to sell faster' :
-      p.totalSupply > p.totalDemand * 1.5 ? '⬇ SURPLUS — price DOWN to move stock' :
-      '≈ balanced market';
-    return `  ${p.itemType}: ${vol} [${balance}]`;
+  const rows = prices.map(p => {
+    const demandPressure = p.totalDemand > p.totalSupply * 1.5
+      ? '🔴 HIGH DEMAND — sellers earn premium'
+      : p.totalSupply > p.totalDemand * 1.5
+        ? '🟢 SURPLUS — must price low to sell, avoid producing this'
+        : '🟡 BALANCED';
+
+    const trend = p.priceChange && p.priceChange > 0 ? `↑+${p.priceChange.toFixed(1)}w`
+      : p.priceChange && p.priceChange < 0 ? `↓${p.priceChange.toFixed(1)}w`
+        : '→ stable';
+
+    return `  ${p.itemType}: avg ${p.vwap.toFixed(1)}w/unit ${trend} | Vol: ${p.volume} units | ${demandPressure}`;
   });
 
   return [
-    '[MARKET BOARD — last period]',
-    ...lines,
-    `System floor/ceiling: raw_materials ≥${SYSTEM_BUY_FLOOR}w, food ≤${SYSTEM_SELL_CEILING}w (emergency).`,
+    '[MARKET BOARD — last 24 ticks]',
+    ...rows,
+    'System emergency: Food ceiling 15w, Raw_Materials floor 2w (system always buys/sells at these limits).',
   ].join('\n');
+}
+
+export function buildEmploymentBoard(offers: JobOffer[]): string {
+  if (offers.length === 0) {
+    return '[EMPLOYMENT BOARD — no open positions]\nConsider founding an enterprise to create jobs.';
+  }
+
+  const rows = offers
+    .filter(o => o.isOpen)
+    .slice(0, 10) // Cap at 10 to avoid context bloat
+    .map(o => `  Enterprise ${o.enterpriseId.slice(0, 8)}... | ${o.industry} | Wage: ${o.wage}w/shift | Skill req: ${o.minSkillReq}`);
+
+  return [
+    '[EMPLOYMENT BOARD — open positions]',
+    ...rows,
+    'Use APPLY_FOR_JOB with enterpriseId to apply. WORK_AT_ENTERPRISE once hired pays wage every 8 ticks.',
+  ].join('\n');
+}
+
+function buildEconomicTriggerSection(trigger: EconomicTrigger): string {
+  return `[URGENT ECONOMIC EVENT]\nEvent Type: ${trigger.type}\nDetails: ${JSON.stringify(trigger.contextData)}`;
+}
+
+export function buildTickIntentPrompt(
+  agent: Agent,
+  session: Session,
+  tickState: TickAgentState,
+  econState: AgentEconomyState | undefined,
+  prevMarketPrices: PriceIndex[],
+  employmentBoard: JobOffer[],
+  currentTick: number,
+  promptReason: 'needs-interrupt' | 'task-complete' | 'economic-trigger',
+  economicTrigger: EconomicTrigger | null,
+): LLMMessage[] {
+
+  // ── Market Board ─────────────────────────────────────────────────────────
+  const marketBoard = buildEnhancedMarketBoard(prevMarketPrices);
+
+  // ── Employment Board ─────────────────────────────────────────────────────
+  const employmentSection = buildEmploymentBoard(employmentBoard);
+
+  // ── Needs Status ─────────────────────────────────────────────────────────
+  const needsSection = `[YOUR BIOLOGICAL NEEDS]
+Satiety: ${tickState.satiety.toFixed(0)}/100 ${tickState.satiety < 30 ? '⚠ DANGEROUSLY LOW' : tickState.satiety < 50 ? '(hungry)' : '(ok)'}
+Cortisol: ${tickState.cortisol.toFixed(0)}/100 ${tickState.cortisol > 80 ? '⚠ CRITICAL STRESS — 50% PRODUCTIVITY PENALTY ACTIVE' : tickState.cortisol > 60 ? '(high stress)' : '(ok)'}
+Energy: ${tickState.energy.toFixed(0)}/100 ${tickState.energy < 20 ? '⚠ EXHAUSTED' : '(ok)'}`;
+
+  // ── Needs Interrupt Override ─────────────────────────────────────────────
+  const interruptSection = tickState.pendingInterrupt
+    ? `\n\n${tickState.pendingInterrupt.injectedDirective}\n`
+    : '';
+
+  // ── Economic Trigger Context ─────────────────────────────────────────────
+  const triggerSection = economicTrigger
+    ? buildEconomicTriggerSection(economicTrigger)
+    : '';
+
+  // ── Prompt Reason ────────────────────────────────────────────────────────
+  const reasonContext = {
+    'needs-interrupt': 'A critical biological need has interrupted your current task.',
+    'task-complete': 'You have just finished your previous task. Decide what to do next.',
+    'economic-trigger': 'An economic or social event requires your immediate attention.',
+  }[promptReason];
+
+  const systemPrompt = `You are ${agent.name}, a ${agent.role} in a real-time tick simulation of: "${session.idea}"
+
+${interruptSection}
+SITUATION: ${reasonContext}
+
+[YOUR STATS]
+Wealth: ${agent.currentStats.wealth} | Health: ${agent.currentStats.health} | Happiness: ${agent.currentStats.happiness} | Cortisol: ${agent.currentStats.cortisol ?? 0}
+
+${needsSection}
+
+[YOUR INVENTORY]
+Food: ${econState?.inventory?.food?.quantity ?? 0} units | Tools: ${econState?.inventory?.tools?.quantity ?? 0} | Raw Materials: ${econState?.inventory?.raw_materials?.quantity ?? 0}
+
+${marketBoard}
+
+${employmentSection}
+
+${triggerSection}
+
+[RATIONAL ACTOR DIRECTIVE]
+You are a rational economic actor in a real-time tick simulation (1 tick = 1 in-game hour). You MUST:
+1. Review the [MARKET BOARD] and [EMPLOYMENT BOARD] before acting.
+2. If your Satiety < 40, your FIRST action MUST be POST_BUY_ORDER for Food.
+3. If your Cortisol > 80, you MUST purchase Luxury_Services or REST before anything else.
+4. If solo PRODUCE_AND_SELL is yielding worthless items (check market surplus), APPLY_FOR_JOB at a high-wage enterprise or switch commodity.
+5. If founding an enterprise, choose the industry with HIGHEST market demand and LOWEST supply.
+6. Tools (Tech_Parts) double your production output — they are worth buying if you plan to produce.
+7. Raw_Materials are REQUIRED inputs for Manufacturing enterprises. Without them, output drops 70%.
+
+[YOUR ALLOWED ACTIONS]
+${getAllowedActions(agent.role).join(', ')}
+
+Society overview: ${session.societyOverview?.slice(0, 300) ?? ''}
+Laws: ${session.law?.slice(0, 200) ?? ''}
+Current tick: ${currentTick} (1 tick = 1 in-game hour)
+
+You MUST respond with ONLY valid JSON:
+{
+  "internal_monologue": "Your private thoughts — 2-3 sentences, reference specific market prices or needs",
+  "public_action_narrative": "What you are visibly doing — 1 sentence",
+  "actionCode": "EXACTLY_ONE_ALLOWED_ACTION",
+  "actionTarget": "AgentName or EnterpriseID or null",
+  "commodity": "Food|Raw_Materials|Tech_Parts|Luxury_Services or null (for BUY/SELL orders)",
+  "priceOffer": null or number (wealth units; for BUY/SELL orders),
+  "quantity": null or number,
+  "enterpriseIndustry": "Agriculture|Extraction|Manufacturing|Services or null (for FOUND_ENTERPRISE)",
+  "enterpriseId": "enterprise UUID or null (for WORK_AT_ENTERPRISE, APPLY_FOR_JOB)"
+}`;
+
+  return [{ role: 'system', content: systemPrompt }];
 }
 
 export function buildBrainstormMessages(
@@ -341,21 +475,21 @@ ${previousSummary ? `What happened last iteration:\n${previousSummary.slice(0, 6
  *       item transfers now go through the order book at market prices.
  */
 const ACTION_DESCRIPTIONS: Partial<Record<ActionCode, string>> = {
-  WORK:           'WORK — wage labor: perform your occupation to earn Wealth directly. Your Health/time is consumed. No items produced to your inventory.',
-  REST:           'REST — rest, sleep, meditate, or recover. Restores Health and reduces Stress.',
-  PRODUCE:        'PRODUCE — independent production: farm, craft, mine, or build. Generates ITEMS (food, raw_materials, tools) directly into YOUR inventory. Earns 0 Wealth directly — sell via POST_SELL_ORDER to monetize.',
+  WORK: 'WORK — wage labor: perform your occupation to earn Wealth directly. Your Health/time is consumed. No items produced to your inventory.',
+  REST: 'REST — rest, sleep, meditate, or recover. Restores Health and reduces Stress.',
+  PRODUCE: 'PRODUCE — independent production: farm, craft, mine, or build. Generates ITEMS (food, raw_materials, tools) directly into YOUR inventory. Earns 0 Wealth directly — sell via POST_SELL_ORDER to monetize.',
   POST_BUY_ORDER: 'POST_BUY_ORDER — bid to purchase items from the market. SET parameters: itemType, quantity, price. Your Wealth is locked; if a seller matches your price, the trade executes and you receive items.',
-  POST_SELL_ORDER:'POST_SELL_ORDER — list your items for sale. SET parameters: itemType, quantity, price. Items are locked from your inventory; if a buyer matches, you receive Wealth.',
-  STRIKE:         'STRIKE — refuse to work, protest conditions, organize collective action.',
-  STEAL:          'STEAL — take Wealth or items from a specific person illegally (set actionTarget to their name). High risk.',
-  HELP:           'HELP — aid another citizen at personal cost (set actionTarget). Voluntary wealth transfer or labor.',
-  INVEST:         'INVEST — save or speculate to grow future returns.',
-  SET_WAGE:       'SET_WAGE — set a wage contract with a specific employee (set actionTarget). They receive Wealth each iteration.',
-  SABOTAGE:       'SABOTAGE — disrupt another person\'s enterprise or infrastructure (set actionTarget).',
-  EMBEZZLE:       'EMBEZZLE — [ELITE PRIVILEGE] skim Wealth from the communal treasury or state funds.',
-  ADJUST_TAX:     'ADJUST_TAX — [ELITE PRIVILEGE] forcibly extract Wealth from lower-class citizens via tax decree.',
-  SUPPRESS:       'SUPPRESS — [ELITE PRIVILEGE] deploy enforcement to penalise a specific citizen (set actionTarget).',
-  NONE:           'NONE — do nothing meaningful this period.',
+  POST_SELL_ORDER: 'POST_SELL_ORDER — list your items for sale. SET parameters: itemType, quantity, price. Items are locked from your inventory; if a buyer matches, you receive Wealth.',
+  STRIKE: 'STRIKE — refuse to work, protest conditions, organize collective action.',
+  STEAL: 'STEAL — take Wealth or items from a specific person illegally (set actionTarget to their name). High risk.',
+  HELP: 'HELP — aid another citizen at personal cost (set actionTarget). Voluntary wealth transfer or labor.',
+  INVEST: 'INVEST — save or speculate to grow future returns.',
+  SET_WAGE: 'SET_WAGE — set a wage contract with a specific employee (set actionTarget). They receive Wealth each iteration.',
+  SABOTAGE: 'SABOTAGE — disrupt another person\'s enterprise or infrastructure (set actionTarget).',
+  EMBEZZLE: 'EMBEZZLE — [ELITE PRIVILEGE] skim Wealth from the communal treasury or state funds.',
+  ADJUST_TAX: 'ADJUST_TAX — [ELITE PRIVILEGE] forcibly extract Wealth from lower-class citizens via tax decree.',
+  SUPPRESS: 'SUPPRESS — [ELITE PRIVILEGE] deploy enforcement to penalise a specific citizen (set actionTarget).',
+  NONE: 'NONE — do nothing meaningful this period.',
 };
 
 export function buildNaturalIntentPrompt(
@@ -537,7 +671,7 @@ ${actionList}`;
 
   // Market board block: same data for all agents this iteration → second cached block
   // (cache hits for agents 2..N within same iteration, minimising prompt tokens)
-  const marketBoardText = buildMarketBoardText(marketPrices ?? []);
+  const marketBoardText = buildEnhancedMarketBoard(marketPrices ?? []);
 
   const systemContent: ContentBlock[] = [
     { type: 'text', text: staticPrefix, cache_control: { type: 'ephemeral' } },
@@ -556,6 +690,8 @@ export interface AgentIntent {
   agentName: string;
   intent: string;
   reasoning: string;
+  internal_monologue?: string;
+  public_action_narrative?: string;
   actionCode?: string;
   actionTarget?: string | null;
   /** Market order parameters set by the LLM for POST_BUY_ORDER / POST_SELL_ORDER. */

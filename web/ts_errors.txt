@@ -1,0 +1,4 @@
+src/api/brainstorm.ts(21,39): error TS2345: Argument of type '"PATCH"' is not assignable to parameter of type '"GET" | "POST" | "PUT" | "DELETE" | undefined'.
+src/api/client.ts(2,15): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+src/stores/sessionDetailStore.ts(320,44): error TS2550: Property 'findLastIndex' does not exist on type 'ChatMessage[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2023' or later.
+src/stores/sessionDetailStore.ts(320,58): error TS7006: Parameter 'm' implicitly has an 'any' type.

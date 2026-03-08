@@ -175,6 +175,8 @@ export interface PriceIndex {
     itemType: ItemType;
     /** Last traded price. */
     lastPrice: number;
+    /** Price change since the previous period. */
+    priceChange?: number;
     /** Volume-weighted average price this iteration. */
     vwap: number;
     /** Total volume traded this iteration. */

@@ -9,7 +9,7 @@
  * Phase 3 Enhancement: Asymmetric class actions (EMBEZZLE, ADJUST_TAX, SUPPRESS)
  * and buffed WORK income to break poverty traps.
  */
-import type { Agent, SkillMatrix, Inventory } from '@idealworld/shared';
+import type { Agent, SkillMatrix, Inventory, AgentNeeds, NeedsInterrupt, AgentStats } from '@idealworld/shared';
 import type { ActionCode } from './actionCodes.js';
 import { getActionMultiplier } from './skillSystem.js';
 import { getToolMultiplier } from './inventorySystem.js';
@@ -34,6 +34,8 @@ export interface PhysicsInput {
   isSabotaged?: boolean;
   /** Phase 3: Whether this agent is under active SUPPRESS enforcement (+cortisol, -happiness). */
   isSuppressed?: boolean;
+  /** Phase 1 Tick-based: Agent's current needs for stat calculations */
+  agentNeeds?: AgentNeeds;
 }
 
 export interface PhysicsOutput {
@@ -86,7 +88,7 @@ const clampDelta = (v: number): number => Math.max(-30, Math.min(30, Math.round(
  * and suppression penalty for targets of SUPPRESS.
  */
 export function resolveAction(input: PhysicsInput): PhysicsOutput {
-  const { agent, actionCode, actionTarget, allAgents, skills, inventory, economyDeltas, isSabotaged, isSuppressed } = input;
+  const { agent, actionCode, actionTarget, allAgents, skills, inventory, economyDeltas, isSabotaged, isSuppressed, agentNeeds } = input;
   let w = 0, h = 0, hap = 0, cor = 0, dop = 0;
 
   // Compute skill and tool multipliers if available
@@ -94,7 +96,8 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
   const toolMult = inventory ? getToolMultiplier(inventory) : 1.0;
   // Phase 2: Active sabotage reduces this agent's productivity by 50%
   const sabotageMult = isSabotaged ? 0.5 : 1.0;
-  const productionMult = skillMult * toolMult * sabotageMult;
+  const cortisolPenalty = (agentNeeds?.cortisol ?? 0) >= 80 ? 0.5 : 1.0;
+  const productionMult = skillMult * toolMult * sabotageMult * cortisolPenalty;
 
   switch (actionCode) {
     case 'WORK':
@@ -269,4 +272,246 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
     cortisolDelta: clampDelta(cor),
     dopamineDelta: clampDelta(dop),
   };
+}
+
+// ── Phase 3: Enterprise Physics ────────────────────────────────────────────
+
+export interface Enterprise {
+  id: string;
+  sessionId: string;
+  ownerId: string;
+  name: string;
+  industry: string;
+  outputCommodity: string;
+  efficiencyMultiplier: number;
+  employeeIds: string; // JSON
+  wagePer8Ticks: number;
+  stockpile: number;
+  foundedAt: number;
+  isActive: boolean;
+}
+
+export interface EnterpriseProductionInput {
+  enterprise: Enterprise;
+  employees: Agent[];           // Current active employees (WORK_AT_ENTERPRISE task)
+  rawMaterialsConsumed: number; // Units fed from stockpile/orders
+  ticksWorked: number;          // Should be 8 for a full shift
+}
+
+export interface EnterpriseProductionOutput {
+  unitsProduced: number;
+  wagesPaid: number;            // Total wages to distribute
+  perEmployeeWage: number;
+  ownerProfit: number;          // Owner's cut (sales revenue - wages - input costs)
+}
+
+/**
+ * Resolve one enterprise production cycle (8 ticks = 1 shift).
+ * efficiencyMultiplier (default 2.5x) vs solo PRODUCE_AND_SELL (1.0x)
+ * creates the surplus that allows enterprises to pay wages AND turn profit.
+ */
+export function resolveEnterpriseProduction(input: EnterpriseProductionInput): EnterpriseProductionOutput {
+  const { enterprise, employees, rawMaterialsConsumed } = input;
+
+  const baseOutput = employees.length * 10; // Base: 10 units per employee per shift
+  const efficiencyBonus = enterprise.efficiencyMultiplier;
+
+  // Raw materials required for Manufacturing/Tech; Agriculture has no material input
+  const materialMult = enterprise.industry === 'Manufacturing'
+    ? (rawMaterialsConsumed > 0 ? 1.0 : 0.3) // Penalty for no raw materials
+    : 1.0;
+
+  const unitsProduced = Math.floor(baseOutput * efficiencyBonus * materialMult);
+  const wagesPaid = employees.length * enterprise.wagePer8Ticks;
+
+  // Assuming 8w/unit sale price for profit estimate in physics
+  const assumedSalePrice = 8;
+  const ownerProfit = Math.max(0, (unitsProduced * assumedSalePrice) - wagesPaid);
+
+  return {
+    unitsProduced,
+    wagesPaid,
+    perEmployeeWage: enterprise.wagePer8Ticks,
+    ownerProfit,
+  };
+}
+
+// ── Phase 2: Commodities & Hard Utility ────────────────────────────────────
+
+/** Commodity categories with deterministic physical effects */
+export type CommodityCategory = 'Food' | 'Raw_Materials' | 'Tech_Parts' | 'Luxury_Services';
+
+export interface CommodityEffect {
+  category: CommodityCategory;
+  /** Stat deltas applied upon consumption/use of 1 unit */
+  satietyDelta: number;
+  healthDelta: number;
+  cortisolDelta: number;
+  happinessDelta: number;
+  /** Productivity multiplier if equipped (for Tech_Parts/Tools) */
+  productivityBuff: number;
+  /** Whether this commodity is consumed on use (vs. persistent buff) */
+  consumable: boolean;
+  /** Whether enterprise production requires this as input material */
+  isRawInput: boolean;
+}
+
+export const COMMODITY_REGISTRY: Record<CommodityCategory, CommodityEffect> = {
+  Food: {
+    category: 'Food',
+    satietyDelta: +35,   // Restores significant satiety
+    healthDelta: +8,     // General health recovery
+    cortisolDelta: -5,   // Eating is calming
+    happinessDelta: +5,
+    productivityBuff: 1.0,
+    consumable: true,
+    isRawInput: false,
+  },
+  Raw_Materials: {
+    category: 'Raw_Materials',
+    satietyDelta: 0,
+    healthDelta: 0,
+    cortisolDelta: 0,
+    happinessDelta: 0,
+    productivityBuff: 1.0,
+    consumable: false,  // Not consumed by agent — fed to enterprise production
+    isRawInput: true,   // Required input for Tech_Parts manufacturing
+  },
+  Tech_Parts: {
+    category: 'Tech_Parts',
+    satietyDelta: 0,
+    healthDelta: 0,
+    cortisolDelta: -2,   // Mild satisfaction from having good tools
+    happinessDelta: +3,
+    productivityBuff: 2.0,  // DOUBLES all production output when equipped
+    consumable: false,   // Persistent buff; degrades over time (see below)
+    isRawInput: false,
+  },
+  Luxury_Services: {
+    category: 'Luxury_Services',
+    satietyDelta: 0,
+    healthDelta: +5,
+    cortisolDelta: -30,  // DRASTICALLY reduces cortisol — primary anti-stress commodity
+    happinessDelta: +20,
+    productivityBuff: 1.0,
+    consumable: true,    // Single-use experience
+    isRawInput: false,
+  },
+};
+
+/**
+ * Resolve the effect of an agent purchasing/using a commodity.
+ * Called by the Physics Engine when BUY_ORDER is matched on the order book.
+ * PURE FUNCTION — no side effects.
+ */
+export function applyCommodityEffect(
+  needs: AgentNeeds,
+  stats: AgentStats, // unused for now, kept for signature match
+  category: CommodityCategory,
+): { updatedNeeds: AgentNeeds; statDelta: PhysicsOutput } {
+  const effect = COMMODITY_REGISTRY[category];
+  return {
+    updatedNeeds: {
+      satiety: Math.min(100, needs.satiety + effect.satietyDelta),
+      cortisol: Math.max(0, Math.min(100, needs.cortisol + effect.cortisolDelta)),
+      energy: needs.energy,
+    },
+    statDelta: {
+      wealthDelta: 0, // Wealth already deducted when order matched
+      healthDelta: effect.healthDelta,
+      happinessDelta: effect.happinessDelta,
+      cortisolDelta: effect.cortisolDelta,
+      dopamineDelta: effect.happinessDelta > 10 ? 8 : 2,
+    },
+  };
+}
+
+/** Decay rates per tick (1 tick = 1 in-game hour) */
+const NEEDS_DECAY = {
+  satiety: -1.2,   // Lose ~28 satiety over 24 ticks (1 in-game day)
+  cortisol: +0.5,  // Stress accumulates slowly unless actively reduced
+  energy: -0.8,    // Lose ~19 energy over 24 ticks
+};
+
+/** Interrupt thresholds */
+const INTERRUPT_THRESHOLDS = {
+  satiety: { warning: 40, critical: 20 },
+  cortisol: { warning: 70, critical: 85 },
+  energy: { warning: 25, critical: 10 },
+};
+
+export interface NeedsDecayInput {
+  needs: AgentNeeds;
+  currentTick: number;
+  isResting: boolean;    // REST action reduces cortisol/restores energy faster
+  isEating: boolean;     // EAT action restores satiety
+}
+
+export interface NeedsDecayOutput {
+  updatedNeeds: AgentNeeds;
+  interrupt: NeedsInterrupt | null;
+}
+
+/**
+ * Apply one tick of passive needs decay.
+ * Returns updated needs and any interrupt that should fire.
+ * PURE FUNCTION — no side effects, no DB access.
+ */
+export function applyNeedsDecay(input: NeedsDecayInput): NeedsDecayOutput {
+  const { needs, currentTick, isResting, isEating } = input;
+
+  let satiety = needs.satiety + NEEDS_DECAY.satiety;
+  let cortisol = needs.cortisol + NEEDS_DECAY.cortisol;
+  let energy = needs.energy + NEEDS_DECAY.energy;
+
+  // Active REST recovers energy and suppresses cortisol
+  if (isResting) {
+    energy += 4;
+    cortisol -= 3;
+  }
+
+  // Active EAT restores satiety
+  if (isEating) {
+    satiety += 15;
+  }
+
+  // Clamp to [0, 100]
+  satiety = Math.max(0, Math.min(100, satiety));
+  cortisol = Math.max(0, Math.min(100, cortisol));
+  energy = Math.max(0, Math.min(100, energy));
+
+  // Determine interrupt
+  let interrupt: NeedsInterrupt | null = null;
+
+  if (satiety <= INTERRUPT_THRESHOLDS.satiety.critical) {
+    interrupt = {
+      type: 'STARVATION',
+      severity: 'critical',
+      injectedDirective: '[CRITICAL — STARVATION] Your body is consuming itself. You CANNOT think of anything else. You MUST buy food from the market RIGHT NOW or you will die.',
+      firedAtTick: currentTick,
+    };
+  } else if (cortisol >= INTERRUPT_THRESHOLDS.cortisol.critical) {
+    interrupt = {
+      type: 'MENTAL_BREAK',
+      severity: 'critical',
+      injectedDirective: '[CRITICAL — MENTAL BREAKDOWN IMMINENT] Your stress has reached an unbearable level. You are unable to function. You MUST purchase Luxury_Services or REST immediately.',
+      firedAtTick: currentTick,
+    };
+  } else if (satiety <= INTERRUPT_THRESHOLDS.satiety.warning) {
+    interrupt = {
+      type: 'STARVATION',
+      severity: 'warning',
+      injectedDirective: '[WARNING — HUNGRY] You feel intense hunger pangs. Your concentration is slipping. You should buy food soon.',
+      firedAtTick: currentTick,
+    };
+  } else if (cortisol >= INTERRUPT_THRESHOLDS.cortisol.warning) {
+    interrupt = {
+      type: 'MENTAL_BREAK',
+      severity: 'warning',
+      injectedDirective: '[WARNING — HIGH STRESS] Your cortisol is dangerously elevated. If you do not seek relief soon, you will suffer a mental breakdown.',
+      firedAtTick: currentTick,
+    };
+  }
+
+  return { updatedNeeds: { satiety, cortisol, energy }, interrupt };
 }

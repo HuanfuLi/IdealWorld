@@ -173,5 +173,48 @@ export function runMigrations() {
     sqlite.exec(`ALTER TABLE agent_intents ADD COLUMN action_target TEXT;`);
   } catch { /* column already exists */ }
 
+  // ── Phase 3: Tick System & Enterprise Data Model migrations ────────────
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS enterprises (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      industry TEXT NOT NULL,
+      output_commodity TEXT NOT NULL,
+      efficiency_multiplier REAL NOT NULL DEFAULT 2.5,
+      employee_ids TEXT NOT NULL DEFAULT '[]',
+      wage_per_8_ticks REAL NOT NULL DEFAULT 0,
+      stockpile REAL NOT NULL DEFAULT 0,
+      founded_at INTEGER NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS job_offers (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      enterprise_id TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      industry TEXT NOT NULL,
+      wage REAL NOT NULL,
+      min_skill_req REAL NOT NULL DEFAULT 0,
+      is_open INTEGER NOT NULL DEFAULT 1,
+      posted_at INTEGER NOT NULL,
+      applicant_ids TEXT NOT NULL DEFAULT '[]'
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_tick_state (
+      agent_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      satiety REAL NOT NULL DEFAULT 70,
+      cortisol REAL NOT NULL DEFAULT 20,
+      energy REAL NOT NULL DEFAULT 80,
+      active_task TEXT,
+      last_prompted_tick INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (agent_id, session_id)
+    );
+  `);
+
   console.log('Database migrations applied.');
 }

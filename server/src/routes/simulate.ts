@@ -83,8 +83,10 @@ router.post('/pause', (req, res) => {
   const { id } = req.params as { id: string };
   const status = simulationManager.getStatus(id);
   if (status !== 'running') {
+    console.log(`[pause] Cannot pause, status is ${status}`);
     return res.status(409).json({ error: 'No running simulation to pause' });
   }
+  console.log(`[pause] Setting pause requested for session ${id}`);
   simulationManager.pause(id);
   return res.json({ ok: true });
 });
@@ -95,14 +97,18 @@ router.post('/resume', async (req, res) => {
   const memStatus = simulationManager.getStatus(id);
 
   if (memStatus === 'running') {
+    console.log(`[resume] Status is already running for session ${id}`);
     return res.status(409).json({ error: 'Simulation is already running' });
   }
 
   if (memStatus === 'paused') {
+    console.log(`[resume] Normal resume for session ${id}`);
     // Normal case: in-memory runner is paused, just signal it to continue
     simulationManager.resume(id);
     return res.json({ ok: true });
   }
+
+  console.log(`[resume] memStatus is idle for session ${id}, trying DB restart`);
 
   // memStatus === 'idle': runner is gone (server restart). Check DB for paused stage.
   const session = await sessionRepo.getById(id);

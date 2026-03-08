@@ -5,14 +5,19 @@ import { parseJSON } from './json.js';
 import { normalizeActionCode, type ActionCode } from '../mechanics/actionCodes.js';
 
 export interface ParsedAgentIntent {
-  intent: string;
-  reasoning: string;
+  internal_monologue: string;
+  public_action_narrative: string;
   actionCode: ActionCode;
   actionTarget: string | null;
-  /**
-   * Required when actionCode is POST_BUY_ORDER or POST_SELL_ORDER.
-   * LLM must autonomously price market orders based on the Market Board.
-   */
+  commodity?: string | null;
+  priceOffer?: number | null;
+  quantity?: number | null;
+  enterpriseIndustry?: string | null;
+  enterpriseId?: string | null;
+
+  // Phase 1 fallbacks
+  intent?: string;
+  reasoning?: string;
   orderParameters?: {
     itemType: string;
     quantity: number;
@@ -48,6 +53,8 @@ export function parseAgentIntent(text: string): ParsedAgentIntent {
     return {
       intent: String(raw.intent ?? '').trim() || 'No specific intent.',
       reasoning: String(raw.reasoning ?? '').trim(),
+      internal_monologue: String(raw.reasoning ?? '').trim(),
+      public_action_narrative: String(raw.intent ?? '').trim() || 'No specific intent.',
       actionCode: normalizeActionCode(String(raw.actionCode ?? 'NONE')),
       actionTarget: raw.actionTarget ? String(raw.actionTarget) : null,
     };
@@ -56,6 +63,8 @@ export function parseAgentIntent(text: string): ParsedAgentIntent {
     return {
       intent: text.trim().slice(0, 500) || 'No specific intent.',
       reasoning: '',
+      internal_monologue: '',
+      public_action_narrative: text.trim().slice(0, 500) || 'No specific intent.',
       actionCode: 'NONE',
       actionTarget: null,
     };
@@ -68,13 +77,28 @@ export function parseAgentIntent(text: string): ParsedAgentIntent {
  */
 export function parseAgentIntentStrict(text: string): ParsedAgentIntent {
   const raw = parseJSON<Record<string, unknown>>(text);
-  const intent = String(raw.intent ?? '').trim();
-  if (!intent) throw new Error('Missing or empty "intent" field');
+
+  // Try to find the new schema fields or fallback to Phase 1 fields
+  const internal_monologue = String(raw.internal_monologue ?? raw.intent ?? '').trim();
+  const public_action_narrative = String(raw.public_action_narrative ?? raw.reasoning ?? '').trim();
+
+  if (!internal_monologue && !public_action_narrative && !raw.intent) {
+    throw new Error('Missing or empty intent / internal_monologue field');
+  }
+
   return {
-    intent,
-    reasoning: String(raw.reasoning ?? '').trim(),
+    internal_monologue,
+    public_action_narrative,
     actionCode: normalizeActionCode(String(raw.actionCode ?? 'NONE')),
     actionTarget: raw.actionTarget ? String(raw.actionTarget) : null,
+    commodity: raw.commodity ? String(raw.commodity) : null,
+    priceOffer: raw.priceOffer ? Number(raw.priceOffer) : null,
+    quantity: raw.quantity ? Number(raw.quantity) : null,
+    enterpriseIndustry: raw.enterpriseIndustry ? String(raw.enterpriseIndustry) : null,
+    enterpriseId: raw.enterpriseId ? String(raw.enterpriseId) : null,
+    // Provide backwards compatibility to old code requiring intent/reasoning
+    intent: public_action_narrative || internal_monologue,
+    reasoning: internal_monologue,
   };
 }
 
@@ -131,6 +155,8 @@ export function parseSinglePassIntent(text: string): ParsedAgentIntent {
   return {
     intent: narrative || monologue.slice(0, 300),
     reasoning: monologue,
+    internal_monologue: monologue,
+    public_action_narrative: narrative || monologue.slice(0, 300),
     actionCode,
     actionTarget,
     orderParameters,

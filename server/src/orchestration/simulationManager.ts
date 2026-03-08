@@ -21,13 +21,19 @@ interface SimulationState {
 
 export type SimulationEvent =
   | { type: 'iteration-start'; iteration: number; total: number }
-  | { type: 'agent-intent'; agentId: string; agentName: string; intent: string; actionCode: string; actionTarget: string | null }
+  | { type: 'agent-intent'; agentId: string; agentName: string; intent: string; publicAction?: string; actionCode: string; actionTarget: string | null; tick?: number }
   | { type: 'resolution'; iteration: number; narrativeSummary: string; lifecycleEvents: unknown[] }
   | { type: 'iteration-complete'; iteration: number; stats: Record<string, unknown> }
   | { type: 'simulation-complete'; finalReport: string }
   | { type: 'paused'; iteration: number }
   | { type: 'error'; message: string }
-  | { type: 'aborted-reset' };
+  | { type: 'aborted-reset' }
+  | { type: 'tick-start'; tick: number; sessionId: string }
+  | { type: 'tick-complete'; tick: number; agents: unknown[]; sessionId: string }
+  | { type: 'task-complete'; agentId: string; agentName: string; task: unknown; outcome: unknown; tick: number; sessionId: string }
+  | { type: 'agent-interrupt'; agentId: string; agentName: string; interrupt: unknown; tick: number; sessionId: string }
+  | { type: 'enterprise-created'; enterprise: unknown; tick: number; sessionId: string }
+  | { type: 'hr-event'; enterpriseId: string; employeeId: string; action: 'hired' | 'fired'; tick: number; sessionId: string };
 
 class SimulationManager {
   private sessions = new Map<string, SimulationState>();

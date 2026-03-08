@@ -128,26 +128,26 @@ export const useSessionDetailStore = create<SessionDetailStore>((set, get) => ({
         chatPending: false,
         session: state.session
           ? {
-              ...state.session,
-              stage: state.session.stage === 'idea-input' ? 'brainstorming' : state.session.stage,
-              config: state.session.config
-                ? {
-                    ...state.session.config,
-                    checklist: response.updatedChecklist ?? state.session.config.checklist,
-                    readyForDesign: response.readyForDesign,
-                  }
-                : {
-                    totalIterations: 20,
-                    checklist: response.updatedChecklist ?? {
-                      governance: false,
-                      economy: false,
-                      legal: false,
-                      culture: false,
-                      infrastructure: false,
-                    },
-                    readyForDesign: response.readyForDesign,
-                  },
-            }
+            ...state.session,
+            stage: state.session.stage === 'idea-input' ? 'brainstorming' : state.session.stage,
+            config: state.session.config
+              ? {
+                ...state.session.config,
+                checklist: response.updatedChecklist ?? state.session.config.checklist,
+                readyForDesign: response.readyForDesign,
+              }
+              : {
+                totalIterations: 20,
+                checklist: response.updatedChecklist ?? {
+                  governance: false,
+                  economy: false,
+                  legal: false,
+                  culture: false,
+                  infrastructure: false,
+                },
+                readyForDesign: response.readyForDesign,
+              },
+          }
           : null,
       }));
     } catch (err) {
@@ -317,7 +317,13 @@ export const useSessionDetailStore = create<SessionDetailStore>((set, get) => ({
     const { failedMessage, refinementMessages } = get();
     if (!failedMessage) return;
     // Remove the failed user message before retrying
-    const lastUserIdx = refinementMessages.findLastIndex(m => m.role === 'user' && m.content === failedMessage);
+    let lastUserIdx = -1;
+    for (let i = refinementMessages.length - 1; i >= 0; i--) {
+      if (refinementMessages[i].role === 'user' && refinementMessages[i].content === failedMessage) {
+        lastUserIdx = i;
+        break;
+      }
+    }
     if (lastUserIdx >= 0) {
       set(state => ({
         refinementMessages: state.refinementMessages.filter((_, i) => i !== lastUserIdx),

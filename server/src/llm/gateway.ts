@@ -20,7 +20,8 @@ export function getProvider(): LLMProvider {
 export function getCitizenProvider(): LLMProvider {
   const settings = readSettings();
   if (!settings.citizenProvider) {
-    return getProvider();
+    // If no separate citizen provider, still ensure we use the citizen model on the main provider
+    return createProviderFromSettings(settings, true);
   }
   if (!citizenProviderCache) {
     citizenProviderCache = createProviderFromSettings({
@@ -30,7 +31,7 @@ export function getCitizenProvider(): LLMProvider {
       baseUrl: settings.citizenBaseUrl ?? 'http://localhost:1234/v1',
       vertexProjectId: settings.citizenVertexProjectId ?? '',
       vertexLocation: settings.citizenVertexLocation ?? '',
-    });
+    }, true);
   }
   return citizenProviderCache;
 }
@@ -41,28 +42,30 @@ export function invalidateProvider(): void {
 }
 
 /** Create a provider from explicit settings without touching the module-level cache. */
-export function createProviderFromSettings(settings: AppSettings): LLMProvider {
+export function createProviderFromSettings(settings: AppSettings, isCitizen = false): LLMProvider {
+  const model = isCitizen ? settings.citizenAgentModel : settings.centralAgentModel;
+
   switch (settings.provider) {
     case 'claude':
-      return new AnthropicProvider(settings.apiKey, settings.centralAgentModel);
+      return new AnthropicProvider(settings.apiKey, model);
 
     case 'openai':
       return new OpenAIProvider(
         settings.apiKey,
-        settings.centralAgentModel
+        model
       );
 
     case 'gemini':
       return new GeminiProvider(
         settings.apiKey,
-        settings.centralAgentModel
+        model
       );
 
     case 'vertex':
       return new VertexProvider(
         settings.vertexProjectId ?? '',
         settings.vertexLocation ?? '',
-        settings.centralAgentModel
+        model
       );
 
     case 'local':
@@ -72,7 +75,7 @@ export function createProviderFromSettings(settings: AppSettings): LLMProvider {
       return new OpenAICompatibleProvider(
         settings.baseUrl || 'http://localhost:1234/v1',
         settings.apiKey || 'lm-studio',
-        settings.centralAgentModel
+        model
       );
   }
 }

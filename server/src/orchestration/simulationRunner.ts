@@ -30,8 +30,10 @@ import {
   buildMergeResolutionMessages,
   buildFinalReportPrompt,
   buildPostMortemPrompt,
+  buildTickIntentPrompt,
   type AgentIntent,
   type PostMortemInput,
+  type EconomicTrigger,
 } from '../llm/prompts.js';
 import {
   parseAgentIntentStrict,
@@ -40,11 +42,12 @@ import {
   parseMergeResolutionStrict,
   parseFinalReport,
   parseSinglePassIntent,
+  type ParsedAgentIntent,
 } from '../parsers/simulation.js';
 import { runWithConcurrency } from './concurrencyPool.js';
 import { asyncLogFlusher } from '../db/asyncLogFlusher.js';
-import { resolveAction } from '../mechanics/physicsEngine.js';
-import { type ActionCode, getAllowedActions, getRoleTier } from '../mechanics/actionCodes.js';
+import { resolveAction, applyNeedsDecay } from '../mechanics/physicsEngine.js';
+import { type ActionCode, getAllowedActions, getRoleTier, normalizeActionCode, getActionDuration } from '../mechanics/actionCodes.js';
 import { clusterByRole } from './clustering.js';
 import { retryWithHealing } from '../llm/retryWithHealing.js';
 // Phase 1 Economy imports
@@ -53,7 +56,6 @@ import { economyRepo, type AgentEconomyState } from '../db/repos/economyRepo.js'
 import type { SkillMatrix, Inventory, PriceIndex, ItemType } from '@idealworld/shared';
 import { DEFAULT_SKILL_MATRIX, DEFAULT_INVENTORY } from '@idealworld/shared';
 import { v4 as ecoUuid } from 'uuid';
-// Phase 3 Cognitive Engine imports
 import {
   runCognitivePreProcessing,
   runCognitivePostProcessing,
@@ -61,6 +63,60 @@ import {
   type CognitivePreInput,
   type CognitivePostInput,
 } from '../cognition/cognitiveEngine.js';
+import { tickStateStore } from './tickStateStore.js';
+import type { JobOffer } from '../db/repos/enterpriseRepo.js';
+import type { ActiveTask, Session, TickAgentState } from '@idealworld/shared';
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+function flushNeedsToDB(sessionId: string, snapshot: Map<string, TickAgentState>) {
+  const values = Array.from(snapshot.entries()).map(([agentId, state]) => ({
+    agentId,
+    sessionId,
+    satiety: state.satiety,
+    cortisol: state.cortisol,
+    energy: state.energy,
+    activeTask: state.activeTask ? JSON.stringify(state.activeTask) : null,
+    lastPromptedTick: state.lastPromptedTick,
+    updatedAt: Date.now(),
+  }));
+  if (values.length === 0) return;
+  sqlite.transaction(() => {
+    const stmt = sqlite.prepare(`
+      INSERT INTO agent_tick_state (agent_id, session_id, satiety, cortisol, energy, active_task, last_prompted_tick, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(agent_id, session_id) DO UPDATE SET
+        satiety = excluded.satiety,
+        cortisol = excluded.cortisol,
+        energy = excluded.energy,
+        active_task = excluded.active_task,
+        last_prompted_tick = excluded.last_prompted_tick,
+        updated_at = excluded.updated_at
+    `);
+    for (const v of values) {
+      stmt.run(v.agentId, v.sessionId, v.satiety, v.cortisol, v.energy, v.activeTask, v.lastPromptedTick, v.updatedAt);
+    }
+  })();
+}
+
+const economicTriggerCache = new Map<string, EconomicTrigger>();
+const promptQueue = new Map<string, 'needs-interrupt' | 'task-complete' | 'economic-trigger'>();
+
+export function emitEconomicTrigger(trigger: EconomicTrigger) {
+  promptQueue.set(trigger.targetAgentId, 'economic-trigger');
+
+  const state = tickStateStore.get(trigger.targetAgentId);
+  if (state) {
+    tickStateStore.set(trigger.targetAgentId, {
+      ...state,
+      activeTask: null, // Cancel current task — HR events take priority
+      pendingInterrupt: null,
+    });
+  }
+  // Store trigger context so it can be injected into the next prompt
+  economicTriggerCache.set(trigger.targetAgentId, trigger);
+}
+
 
 /**
  * Thrown when intent parsing is exhausted (all retries used) for a specific agent.
@@ -140,6 +196,97 @@ function computeStats(agents: Agent[], iterationNumber: number): IterationStats 
     avgCortisol: Math.round(cortArr.reduce((s, v) => s + v, 0) / alive.length),
     avgDopamine: Math.round(dopArr.reduce((s, v) => s + v, 0) / alive.length),
   };
+}
+
+/**
+ * Asynchronously prompt a batch of agents who need LLM decisions.
+ * Called fire-and-forget from the tick loop.
+ * Returns assigned tasks for each agent.
+ */
+export async function promptAgentsBatch(
+  agentsToPrompt: Array<[string, 'needs-interrupt' | 'task-complete' | 'economic-trigger']>,
+  allAgents: Agent[],
+  session: Session,
+  currentTick: number,
+  agentEconomyMap: Map<string, AgentEconomyState>,
+  prevMarketPrices: PriceIndex[],
+  employmentBoard: JobOffer[],
+): Promise<Array<{ agentId: string; task: ActiveTask }>> {
+
+  const citizenProv = getCitizenProvider();
+  const settings = readSettings();
+
+  const promptTasks = agentsToPrompt.map(([agentId, reason]) => async () => {
+    const agent = allAgents.find(a => a.id === agentId);
+    if (!agent || !agent.isAlive) return null;
+
+    const tickState = tickStateStore.get(agentId)!;
+    const econState = agentEconomyMap.get(agentId);
+    const economicTrigger = economicTriggerCache.get(agentId);
+    economicTriggerCache.delete(agentId);
+
+    // Build the context-rich prompt
+    const messages = buildTickIntentPrompt(
+      agent,
+      session,
+      tickState,
+      econState,
+      prevMarketPrices,
+      employmentBoard,
+      currentTick,
+      reason,
+      economicTrigger ?? null,
+    );
+
+    // Use existing retryWithHealing infrastructure
+    const intent = await retryWithHealing<ParsedAgentIntent | null>({
+      provider: citizenProv,
+      messages,
+      parse: parseAgentIntentStrict,
+      fallback: {
+        intent: 'I am taking a moment to rest and recover.',
+        reasoning: 'Fallback',
+        internal_monologue: 'Fallback',
+        public_action_narrative: 'Resting.',
+        actionCode: 'REST',
+        actionTarget: null,
+      },
+      label: `prompt batch agent ${agentId}`,
+      throwOnExhaustion: false,
+    });
+    if (!intent) return null;
+
+    const actionCode = normalizeActionCode(intent.actionCode);
+    const duration = getActionDuration(actionCode);
+
+    // Emit SSE for the frontend live feed
+    simulationManager.broadcast(session.id, {
+      type: 'agent-intent',
+      agentId,
+      agentName: agent.name,
+      actionCode,
+      actionTarget: intent.actionTarget,
+      intent: intent.internal_monologue,
+      publicAction: intent.public_action_narrative,
+      tick: currentTick,
+    });
+
+    return {
+      agentId,
+      task: {
+        taskId: uuidv4(),
+        actionCode,
+        startTick: currentTick,
+        durationTicks: duration,
+        targetId: intent.actionTarget || undefined,
+        metadata: { enterpriseId: intent.enterpriseId, commodity: intent.commodity },
+      },
+    };
+  });
+
+  // Respect existing concurrency limits
+  const results = await runWithConcurrency(promptTasks, settings.maxConcurrency);
+  return results.filter(Boolean) as Array<{ agentId: string; task: ActiveTask }>;
 }
 
 export async function runSimulation(sessionId: string, totalIterations: number): Promise<void> {
@@ -249,6 +396,188 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       prevMarketPrices = await economyRepo.getLatestPriceIndices(sessionId);
     }
 
+    // ── NEW TICK LOOP ────────────────────────────────────────────────────────────
+    tickStateStore.init(agents);
+    const aliveAgents = agents.filter(a => a.isAlive && !a.isCentralAgent);
+    const pendingPrompts = new Set<string>();
+
+    // Initial prompt queue fill
+    for (const agent of aliveAgents) {
+      if (!tickStateStore.get(agent.id)!.activeTask) {
+        promptQueue.set(agent.id, 'task-complete');
+        pendingPrompts.add(agent.id);
+      }
+    }
+
+    const TICKS_PER_ITERATION = 8;
+    const totalTicks = totalIterations * TICKS_PER_ITERATION;
+
+    for (let tick = 0; tick < totalTicks; tick++) {
+      const currentIteration = startIter + Math.floor(tick / TICKS_PER_ITERATION);
+
+      // Emit iteration start mapping to UI constraints
+      if (tick % TICKS_PER_ITERATION === 0) {
+        simulationManager.broadcast(sessionId, {
+          type: 'iteration-start',
+          iteration: currentIteration,
+          total: endIter,
+        } as any);
+      }
+      // 1. Check pause/abort
+      if (simulationManager.isAbortRequested(sessionId)) {
+        asyncLogFlusher.stop();
+        cleanupSessionEconomy(sessionId);
+        cleanupSessionCognition(sessionId);
+        if (simulationManager.isResetRequested(sessionId)) {
+          simulationManager.broadcast(sessionId, { type: 'aborted-reset' });
+        } else {
+          simulationManager.broadcast(sessionId, { type: 'error', message: 'Simulation aborted.' });
+          await sessionRepo.updateStage(sessionId, 'simulation-complete');
+        }
+        simulationManager.finish(sessionId);
+        return;
+      }
+
+      if (simulationManager.isPauseRequested(sessionId)) {
+        simulationManager.setPaused(sessionId);
+        simulationManager.broadcast(sessionId, { type: 'paused', iteration: tick });
+        await sessionRepo.updateStage(sessionId, 'simulation-paused');
+        await new Promise<void>((resolve) => {
+          const check = setInterval(() => {
+            if (simulationManager.getStatus(sessionId) === 'running' || simulationManager.isAbortRequested(sessionId)) {
+              clearInterval(check);
+              resolve();
+            }
+          }, 500);
+        });
+        if (simulationManager.isAbortRequested(sessionId)) return;
+        await sessionRepo.updateStage(sessionId, 'simulating');
+      }
+
+      const currentTick = tickStateStore.incrementTick();
+
+      // 2. Emit tick-start SSE
+      simulationManager.broadcast(sessionId, { type: 'tick-start', tick: currentTick, sessionId } as any);
+
+      // 3. SYMBOLIC: Apply passive needs decay for ALL agents
+      for (const agent of aliveAgents) {
+        const tickState = tickStateStore.get(agent.id)!;
+        const activeCode = tickState.activeTask?.actionCode;
+
+        const decayResult = applyNeedsDecay({
+          needs: { satiety: tickState.satiety, cortisol: tickState.cortisol, energy: tickState.energy },
+          currentTick,
+          isResting: activeCode === 'REST',
+          isEating: activeCode === 'EAT',
+        });
+
+        tickStateStore.set(agent.id, { ...decayResult.updatedNeeds });
+
+        // 4. SYMBOLIC -> NEURO Bridge: Interrupt
+        if (decayResult.interrupt && decayResult.interrupt.severity === 'critical') {
+          tickStateStore.set(agent.id, {
+            activeTask: null,
+            pendingInterrupt: decayResult.interrupt,
+          });
+          if (!pendingPrompts.has(agent.id)) {
+            promptQueue.set(agent.id, 'needs-interrupt');
+            pendingPrompts.add(agent.id);
+          }
+        }
+      }
+
+      // 5. SYMBOLIC: Advance active task timers; complete if elapsed
+      for (const agent of aliveAgents) {
+        const tickState = tickStateStore.get(agent.id)!;
+        const task = tickState.activeTask;
+        if (!task) continue;
+
+        const elapsed = currentTick - task.startTick;
+        if (elapsed >= task.durationTicks) {
+          // Task complete
+          const outcome = resolveAction({
+            agent,
+            actionCode: task.actionCode as ActionCode,
+            allAgents: aliveAgents,
+            agentNeeds: tickState,
+          });
+
+          // Apply outcome
+          agent.currentStats.wealth = Math.max(0, agent.currentStats.wealth + outcome.wealthDelta);
+          agent.currentStats.health = Math.max(0, Math.min(100, agent.currentStats.health + outcome.healthDelta));
+          agent.currentStats.happiness = Math.max(0, Math.min(100, agent.currentStats.happiness + outcome.happinessDelta));
+
+          tickStateStore.set(agent.id, { activeTask: null });
+          if (!pendingPrompts.has(agent.id)) {
+            promptQueue.set(agent.id, 'task-complete');
+            pendingPrompts.add(agent.id);
+          }
+
+          simulationManager.broadcast(sessionId, {
+            type: 'task-complete',
+            agentId: agent.id,
+            agentName: agent.name,
+            task,
+            outcome,
+            tick: currentTick,
+            sessionId,
+          } as any);
+        }
+      }
+
+      // 6. NEURO: Prompt agents in queue
+      if (promptQueue.size > 0) {
+        const agentsToPrompt = [...promptQueue.entries()];
+        promptQueue.clear();
+
+        promptAgentsBatch(agentsToPrompt, agents, session, currentTick, agentEconomyMap, prevMarketPrices, [])
+          .then(newTasks => {
+            for (const [id] of agentsToPrompt) pendingPrompts.delete(id);
+            for (const { agentId, task } of newTasks) {
+              tickStateStore.set(agentId, { activeTask: task, lastPromptedTick: currentTick });
+            }
+          })
+          .catch(err => {
+            for (const [id] of agentsToPrompt) pendingPrompts.delete(id);
+            console.error('[TickLoop] Async prompt batch failed:', err);
+          });
+      }
+
+      // 7. Emit tick SSE
+      const agentSnapshots = aliveAgents.map(a => ({
+        id: a.id,
+        name: a.name,
+        stats: a.currentStats,
+        needs: tickStateStore.get(a.id),
+      }));
+      simulationManager.broadcast(sessionId, { type: 'tick-complete', tick: currentTick, agents: agentSnapshots, sessionId } as any);
+
+      // Map day ends for the legacy frontend to visually sync
+      if (tick % TICKS_PER_ITERATION === TICKS_PER_ITERATION - 1) {
+        simulationManager.broadcast(sessionId, {
+          type: 'iteration-complete',
+          iteration: currentIteration,
+          stats: computeStats(agents, currentIteration),
+        } as any);
+
+        simulationManager.broadcast(sessionId, {
+          type: 'resolution',
+          iteration: currentIteration,
+          narrativeSummary: `Simulation advanced to period ${currentIteration}.`,
+          lifecycleEvents: []
+        } as any);
+      }
+
+      // 8. Flush needs to DB
+      if (currentTick % 10 === 0) {
+        flushNeedsToDB(sessionId, tickStateStore.snapshot());
+      }
+
+      // 9. Tick pacing
+      await sleep(500);
+    }
+
+    /* ── OLD ITERATION LOOP (Commented out for tick refactor) ──
     for (let iterNum = startIter; iterNum <= endIter; iterNum++) {
       // ── Abort check ──────────────────────────────────────────────────────
       if (simulationManager.isAbortRequested(sessionId)) {
@@ -394,7 +723,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             messages,
             options: { model: settings.citizenAgentModel },
             parse: parseSinglePassIntent,
-            fallback: { intent: '', reasoning: '', actionCode: 'REST' as ActionCode, actionTarget: null },
+            fallback: { intent: '', reasoning: '', actionCode: 'REST' as ActionCode, actionTarget: null, internal_monologue: '', public_action_narrative: '' },
             throwOnExhaustion: true,
             label: `intent:${agent.name}`,
           });
@@ -402,14 +731,16 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           return {
             agentId: agent.id,
             agentName: agent.name,
-            intent: parsed.intent.slice(0, 500),
-            reasoning: parsed.reasoning,
+            intent: (parsed.intent || '').slice(0, 500),
+            reasoning: parsed.reasoning || '',
+            internal_monologue: parsed.internal_monologue,
+            public_action_narrative: parsed.public_action_narrative,
             actionCode: parsed.actionCode,
             actionTarget: parsed.actionTarget,
             orderParameters: parsed.orderParameters,
             parseMethod: 'structured',
           };
-        } catch (err) {
+        } catch (err: any) {
           // Wrap any error as SimulationPausedError so the outer loop can pause cleanly.
           // This prevents a single failing agent from silently dragging all others into REST.
           const msg = err instanceof Error ? err.message : String(err);
@@ -903,6 +1234,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         break;
       }
     }
+    */
 
     // ── Final report ─────────────────────────────────────────────────────────
     const finalStats = computeStats(agents, endIter);

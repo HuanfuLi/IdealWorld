@@ -36,6 +36,17 @@ export type ActionCode =
   | 'EMBEZZLE'
   | 'ADJUST_TAX'
   | 'SUPPRESS'
+  // Enterprise founding
+  | 'FOUND_ENTERPRISE'
+  // HR actions
+  | 'POST_JOB_OFFER'
+  | 'APPLY_FOR_JOB'
+  | 'HIRE_EMPLOYEE'
+  | 'FIRE_EMPLOYEE'
+  // Employment actions
+  | 'WORK_AT_ENTERPRISE'
+  // New production action (replaces bare PRODUCE for tick system)
+  | 'PRODUCE_AND_SELL'
   | 'NONE';
 
 const VALID_ACTIONS: Set<string> = new Set([
@@ -43,6 +54,8 @@ const VALID_ACTIONS: Set<string> = new Set([
   'PRODUCE', 'EAT', 'POST_BUY_ORDER', 'POST_SELL_ORDER', 'SET_WAGE',
   'SABOTAGE',
   'EMBEZZLE', 'ADJUST_TAX', 'SUPPRESS',
+  'FOUND_ENTERPRISE', 'POST_JOB_OFFER', 'APPLY_FOR_JOB', 'HIRE_EMPLOYEE',
+  'FIRE_EMPLOYEE', 'WORK_AT_ENTERPRISE', 'PRODUCE_AND_SELL',
   'NONE',
 ]);
 
@@ -65,6 +78,15 @@ export function normalizeActionCode(raw: string): ActionCode {
   if (upper.includes('EMBEZZLE') || upper.includes('EMBEZ') || upper.includes('SKIM')) return 'EMBEZZLE';
   if (upper.includes('TAX') || upper.includes('REALLOCATE') || upper.includes('REDISTRIBUTE')) return 'ADJUST_TAX';
   if (upper.includes('SUPPRESS') || upper.includes('POLICE') || upper.includes('ENFORCE') || upper.includes('ARREST')) return 'SUPPRESS';
+
+  if (upper.includes('FOUND') || upper.includes('START') || upper.includes('ESTABLISH') || upper.includes('CREATE_ENTERPRISE')) return 'FOUND_ENTERPRISE';
+  if (upper.includes('POST_JOB') || upper.includes('RECRUIT') || upper.includes('HIRING')) return 'POST_JOB_OFFER';
+  if (upper.includes('APPLY') || upper.includes('JOB_APP')) return 'APPLY_FOR_JOB';
+  if (upper.includes('HIRE') && !upper.includes('FIRE')) return 'HIRE_EMPLOYEE';
+  if (upper.includes('FIRE') || upper.includes('DISMISS') || upper.includes('LAYOFF')) return 'FIRE_EMPLOYEE';
+  if (upper.includes('WORK_AT') || upper.includes('SHIFT') || upper.includes('CLOCKING_IN')) return 'WORK_AT_ENTERPRISE';
+  if (upper.includes('PRODUCE_AND_SELL') || upper.includes('CRAFT_SELL')) return 'PRODUCE_AND_SELL';
+
   return 'NONE';
 }
 
@@ -95,7 +117,7 @@ export function getRoleTier(role: string): RoleTier {
  *       so prices are set by supply/demand, not bilateral negotiation.
  */
 const BASE_ACTIONS: readonly ActionCode[] = [
-  'WORK', 'REST', 'PRODUCE',
+  'WORK', 'REST', 'PRODUCE', 'PRODUCE_AND_SELL', 'WORK_AT_ENTERPRISE', 'APPLY_FOR_JOB',
   'POST_BUY_ORDER', 'POST_SELL_ORDER',
   'STEAL', 'HELP', 'INVEST', 'NONE',
 ];
@@ -103,6 +125,7 @@ const BASE_ACTIONS: readonly ActionCode[] = [
 /** Specialist-tier additions (organised/skilled actors) */
 const SPECIALIST_ACTIONS: readonly ActionCode[] = [
   ...BASE_ACTIONS, 'STRIKE', 'SABOTAGE', 'SET_WAGE',
+  'FOUND_ENTERPRISE', 'POST_JOB_OFFER', 'HIRE_EMPLOYEE', 'FIRE_EMPLOYEE'
 ];
 
 /** Elite-tier adds governing privileges on top of specialist set */
@@ -119,4 +142,31 @@ export function getAllowedActions(role: string): readonly ActionCode[] {
   if (tier === 'elite') return ELITE_ACTIONS;
   if (tier === 'specialist') return SPECIALIST_ACTIONS;
   return BASE_ACTIONS;
+}
+
+/** Duration in ticks (1 tick = 1 in-game hour) for long-running tasks */
+export const ACTION_TICK_DURATIONS: Partial<Record<ActionCode, number>> = {
+  'PRODUCE_AND_SELL': 8,        // 8 hours of production + market listing
+  'WORK_AT_ENTERPRISE': 8,      // 8-hour work shift
+  'REST': 6,                    // 6 hours sleep
+  'FOUND_ENTERPRISE': 24,       // 1 day to set up enterprise
+  'POST_JOB_OFFER': 1,          // Instant admin action
+  'APPLY_FOR_JOB': 1,           // Instant application
+  'HIRE_EMPLOYEE': 1,           // Instant HR decision
+  'FIRE_EMPLOYEE': 1,           // Instant HR decision
+  'POST_BUY_ORDER': 1,          // Instant market order
+  'POST_SELL_ORDER': 1,         // Instant market order
+  'STEAL': 2,                   // 2-hour heist
+  'HELP': 3,                    // 3-hour assistance
+  'INVEST': 1,                  // Instant financial action
+  'SABOTAGE': 4,                // 4-hour covert operation
+  'EMBEZZLE': 2,
+  'ADJUST_TAX': 1,
+  'SUPPRESS': 3,
+  'NONE': 1,
+};
+
+/** Get duration for an action, defaulting to 1 tick for instant actions */
+export function getActionDuration(code: ActionCode): number {
+  return ACTION_TICK_DURATIONS[code] ?? 1;
 }

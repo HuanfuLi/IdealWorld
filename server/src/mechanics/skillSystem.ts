@@ -62,6 +62,13 @@ const ACTION_SKILL_MAP: Record<ActionCode, { primary: SkillCategory; secondary?:
     EMBEZZLE: { primary: 'trading', secondary: 'leadership' },
     ADJUST_TAX: { primary: 'leadership', secondary: 'scholarship' },
     SUPPRESS: { primary: 'combat', secondary: 'leadership' },
+    FOUND_ENTERPRISE: { primary: 'leadership', secondary: 'trading' },
+    POST_JOB_OFFER: { primary: 'leadership' },
+    APPLY_FOR_JOB: { primary: 'scholarship' },
+    HIRE_EMPLOYEE: { primary: 'leadership' },
+    FIRE_EMPLOYEE: { primary: 'leadership' },
+    WORK_AT_ENTERPRISE: { primary: 'crafting', secondary: 'mining' },
+    PRODUCE_AND_SELL: { primary: 'crafting', secondary: 'trading' },
     NONE: { primary: 'scholarship' },
 };
 

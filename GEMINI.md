@@ -5,25 +5,24 @@
 
 ### Key Technologies
 - **Architecture**: Monorepo using npm workspaces (`web`, `server`, `shared`).
-- **Backend**: Node.js (Express), TypeScript, SQLite (Drizzle ORM), OpenAI/Anthropic SDKs.
+- **Backend**: Node.js (Express), TypeScript, SQLite (Drizzle ORM), multi-provider LLM SDKs (Anthropic, OpenAI, Google Gemini/Vertex, local Ollama).
 - **Frontend**: React 19, TypeScript, Zustand (State Management), Tailwind CSS, Vite.
 - **Data Storage**: Local SQLite database stored in `~/.idealworld/idealworld.db`.
 - **Communication**: Server-Sent Events (SSE) for real-time simulation updates.
-- **Optimization**: HMAS Map-Reduce architecture for high agent counts, Prompt Caching (Anthropic), and rAF-based UI debouncing.
+- **Optimization**: Linear Tick Engine with asynchronous task queuing and rAF-based UI debouncing.
 
 ---
 
 ## Project Structure
 - `web/`: React frontend.
   - `src/stores/`: Zustand stores for state management and API/SSE orchestration.
-  - `src/pages/`: Main view components (Simulation, Reflection, etc.).
+  - `src/pages/`: Main view components.
 - `server/`: Express backend.
-  - `src/orchestration/`: Core simulation logic, Map-Reduce, and agent runners.
-  - `src/llm/`: LLM Gateway, provider abstractions, and centralized prompt templates (`prompts.ts`).
-  - `src/mechanics/`: Deterministic physics engine and action codes.
-  - `src/db/`: Database schema, repository pattern, and async log flushing.
-- `shared/`: Shared TypeScript types and constants used by both frontend and backend.
-- `Documents/`: Detailed architectural designs, codebase explanations, and UI specifications.
+  - `src/orchestration/`: Core tick-based simulation logic (`simulationRunner.ts`) and `TickStateStore`.
+  - `src/llm/`: LLM Gateway with per-agent model selection and prompt templates.
+  - `src/mechanics/`: Deterministic physics engine, metabolism, and action codes.
+  - `src/db/`: Database schema, repositories, and async log flushing.
+- `shared/`: Shared TypeScript types for ticks, needs, and tasks.
 
 ---
 
@@ -39,17 +38,13 @@ npm install
 ```
 
 ### Development
-Starts both the backend (Express) and frontend (Vite) concurrently:
+Starts the backend (Express) and frontend (Vite) concurrently:
 ```bash
 npm run dev
 ```
 
-Run specific workspaces:
-- `npm run dev -w server`
-- `npm run dev -w web`
-
 ### Build
-Builds all packages in the correct dependency order:
+Builds all packages:
 ```bash
 npm run build
 ```
@@ -59,19 +54,19 @@ npm run build
 ## Development Conventions
 
 ### Simulation Workflow
-The simulation follows a structured 7-stage lifecycle:
+The simulation follows a 7-stage lifecycle:
 1. **Idea Input** -> 2. **Brainstorming** -> 3. **Design** -> 4. **Refine** -> 5. **Simulate** -> 6. **Reflect** -> 7. **Review**.
 
 ### Neuro-Symbolic Logic
-- **Intent Phase**: Citizen Agents output intentions and standard `ActionCodes` (e.g., `WORK`, `STEAL`).
-- **Resolution Phase**: The Central Agent adjudicates conflicts, and the `physicsEngine.ts` calculates exact numerical changes to wealth, health, and happiness based on the action codes.
+- **Neuro (Intent Phase)**: Agents use LLMs to generate intents and `ActionCodes`. Citizens and Central Agents can use different models.
+- **Bridge (Pacing)**: Asynchronous batches prompt agents while the engine continues to tick.
+- **Symbolic (Resolution Phase)**: The `physicsEngine.ts` resolves metabolism (satiety, energy, cortisol) every tick and updates health/wealth upon task completion.
 
 ### Coding Style & Standards
-- **Local-First**: All data stays on the user's machine. Configuration is stored in `~/.idealworld/config.json`.
-- **Type Safety**: Use `@idealworld/shared` for all data structures shared between frontend and backend.
-- **Prompt Engineering**: Centralized in `server/src/llm/prompts.ts`. Use structured JSON outputs for all LLM calls.
-- **State Management**: Frontend uses specialized Zustand stores (slices) to minimize re-renders. High-frequency SSE updates are debounced via `requestAnimationFrame`.
-- **Performance**: High-concurrency operations (like fetching 100 agent intents) should use the concurrency pool and Map-Reduce strategies defined in the orchestration layer.
+- **Tick-Based**: All simulation logic should be designed for a linear tick engine.
+- **In-Memory State**: Use `TickStateStore` for high-frequency updates to avoid SQLITE_BUSY.
+- **Type Safety**: Definitive types for `ActiveTask` and `TickAgentState` in `@idealworld/shared`.
+- **Aesthetics**: Maintain the premium, vibrant UI design (Inter font, glassmorphism, smooth animations).
 
 ---
 
@@ -79,5 +74,5 @@ The simulation follows a structured 7-stage lifecycle:
 - `server/src/llm/prompts.ts`: The source of truth for all AI behaviors.
 - `server/src/mechanics/physicsEngine.ts`: The deterministic rules of the world.
 - `server/src/db/schema.ts`: Database structure.
-- `web/src/stores/simulationStore.ts`: Frontend simulation state and SSE handling.
-- `Documents/CODEBASE_EXPLAIN.md`: Detailed logic walkthrough.
+- `web/src/stores/simulationStore.ts`: Frontend simulation state, double-buffered SSE ingestion, and animation frame debouncing.
+- `Documents/CODEBASE_OVERVIEW.md`: Comprehensive codebase overview, architecture, and logic walkthrough.

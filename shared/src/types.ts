@@ -92,6 +92,40 @@ export interface ChatMessage {
   timestamp: string;
 }
 
+// ── Tick Engine types (Phase 1) ────────────────────────────────────────────
+
+/** An agent's currently active long-running task */
+export interface ActiveTask {
+  taskId: string;           // uuid
+  actionCode: string;       // e.g., 'PRODUCE_AND_SELL', 'WORK_AT_ENTERPRISE'
+  startTick: number;        // global tick when task started
+  durationTicks: number;    // total ticks required (e.g., 8 for PRODUCE_AND_SELL)
+  targetId?: string;        // enterprise ID or agent ID
+  metadata?: Record<string, unknown>; // arbitrary task params
+}
+
+/** Dynamic biological/psychological needs (0–100 scale) */
+export interface AgentNeeds {
+  satiety: number;          // Hunger proxy. 0 = starving, 100 = full
+  cortisol: number;         // Stress/mental health. 0 = calm, 100 = breakdown
+  energy: number;           // Sleep/fatigue. 0 = exhausted, 100 = rested
+}
+
+/** Extended agent state for tick simulation */
+export interface TickAgentState extends AgentNeeds {
+  activeTask: ActiveTask | null;
+  lastPromptedTick: number;
+  pendingInterrupt: NeedsInterrupt | null;
+}
+
+/** Fired by the Symbolic engine when needs cross thresholds */
+export interface NeedsInterrupt {
+  type: 'STARVATION' | 'MENTAL_BREAK' | 'EXHAUSTION';
+  severity: 'warning' | 'critical';
+  injectedDirective: string; // e.g., "You are starving. Buy food IMMEDIATELY."
+  firedAtTick: number;
+}
+
 // ── Phase 3 types ──────────────────────────────────────────────────────────
 
 export interface AgentAction {

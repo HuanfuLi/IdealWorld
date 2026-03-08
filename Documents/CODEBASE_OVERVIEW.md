@@ -35,35 +35,42 @@ export const sessions = sqliteTable('sessions', {
 
 ---
 
-## 3. The Central Loop & Map-Reduce Architecture
+## 3. The Multi-Agent Tick Engine
 
-During the **Simulate** stage, the simulation enters an "Intent-Resolution" cycle. Because querying 150 LLM agents iteratively would exceed context limits and rate limits, Ideal World implements a **Map-Reduce (HMAS) Clustering Architecture**.
+Ideal World uses a **Linear Tick Engine** rather than a synchronous iteration-based loop. This allows for real-time biological decay, multi-period tasks (e.g., building an enterprise taking 24 ticks), and asynchronous LLM response handling.
 
-### The Map-Reduce Algorithm
-1. **Map**: Collect intents asynchronously from every citizen agent concurrently.
-2. **Reduce (Cluster)**: Form "local groups" of citizens by role/topology.
-3. **Draft Summaries**: Send local group data to smaller, cheaper LLMs to draft local resolutions.
-4. **Merge**: Send unified local drafts to the massive Central Agent model to craft the final iteration's global narrative.
+### Key Engine Mechanisms
+1. **The Tick Loop**: Every simulation "tick" (representing a period of time) advances the state of all agents concurrently.
+2. **Asynchronous Task Queue**: When an agent completes a task or is idle, they are added to a `promptQueue`. LLM requests are dispatched in batches fire-and-forget, allowing the symbolic engine to keep ticking while waiting for cognitive responses.
+3. **TickStateStore**: An in-memory store that tracks high-frequency agent needs (satiety, energy, cortisol) to avoid database bottlenecks.
 
 *Code Evidence (`server/src/orchestration/simulationRunner.ts`):*
 ```typescript
-      if (aliveAgents.length > MAPREDUCE_THRESHOLD) {
-        // ── Map-Reduce path for large sessions (role-based clustering) ──
-        const groups = clusterByRole(aliveAgents, BATCH_SIZE);
-        const groupTasks = groups.map((group, gi) => async () => {
-          const msgs = buildGroupResolutionMessages(session, group, groupIntents, allIntentsBrief, iterNum, previousSummary);
-          // Use citizenAgentModel for group coordinators (cheaper); merge step keeps centralAgentModel
-          return retryWithHealing({ provider: citizenProv, ... });
-        });
+    // The core tick loop
+    for (let tick = 0; tick < totalTicks; tick++) {
+      const currentTick = tickStateStore.incrementTick();
 
-        const groupResults = await runWithConcurrency(groupTasks, settings.maxConcurrency);
+      // 1. SYMBOLIC: Apply passive needs decay (Hunger, Fatigue)
+      for (const agent of aliveAgents) {
+        const decayResult = applyNeedsDecay({ ... });
+        tickStateStore.set(agent.id, { ...decayResult.updatedNeeds });
 
-        // Merge step: synthesise group summaries into a society-wide narrative
-        const groupSummaries = groupResults.map(r => r.groupSummary);
-        const mergeMessages = buildMergeResolutionMessages(session, groupSummaries, iterNum, previousSummary);
-        
-        resolution = await retryWithHealing({ provider, messages: mergeMessages, ... });
+        // 2. Neuro-Symbolic Interrupt: Force LLM re-prompt on critical needs
+        if (decayResult.interrupt?.severity === 'critical') {
+          promptQueue.set(agent.id, 'needs-interrupt');
+        }
       }
+
+      // 3. Advancing Tasks: Complete multi-tick actions
+      // 4. NEURO: Prompt idle agents via promptAgentsBatch
+      if (promptQueue.size > 0) {
+        promptAgentsBatch(agentsToPrompt, ...).then(newTasks => {
+           // Assign tasks with startTick and durationTicks
+        });
+      }
+      
+      await sleep(500); // Pacing
+    }
 ```
 
 ---
@@ -73,69 +80,40 @@ During the **Simulate** stage, the simulation enters an "Intent-Resolution" cycl
 The pinnacle algorithm of Ideal World is the **Neuro-Symbolic Engine**, ensuring agents adhere strictly to fundamental realities like resource limits and mortality.
 
 ### 4.1 "Neuro" (Cognitive prompts & NLP generation)
-The LLM generates agent intents securely based on physical and psychological contexts. The prompt dynamically shifts tone when an agent is starving or under extreme stress (cortisol).
+The LLM generates agent intents securely based on physical and psychological contexts. The prompt dynamically shifts tone when an agent is starving or under extreme stress (cortisol). It uses **Citizen-specific models** (e.g., Haiku) for mass agents and **Central models** for global governance.
 
-*Code Evidence (`server/src/llm/prompts.ts`):*
+*Code Evidence (`server/src/llm/gateway.ts`):*
 ```typescript
-  let painOverride = '';
-  const health = agent.currentStats.health;
-  if (health < 40 || cortisol > 70) {
-    if (health < 20) {
-      painOverride = '\n\n[CRITICAL PHYSICAL STATE] You are on the verge of death. Your body is shutting down from starvation. You CANNOT think about anything else. Every thought is consumed by the need to survive...';
-    } 
-  // ...
-```
-
-### 4.2 "Bridge" (Action Codes Parsing)
-The LLM generates raw natural language + an `actionCode`. This standardizes fuzzy strings into concrete enums that the engine understands (e.g., `WORK`, `REST`, `STEAL`, `SABOTAGE`, `EMBEZZLE`).
-
-*Code Evidence (`server/src/llm/prompts.ts`):*
-```typescript
-// The explicit constraint placed on the generative LLM
-You MUST respond with ONLY valid JSON — no markdown, no preamble, no code fences:
-{
-  "internal_monologue": "Your private, raw, in-character thoughts — 2-3 sentences",
-  "public_action_narrative": "What you are visibly doing this period — 1-2 sentences",
-  "actionCode": "EXACTLY_ONE_OF_YOUR_ALLOWED_CODES",
-  "actionTarget": "AgentName or null"
+/** Returns a separate provider for citizen agent tasks if configured. */
+export function getCitizenProvider(): LLMProvider {
+  const settings = readSettings();
+  // Ensures we use settings.citizenAgentModel even on the main provider
+  return createProviderFromSettings(settings, true);
 }
 ```
 
-### 4.3 "Symbolic" (Physics & Economy Engine)
-After the LLM defines the `actionCode`, the `physicsEngine.ts` guarantees exact numeric resolution of Health, Wealth, Happiness, Cortisol, and Dopamine. This enforces severe psychological mechanics like hedonic adaptation and metabolism.
+### 4.2 "Bridge" (Action Codes & Interrupts)
+The Bridge translates symbolic distress (e.g., HP < 10) into cognitive directives ("You are starving!") and parses LLM intents back into deterministic **Action Codes** with durations.
+
+*Code Evidence (`server/src/mechanics/actionCodes.ts`):*
+```typescript
+export const ACTION_TICK_DURATIONS: Record<ActionCode, number> = {
+  WORK: 1, 
+  EAT: 2,
+  REST: 4,
+  FOUND_ENTERPRISE: 24, // Requires significant time investment
+  // ...
+};
+```
+
+### 4.3 "Symbolic" (Needs Metabolism & Economy)
+The Symbolic layer (Physics Engine) manages the deterministic decay of needs and the resolution of completed tasks, including enterprise production and market trades.
 
 *Code Evidence (`server/src/mechanics/physicsEngine.ts`):*
 ```typescript
-export function resolveAction(input: PhysicsInput): PhysicsOutput {
-  const { agent, actionCode, actionTarget, allAgents, skills, inventory } = input;
-  let w = 0, h = 0, hap = 0, cor = 0, dop = 0;
-
-  switch (actionCode) {
-    case 'WORK':
-      w = Math.round(roleIncome(agent.role) * productionMult);
-      h = -2; hap = -1; cor = -3; dop = 2;
-      break;
-    case 'EMBEZZLE': // Elite privlege
-      w = 20; hap = 2; cor = 20; dop = 8;
-      break;
-    // ...
-  }
-  
-  // Health baseline: -2/iter (metabolism). 
-  h -= 2;
-
-  // Cortisol auto-escalation for low resources
-  const stats = agent.currentStats;
-  if (stats.wealth < 20) cor += 10;
-  if (stats.health < 30) cor += 8;
-
-  // Dopamine decay: hedonic adaptation
-  dop -= 3;
-
-  return {
-    wealthDelta: clampDelta(w),
-    healthDelta: clampDelta(h), ...
-  };
+export function applyNeedsDecay(input: DecayInput): DecayOutput {
+  // Passively reduces satiety and energy every tick
+  // Triggers starvation interrupts if satiety hits 0
 }
 ```
 
@@ -144,7 +122,7 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
 ## 5. Technical Performance Innovations
 
 ### 5.1 Backend: Asynchronous SQLite Queuing
-To fix database `SQLITE_BUSY` transaction deadlocks (caused by 10,000+ tiny row inserts per iteration on high agent counts), the simulation runner deposits log data into an `asyncLogFlusher` queue rather than blocking the map-reduce event loop. 
+To fix database `SQLITE_BUSY` transaction deadlocks (caused by 10,000+ tiny row inserts per iteration on high agent counts), the simulation runner deposits log data into an `asyncLogFlusher` queue rather than blocking the main execution loop. 
 
 *Code Evidence (`server/src/orchestration/simulationRunner.ts`):*
 ```typescript
