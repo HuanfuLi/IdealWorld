@@ -252,11 +252,17 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
             case 'error':
               isRunning = false;
-              isPaused = false;
               error = event.message;
-              // If aborted, mark as complete so progress bar and action bar render correctly
-              if (event.message.includes('abort')) {
-                isComplete = true;
+              // "Simulation paused:" prefix means a parse/context-overflow failure — treat as
+              // a recoverable pause so the Resume button appears and the user can retry.
+              if (event.message.startsWith('Simulation paused:')) {
+                isPaused = true;
+              } else {
+                isPaused = false;
+                // If aborted, mark as complete so progress bar and action bar render correctly
+                if (event.message.includes('abort')) {
+                  isComplete = true;
+                }
               }
               break;
 

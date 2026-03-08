@@ -62,6 +62,26 @@ import {
   type CognitivePostInput,
 } from '../cognition/cognitiveEngine.js';
 
+/**
+ * Thrown when intent parsing is exhausted (all retries used) for a specific agent.
+ * Caught by the outer simulation loop to pause cleanly rather than silently defaulting to REST.
+ */
+export class SimulationPausedError extends Error {
+  constructor(
+    public readonly reason: 'parse-failure' | 'context-overflow',
+    public readonly iterationNumber: number,
+    public readonly agentId: string,
+    public readonly agentName: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'SimulationPausedError';
+  }
+}
+
+/** Regex to identify context-length errors from LLM providers */
+const CONTEXT_OVERFLOW_RE = /context.?length|maximum.?context|maximum.?token|token.?limit|too.?long|exceeds.?context|context.?window|context_length_exceeded/i;
+
 /** Agents per resolution batch when session is large */
 const MAPREDUCE_THRESHOLD = 30;
 const BATCH_SIZE = 15;
@@ -316,13 +336,6 @@ export async function runSimulation(sessionId: string, totalIterations: number):
 
       // Single-pass structured intent collection (replaces two-step natural language → parser flow)
       const intentTasks = aliveAgents.map(agent => async (): Promise<AgentIntent> => {
-        const fallbackIntent: AgentIntent = {
-          agentId: agent.id, agentName: agent.name,
-          intent: `${agent.name} rests, conserving energy.`, reasoning: '',
-          actionCode: 'REST', actionTarget: null,
-          parseMethod: 'fallback',
-        };
-
         try {
           // Build economy context for the agent
           const econState = agentEconomyMap.get(agent.id);
@@ -358,17 +371,16 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             economyContext, cognitiveContext, isFirstIteration, aliveAgentNames,
           );
 
+          // throwOnExhaustion: true — after all retries, throw instead of silently defaulting to REST.
+          // This surfaces parse/context failures so the simulation can pause rather than
+          // produce meaningless REST-filled iterations ("zombie simulation").
           const parsed = await retryWithHealing({
             provider: citizenProv,
             messages,
             options: { model: settings.citizenAgentModel },
             parse: parseSinglePassIntent,
-            fallback: {
-              intent: fallbackIntent.intent,
-              reasoning: '',
-              actionCode: 'REST' as ActionCode,
-              actionTarget: null,
-            },
+            fallback: { intent: '', reasoning: '', actionCode: 'REST' as ActionCode, actionTarget: null },
+            throwOnExhaustion: true,
             label: `intent:${agent.name}`,
           });
 
@@ -382,9 +394,15 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             parseMethod: 'structured',
           };
         } catch (err) {
-          // Catch-all: log and return REST fallback so the iteration never crashes
-          console.warn(`[SimulationRunner] Intent generation failed for ${agent.name}: ${err instanceof Error ? err.message : String(err)}`);
-          return fallbackIntent;
+          // Wrap any error as SimulationPausedError so the outer loop can pause cleanly.
+          // This prevents a single failing agent from silently dragging all others into REST.
+          const msg = err instanceof Error ? err.message : String(err);
+          const isCtx = CONTEXT_OVERFLOW_RE.test(msg);
+          throw new SimulationPausedError(
+            isCtx ? 'context-overflow' : 'parse-failure',
+            iterNum, agent.id, agent.name,
+            `Simulation paused: ${isCtx ? 'context length exceeded' : 'parser failure'} for "${agent.name}" at iteration ${iterNum}. Resume will retry this iteration.`,
+          );
         }
       });
 
@@ -833,9 +851,21 @@ export async function runSimulation(sessionId: string, totalIterations: number):
     asyncLogFlusher.stop();
     cleanupSessionEconomy(sessionId);
     cleanupSessionCognition(sessionId);
-    const message = err instanceof Error ? err.message : 'Simulation error';
-    simulationManager.broadcast(sessionId, { type: 'error', message });
+
+    if (err instanceof SimulationPausedError) {
+      // Structured pause: persist simulation-paused stage so the resume route can restart.
+      // The failing iteration was never committed, so resuming will retry it from scratch.
+      console.error(
+        `[SimulationRunner] Session ${sessionId} paused — ${err.reason} for agent "${err.agentName}" at iteration ${err.iterationNumber}`,
+      );
+      try { await sessionRepo.updateStage(sessionId, 'simulation-paused'); } catch { /* best-effort */ }
+      simulationManager.broadcast(sessionId, { type: 'error', message: err.message });
+    } else {
+      const message = err instanceof Error ? err.message : 'Simulation error';
+      simulationManager.broadcast(sessionId, { type: 'error', message });
+      console.error(`[SimulationRunner] Session ${sessionId}:`, err);
+    }
+
     simulationManager.finish(sessionId);
-    console.error(`[SimulationRunner] Session ${sessionId}:`, err);
   }
 }

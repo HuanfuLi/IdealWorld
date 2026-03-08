@@ -19,10 +19,15 @@ interface RetryWithHealingOptions<T> {
   options?: LLMOptions;
   /** Parser function that converts raw LLM text to the desired type. Throws on failure. */
   parse: (raw: string) => T;
-  /** Safe fallback value returned after all retries are exhausted */
+  /** Safe fallback value returned after all retries are exhausted (unused when throwOnExhaustion is true) */
   fallback: T;
   /** Optional label for logging */
   label?: string;
+  /**
+   * When true, throw the last error instead of returning fallback after all retries.
+   * Use this when the caller needs to handle exhaustion explicitly (e.g. to pause the simulation).
+   */
+  throwOnExhaustion?: boolean;
 }
 
 /** Patterns that indicate a network/transport failure rather than a bad LLM response. */
@@ -43,6 +48,7 @@ export async function retryWithHealing<T>({
   parse,
   fallback,
   label,
+  throwOnExhaustion,
 }: RetryWithHealingOptions<T>): Promise<T> {
   let lastRaw = '';
   // Build a mutable copy of the conversation for JSON-healing rounds only
@@ -83,7 +89,8 @@ export async function retryWithHealing<T>({
       }
 
       // All retries exhausted
-      console.warn(`[retryWithHealing] ${label} all ${MAX_RETRIES + 1} attempts failed, using fallback.`);
+      console.warn(`[retryWithHealing] ${label} all ${MAX_RETRIES + 1} attempts failed, ${throwOnExhaustion ? 'throwing' : 'using fallback'}.`);
+      if (throwOnExhaustion) throw chatError;
       return fallback;
     }
 
@@ -106,8 +113,9 @@ export async function retryWithHealing<T>({
         }
       } else {
         if (label) {
-          console.warn(`[retryWithHealing] ${label} all ${MAX_RETRIES + 1} attempts failed, using fallback. Last error: ${errorMsg.slice(0, 120)}`);
+          console.warn(`[retryWithHealing] ${label} all ${MAX_RETRIES + 1} attempts failed, ${throwOnExhaustion ? 'throwing' : 'using fallback'}. Last error: ${errorMsg.slice(0, 120)}`);
         }
+        if (throwOnExhaustion) throw err;
         return fallback;
       }
     }

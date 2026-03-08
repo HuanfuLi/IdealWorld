@@ -8,8 +8,6 @@ import MarkdownText from '../components/MarkdownText';
 const Simulation = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
-  const feedEndRef = useRef<HTMLDivElement>(null);
-
   const {
     isRunning, isPaused, isComplete,
     currentIteration, totalIterations,
@@ -104,9 +102,6 @@ const Simulation = () => {
     return disconnect;
   }, [id]);
 
-  useEffect(() => {
-    feedEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [feed.length]);
 
   // Auto-proceed: when simulation finishes and toggle is on, navigate to reflection.
   // Only fires when the session is still in a simulation stage — prevents triggering
@@ -170,7 +165,6 @@ const Simulation = () => {
     [feed]
   );
 
-  const feedScrollRef = useRef<HTMLDivElement>(null);
 
   return (
     <div className="animate-fade-in" style={{ height: 'calc(100vh - 4rem)', display: 'flex', flexDirection: 'column' }}>
@@ -262,7 +256,15 @@ const Simulation = () => {
       {/* Error banner */}
       {error && (
         <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '8px', padding: '0.75rem 1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--danger)' }}>
-          <AlertCircle size={16} /> {error}
+          <AlertCircle size={16} style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1 }}>{error}</span>
+          <button
+            onClick={() => useSimulationStore.setState({ error: null })}
+            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--danger)', padding: '0', display: 'flex', alignItems: 'center', flexShrink: 0 }}
+            title="Dismiss"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -276,7 +278,7 @@ const Simulation = () => {
               <Activity size={18} color="var(--primary)" /> Live Feed
             </h3>
           </div>
-          <div ref={feedScrollRef} style={{ flex: 1, padding: '1rem', overflowY: 'auto' }}>
+          <div style={{ flex: 1, padding: '1rem', overflowY: 'auto' }}>
             {feed.length === 0 && !isRunning && (
               <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', textAlign: 'center', marginTop: '2rem' }}>
                 No iterations yet.
@@ -324,7 +326,6 @@ const Simulation = () => {
                 </div>
               </div>
             )}
-            <div ref={feedEndRef} />
           </div>
         </div>
 
