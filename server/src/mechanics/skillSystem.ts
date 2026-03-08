@@ -59,6 +59,9 @@ const ACTION_SKILL_MAP: Record<ActionCode, { primary: SkillCategory; secondary?:
     POST_SELL_ORDER: { primary: 'trading' },
     SET_WAGE: { primary: 'leadership', secondary: 'trading' },
     SABOTAGE: { primary: 'combat', secondary: 'leadership' },
+    EMBEZZLE: { primary: 'trading', secondary: 'leadership' },
+    ADJUST_TAX: { primary: 'leadership', secondary: 'scholarship' },
+    SUPPRESS: { primary: 'combat', secondary: 'leadership' },
     NONE: { primary: 'scholarship' },
 };
 

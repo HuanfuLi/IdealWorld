@@ -87,11 +87,14 @@ export function getRoleTier(role: string): RoleTier {
   return 'laborer';
 }
 
-/** Actions every citizen can choose from */
+/** Actions every citizen can choose from.
+ * NOTE: EAT and CONSUME are intentionally excluded — survival metabolism is now
+ * handled automatically by the Passive Metabolism system each iteration.
+ */
 const BASE_ACTIONS: readonly ActionCode[] = [
-  'WORK', 'REST', 'EAT', 'PRODUCE', 'TRADE',
+  'WORK', 'REST', 'PRODUCE', 'TRADE',
   'POST_BUY_ORDER', 'POST_SELL_ORDER',
-  'STEAL', 'HELP', 'CONSUME', 'INVEST', 'NONE',
+  'STEAL', 'HELP', 'INVEST', 'NONE',
 ];
 
 /** Specialist-tier additions (organised/skilled actors) */

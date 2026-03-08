@@ -279,7 +279,7 @@ Action meanings:
 - Skills: ${economyContext.topSkills}`;
 
     if (economyContext.isStarving) {
-      economyBlock += '\n\n⚠️ URGENT: You have no food. Consider PRODUCE to farm or EAT if you have reserves.';
+      economyBlock += '\n\n⚠️ You have no food. Consider PRODUCE to farm or stockpile. Emergency rations are auto-purchased if you have 15+ wealth.';
     }
   }
 
@@ -318,7 +318,9 @@ ${previousSummary ? `What happened last iteration:\n${previousSummary.slice(0, 6
  * The Parser Agent (parserAgent.ts) will then translate this natural
  * language output into a valid ActionCode.
  */
-/** Human-readable descriptions for every ActionCode, used to build role-specific action lists. */
+/** Human-readable descriptions for every ActionCode, used to build role-specific action lists.
+ * NOTE: EAT and CONSUME are intentionally excluded — survival metabolism is now automatic.
+ */
 const ACTION_DESCRIPTIONS: Partial<Record<ActionCode, string>> = {
   WORK:           'WORK — performing your occupation, earning income, laboring, teaching, healing, guarding',
   TRADE:          'TRADE — exchanging goods/services with a specific person (set actionTarget to their name)',
@@ -327,9 +329,7 @@ const ACTION_DESCRIPTIONS: Partial<Record<ActionCode, string>> = {
   STEAL:          'STEAL — taking from someone illegally (set actionTarget to their name)',
   HELP:           'HELP — aiding someone at personal cost, volunteering, donating (set actionTarget)',
   INVEST:         'INVEST — saving money, depositing, speculating on future returns',
-  CONSUME:        'CONSUME — spending on personal comfort, luxury, indulgence',
-  PRODUCE:        'PRODUCE — farming, crafting, manufacturing, building, forging goods',
-  EAT:            'EAT — consuming food specifically for health recovery',
+  PRODUCE:        'PRODUCE — farming, crafting, manufacturing, building, forging goods to stockpile food',
   POST_BUY_ORDER: 'POST_BUY_ORDER — placing a buy order on the open market',
   POST_SELL_ORDER:'POST_SELL_ORDER — placing a sell order on the open market',
   SET_WAGE:       'SET_WAGE — hiring someone or setting wages for a job',
@@ -380,6 +380,8 @@ ${session.law?.slice(0, 400) ?? '(no laws)'}
 Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
 
 Speak naturally in first person as this character. Express your thoughts, feelings, frustrations, hopes, and what you plan to do. Do NOT use any special formatting — just speak as yourself.
+
+[BACKGROUND SYSTEM] Basic eating and survival are handled automatically each period — you do not need to choose an action for this. If you have food stockpiled, you will eat automatically. If you have no food but enough wealth, the state will sell you emergency rations. Focus your Action on your career, social goals, or political ambitions. Do NOT choose EAT or CONSUME — these no longer exist as choices.
 
 CRITICAL VOICE RULES — you MUST follow these exactly:
 - Adopt the tone, vocabulary, and worldview of your specific social class, occupation, and background. A starving farmer does NOT speak like a merchant. A rebel does NOT speak like a priest.
@@ -434,7 +436,7 @@ IMPORTANT: Only choose from the actionCodes listed under "Your allowed actions" 
 - Skills: ${economyContext.topSkills}`;
 
     if (economyContext.isStarving) {
-      economyBlock += '\n\nYou are starving. You feel the hunger gnawing at you. You need to find food urgently.';
+      economyBlock += '\n\nYou have no food stockpile. The system will try to buy emergency rations for you if you have wealth, but it is costly (15 wealth). To escape this, PRODUCE food yourself or TRADE with someone who has surplus.';
     }
   }
 

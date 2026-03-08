@@ -535,6 +535,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       const deaths: Array<{ id: string; iterationNumber: number }> = [];
       const actionRows: Array<typeof resolvedActions.$inferInsert> = [];
       const economyUpdates: Array<{ agentId: string; sessionId: string; skills: SkillMatrix; inventory: Inventory; lastUpdated: number }> = [];
+      // Populated inside the per-agent loop for cognitivePostInputs humiliation memory injection
+      const humiliatedAgentIds = new Set<string>();
 
       for (const agent of aliveAgents) {
         const outcome = outcomeMap.get(agent.id);
@@ -580,13 +582,42 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         let newCortisol = (agent.currentStats.cortisol ?? 20) + physics.cortisolDelta;
         let newDopamine = (agent.currentStats.dopamine ?? 50) + physics.dopamineDelta;
 
+        // ── Passive Metabolism: auto-consume food or auto-buy from System Market Maker ──
+        // The inventory system (via economy engine) already consumed food and flagged starvation.
+        // If the agent is starving but has enough wealth, the system auto-buys emergency rations.
+        // Only if truly destitute (no food AND no wealth) does starvation damage stand.
+        const SYSTEM_FOOD_PRICE = 15;
+        const isStarvingThisIter = econOutput?.isStarving ?? false;
+        if (isStarvingThisIter) {
+          if (newWealth >= SYSTEM_FOOD_PRICE) {
+            // Auto-buy 1 unit of emergency rations from System Market Maker
+            newWealth -= SYSTEM_FOOD_PRICE;
+            // Reverse the starvation penalties applied by the inventory system
+            // (STARVATION_HEALTH_PENALTY=-10, STARVATION_CORTISOL_PENALTY=+15, happiness-5)
+            // and grant nourishment equivalent to normal eating (+1 health, +1 happiness)
+            newHealth += 11;   // reverses -10 starvation + adds +1 nourishment
+            newCortisol -= 15; // reverses starvation cortisol spike
+            newHappiness += 4; // reverses -5 happiness + small relief
+            console.log(`[Metabolism] ${agent.name} auto-bought emergency rations for ${SYSTEM_FOOD_PRICE}w`);
+          } else {
+            // Cannot afford emergency rations — starvation damage stands
+            console.log(`[Metabolism] ${agent.name} starving — no food, wealth ${Math.round(newWealth)} < ${SYSTEM_FOOD_PRICE}`);
+          }
+        }
+
+        // Clamp all stats to [0, 100] after metabolism pass
+        newWealth = Math.max(0, Math.min(100, newWealth));
+        newHealth = Math.max(0, Math.min(100, newHealth));
+        newHappiness = Math.max(0, Math.min(100, newHappiness));
+        newCortisol = Math.max(0, Math.min(100, newCortisol));
+        newDopamine = Math.max(0, Math.min(100, newDopamine));
+
         const shouldDie = (outcome?.died === true) || newHealth <= 0;
 
         // Phase 2: Darwinian Market Protocol — Humiliation Fallback
-        // If health dropped to lethal threshold (but agent hasn't died outright),
-        // the state force-feeds "Synthetic Slop" and strips remaining wealth.
-        const HUMILIATION_THRESHOLD = 20;
-        const shouldHumiliate = !shouldDie && newHealth <= HUMILIATION_THRESHOLD;
+        // Only triggers when the agent is BOTH starving AND cannot afford emergency rations.
+        // This prevents healthy agents or those who auto-bought food from being humiliated.
+        const shouldHumiliate = !shouldDie && newHealth < 20 && isStarvingThisIter && newWealth < SYSTEM_FOOD_PRICE;
 
         if (shouldDie) {
           deaths.push({ id: agent.id, iterationNumber: iterNum });
@@ -598,6 +629,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           deathReasonMap.set(agent.id, { iteration: iterNum, reason: deathReason });
         } else if (shouldHumiliate) {
           // Synthetic Slop intervention: restore to survival floor, strip wealth, max cortisol
+          humiliatedAgentIds.add(agent.id);
           newHealth = 30;
           newWealth = 0;
           newCortisol = 100;
@@ -706,19 +738,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       }
 
       // ── Phase 3: Cognitive post-processing (create experience memories) ──
-      // Build a quick set of humiliated agent IDs for memory injection
-      const humiliatedAgentIds = new Set(
-        aliveAgents
-          .filter(agent => {
-            const agentIntent = intentMap.get(agent.id);
-            const econOutput = economyResult.agentOutputs.get(agent.id);
-            const actionCode = (agentIntent?.actionCode ?? 'NONE') as ActionCode;
-            const physics = resolveAction({ agent, actionCode, allAgents: aliveAgents });
-            const newHealth = agent.currentStats.health + physics.healthDelta + (econOutput ? econOutput.healthDelta : 0);
-            return !deaths.some(d => d.id === agent.id) && newHealth <= 20;
-          })
-          .map(a => a.id)
-      );
+      // humiliatedAgentIds is already populated inside the per-agent loop above.
 
       const cognitivePostInputs: CognitivePostInput[] = aliveAgents.map(agent => {
         const agentIntent = intentMap.get(agent.id);
