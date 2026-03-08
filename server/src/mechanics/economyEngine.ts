@@ -133,6 +133,39 @@ export function runEconomyIteration(
         agentOutputs.set(input.agentId, output);
     }
 
+    // ── Phase B: System Market Maker — Liquidity Injection ────────────────
+    // Inject virtual "System NPC" orders every iteration before matching.
+    // Purpose: guarantee baseline liquidity so agents with wealth can always
+    // buy food and agents with goods can always liquidate them, preventing
+    // complete market deadlocks and the poverty-trap / starvation spiral.
+    //
+    // System NPC ID ('SYSTEM_NPC') has no entry in agentOutputs, so:
+    //   - System sell trades: buyer loses wealth & gains food (wealth leaves economy → correct)
+    //   - System buy trades: seller gains wealth (liquidity injected from outside → intended)
+    if (agentInputs.length > 0) {
+      const agentCount = agentInputs.length;
+      // Sell food at ceiling price (15): last-resort supply for starving agents with money
+      orderBook.submitOrder({
+        sessionId,
+        agentId: 'SYSTEM_NPC',
+        side: 'sell',
+        itemType: 'food',
+        price: 15,
+        quantity: Math.max(5, agentCount * 2),
+        iterationPlaced: iterationNumber,
+      });
+      // Buy raw_materials at floor price (2): ensures producers can always liquidate stock
+      orderBook.submitOrder({
+        sessionId,
+        agentId: 'SYSTEM_NPC',
+        side: 'buy',
+        itemType: 'raw_materials',
+        price: 2,
+        quantity: 30,
+        iterationPlaced: iterationNumber,
+      });
+    }
+
     // ── Phase B: Match orders in the order book ────────────────────────────
     const trades = orderBook.matchOrders();
 

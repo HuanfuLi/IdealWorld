@@ -655,6 +655,8 @@ const ACTION_COLORS: Record<string, string> = {
   STRIKE: '#f97316', CONSUME: '#a78bfa',
   STEAL: '#ef4444', SABOTAGE: '#dc2626',
   HELP: '#ec4899',
+  // Phase 3: elite privileged actions
+  EMBEZZLE: '#c084fc', ADJUST_TAX: '#e879f9', SUPPRESS: '#fb7185',
   NONE: '#6b7280',
 };
 

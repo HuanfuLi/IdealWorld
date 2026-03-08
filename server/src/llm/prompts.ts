@@ -1,5 +1,6 @@
 import type { LLMMessage, ContentBlock } from './types.js';
 import type { Agent, ChatMessage, Session, ComparisonResult, BrainstormChecklist } from '@idealworld/shared';
+import type { ActionCode } from '../mechanics/actionCodes.js';
 import { getSubconsciousDrive } from '../mechanics/historicalRAG.js';
 
 export function buildBrainstormMessages(
@@ -317,6 +318,28 @@ ${previousSummary ? `What happened last iteration:\n${previousSummary.slice(0, 6
  * The Parser Agent (parserAgent.ts) will then translate this natural
  * language output into a valid ActionCode.
  */
+/** Human-readable descriptions for every ActionCode, used to build role-specific action lists. */
+const ACTION_DESCRIPTIONS: Partial<Record<ActionCode, string>> = {
+  WORK:           'WORK — performing your occupation, earning income, laboring, teaching, healing, guarding',
+  TRADE:          'TRADE — exchanging goods/services with a specific person (set actionTarget to their name)',
+  REST:           'REST — resting, sleeping, relaxing, wandering, meditating, praying',
+  STRIKE:         'STRIKE — protesting, refusing to work, rebelling, picketing, marching',
+  STEAL:          'STEAL — taking from someone illegally (set actionTarget to their name)',
+  HELP:           'HELP — aiding someone at personal cost, volunteering, donating (set actionTarget)',
+  INVEST:         'INVEST — saving money, depositing, speculating on future returns',
+  CONSUME:        'CONSUME — spending on personal comfort, luxury, indulgence',
+  PRODUCE:        'PRODUCE — farming, crafting, manufacturing, building, forging goods',
+  EAT:            'EAT — consuming food specifically for health recovery',
+  POST_BUY_ORDER: 'POST_BUY_ORDER — placing a buy order on the open market',
+  POST_SELL_ORDER:'POST_SELL_ORDER — placing a sell order on the open market',
+  SET_WAGE:       'SET_WAGE — hiring someone or setting wages for a job',
+  SABOTAGE:       'SABOTAGE — deliberately disrupting or destroying another person\'s work (set actionTarget)',
+  EMBEZZLE:       'EMBEZZLE — [ELITE PRIVILEGE] skim funds from the communal treasury or state apparatus',
+  ADJUST_TAX:     'ADJUST_TAX — [ELITE PRIVILEGE] forcibly redistribute wealth via tax policy, extracting from lower classes',
+  SUPPRESS:       'SUPPRESS — [ELITE PRIVILEGE] deploy enforcement to penalise a specific citizen (set actionTarget)',
+  NONE:           'NONE — doing nothing meaningful this period',
+};
+
 export function buildNaturalIntentPrompt(
   agent: Agent,
   session: Pick<Session, 'idea' | 'societyOverview' | 'law' | 'timeScale'>,
@@ -339,6 +362,11 @@ export function buildNaturalIntentPrompt(
   isFirstIteration?: boolean,
   /** Names of all alive agents — shown so the LLM can set actionTarget correctly. */
   aliveAgentNames?: string[],
+  /**
+   * Phase 3: Role-restricted action set. When provided, only these codes are shown
+   * to the agent, enforcing asymmetric class privileges in the prompt.
+   */
+  allowedActions?: readonly ActionCode[],
 ): LLMMessage[] {
   // Static prefix: identical across all agent calls in an iteration → cacheable
   const staticPrefix = `You are a citizen living in a simulated society based on: "${session.idea}"
@@ -363,26 +391,11 @@ You MUST respond with ONLY valid JSON — no markdown, no preamble, no code fenc
 {
   "internal_monologue": "Your private, raw, in-character thoughts — 2-3 sentences",
   "public_action_narrative": "What you are visibly doing this period — 1-2 sentences",
-  "actionCode": "EXACTLY_ONE_OF_THE_CODES_BELOW",
+  "actionCode": "EXACTLY_ONE_OF_YOUR_ALLOWED_CODES",
   "actionTarget": "AgentName or null"
 }
 
-Valid actionCodes (pick exactly one — NEVER invent new codes):
-WORK — performing your occupation, earning income, laboring, teaching, healing, guarding
-TRADE — exchanging goods/services with a specific person (set actionTarget to their name)
-REST — resting, sleeping, relaxing, wandering, meditating, praying
-STRIKE — protesting, refusing to work, rebelling, picketing, marching
-STEAL — taking from someone illegally (set actionTarget to their name)
-HELP — aiding someone at personal cost, volunteering, donating (set actionTarget)
-INVEST — saving money, depositing, speculating on future returns
-CONSUME — spending on personal comfort, luxury, indulgence
-PRODUCE — farming, crafting, manufacturing, building, forging goods
-EAT — consuming food specifically for health recovery
-POST_BUY_ORDER — placing a buy order on the open market
-POST_SELL_ORDER — placing a sell order on the open market
-SET_WAGE — hiring someone or setting wages for a job
-SABOTAGE — deliberately disrupting or destroying another person's work (set actionTarget)
-NONE — doing nothing meaningful this period`;
+IMPORTANT: Only choose from the actionCodes listed under "Your allowed actions" in your status below. NEVER invent codes not on that list.`;
 
   // Dynamic suffix: agent-specific, changes every call
   const cortisol = agent.currentStats.cortisol ?? 20;
@@ -470,6 +483,11 @@ Next step: ${cognitiveContext.currentPlanStep}`;
     ? `\n\nOther citizens (valid actionTarget names): ${aliveAgentNames.filter(n => n !== agent.name).join(', ')}`
     : '';
 
+  // Build role-specific action list (Phase 3: asymmetric class privileges)
+  const actionList = (allowedActions ?? Object.keys(ACTION_DESCRIPTIONS) as ActionCode[])
+    .map(a => ACTION_DESCRIPTIONS[a] ?? a)
+    .join('\n');
+
   const dynamicSuffix = `You are ${agent.name}, a ${agent.role}.
 Background: ${agent.background}
 
@@ -480,7 +498,10 @@ Your current situation:
 - Stress: ${cortisol > 60 ? 'overwhelmed' : cortisol > 40 ? 'tense' : 'manageable'}
 - Mood: ${dopamine > 60 ? 'good spirits' : dopamine > 30 ? 'neutral' : 'disheartened'}${economyBlock}${cognitiveBlock}${marketKnowledgeBlock}${agentNamesBlock}
 
-${iterationContext}${painOverride}${stressModifier}`;
+${iterationContext}${painOverride}${stressModifier}
+
+Your allowed actions (pick exactly one — NEVER invent codes not on this list):
+${actionList}`;
 
   const systemContent: ContentBlock[] = [
     { type: 'text', text: staticPrefix, cache_control: { type: 'ephemeral' } },

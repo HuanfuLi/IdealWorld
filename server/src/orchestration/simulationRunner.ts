@@ -44,7 +44,7 @@ import {
 import { runWithConcurrency } from './concurrencyPool.js';
 import { asyncLogFlusher } from '../db/asyncLogFlusher.js';
 import { resolveAction } from '../mechanics/physicsEngine.js';
-import { type ActionCode } from '../mechanics/actionCodes.js';
+import { type ActionCode, getAllowedActions, getRoleTier } from '../mechanics/actionCodes.js';
 import { clusterByRole } from './clustering.js';
 import { retryWithHealing } from '../llm/retryWithHealing.js';
 // Phase 1 Economy imports
@@ -161,8 +161,13 @@ export async function runSimulation(sessionId: string, totalIterations: number):
 
     // Phase 2: Track active sabotage effects → targetAgentId → remaining iterations
     const sabotageRegistry = new Map<string, number>();
+    // Phase 3: Track active suppress effects → targetAgentId → remaining iterations
+    const suppressRegistry = new Map<string, number>();
     // Phase 2: Track death reasons for post-mortem system → agentId → { iteration, reason }
     const deathReasonMap = new Map<string, { iteration: number; reason: string }>();
+    // Phase 3: Regime collapse tracking
+    let collapseReason: string | null = null;
+    let collapseIteration = 0;
 
     // ── Phase 1: Initialize economy state for all agents ──────────────────
     const citizenAgents = agents.filter(a => a.isAlive && !a.isCentralAgent);
@@ -296,13 +301,14 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         total: endIter,
       });
 
-      // Phase 2: Decay sabotage effects at the start of each iteration
+      // Phase 2/3: Decay status effect registries at the start of each iteration
       for (const [agentId, remaining] of sabotageRegistry) {
-        if (remaining <= 1) {
-          sabotageRegistry.delete(agentId);
-        } else {
-          sabotageRegistry.set(agentId, remaining - 1);
-        }
+        if (remaining <= 1) sabotageRegistry.delete(agentId);
+        else sabotageRegistry.set(agentId, remaining - 1);
+      }
+      for (const [agentId, remaining] of suppressRegistry) {
+        if (remaining <= 1) suppressRegistry.delete(agentId);
+        else suppressRegistry.set(agentId, remaining - 1);
       }
 
       // ── Collect intents: Phase 2+3 cognitive → natural language → parser ──
@@ -365,10 +371,12 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             reflectionText: cogOutput.reflectionText,
           } : undefined;
 
-          // Single-pass: one LLM call returns structured JSON with narrative + actionCode
+          // Single-pass: one LLM call returns structured JSON with narrative + actionCode.
+          // Phase 3: pass role-restricted action set so elite agents see privileged actions.
           const messages = buildNaturalIntentPrompt(
             agent, session, previousSummary, iterNum,
             economyContext, cognitiveContext, isFirstIteration, aliveAgentNames,
+            getAllowedActions(agent.role),
           );
 
           // throwOnExhaustion: true — after all retries, throw instead of silently defaulting to REST.
@@ -562,6 +570,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           } : undefined,
           // Phase 2: apply -50% productivity if this agent is a sabotage victim
           isSabotaged: sabotageRegistry.has(agent.id),
+          // Phase 3: apply stress penalty if this agent is under active suppress enforcement
+          isSuppressed: suppressRegistry.has(agent.id),
         });
 
         let newWealth = agent.currentStats.wealth + physics.wealthDelta;
@@ -622,6 +632,22 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           }
         }
 
+        // Phase 3: Register SUPPRESS target for 2-iteration stress penalty
+        if (actionCode === 'SUPPRESS' && agentIntent?.actionTarget) {
+          const targetName = agentIntent.actionTarget.toLowerCase();
+          const targetAgent = aliveAgents.find(a => a.name.toLowerCase() === targetName);
+          if (targetAgent) {
+            suppressRegistry.set(targetAgent.id, 2);
+            // Immediate shock: spike cortisol and drop happiness on target this iteration
+            const targetUpdate = statUpdates.find(u => u.id === targetAgent.id);
+            if (targetUpdate) {
+              targetUpdate.cortisol = Math.min(100, targetUpdate.cortisol + 25);
+              targetUpdate.happiness = Math.max(0, targetUpdate.happiness - 10);
+            }
+            console.log(`[Suppress] ${agent.name} suppressed ${targetAgent.name} — cortisol+25 immediately, +15/iter for 2 iterations`);
+          }
+        }
+
         // Collect economy state updates
         if (econOutput) {
           economyUpdates.push({
@@ -651,6 +677,32 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           }),
           resolvedAt: now,
         });
+      }
+
+      // ── Phase 3: ADJUST_TAX redistribution ──────────────────────────────
+      // For each elite agent who chose ADJUST_TAX this iteration, collect a flat
+      // tax from all non-elite alive agents and add it to the tax-setter's stats.
+      const TAX_PER_AGENT = 3;
+      for (const intent of intents) {
+        if (intent.actionCode === 'ADJUST_TAX') {
+          const taxableAgents = aliveAgents.filter(a =>
+            !a.isCentralAgent && a.id !== intent.agentId && getRoleTier(a.role) !== 'elite'
+          );
+          const taxCollected = TAX_PER_AGENT * taxableAgents.length;
+          // Credit the taxer
+          const taxerUpdate = statUpdates.find(u => u.id === intent.agentId);
+          if (taxerUpdate) taxerUpdate.wealth = Math.min(100, taxerUpdate.wealth + taxCollected);
+          // Deduct from the taxed — add cortisol/happiness resentment
+          for (const taxed of taxableAgents) {
+            const update = statUpdates.find(u => u.id === taxed.id);
+            if (update) {
+              update.wealth = Math.max(0, update.wealth - TAX_PER_AGENT);
+              update.cortisol = Math.min(100, update.cortisol + 5);
+              update.happiness = Math.max(0, update.happiness - 3);
+            }
+          }
+          console.log(`[AdjustTax] ${intent.agentName} collected ${taxCollected} wealth from ${taxableAgents.length} non-elite agents`);
+        }
       }
 
       // ── Phase 3: Cognitive post-processing (create experience memories) ──
@@ -777,6 +829,28 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         iteration: iterNum,
         stats: stats as unknown as Record<string, unknown>,
       });
+
+      // ── Phase 3: Regime Collapse check ───────────────────────────────────
+      // If society reaches critical misery thresholds, the tested structure has
+      // failed — continue blindly would produce meaningless zombie iterations.
+      const COLLAPSE_CORTISOL = 95;
+      const COLLAPSE_HAPPINESS = 5;
+      const avgCor = stats.avgCortisol ?? 0;
+      if (avgCor >= COLLAPSE_CORTISOL || stats.avgHappiness <= COLLAPSE_HAPPINESS) {
+        const reason = avgCor >= COLLAPSE_CORTISOL
+          ? `societal stress reached critical levels (avg cortisol: ${avgCor})`
+          : `societal happiness collapsed (avg happiness: ${stats.avgHappiness})`;
+        console.error(`[REGIME_COLLAPSE] Session ${sessionId} at iteration ${iterNum}: ${reason}`);
+        simulationManager.broadcast(sessionId, {
+          type: 'resolution',
+          iteration: iterNum,
+          narrativeSummary: `⚠️ REGIME COLLAPSE at iteration ${iterNum}: The society has reached critical instability. The government has fallen. ${reason.charAt(0).toUpperCase() + reason.slice(1)}. The social fabric has disintegrated beyond recovery.`,
+          lifecycleEvents: [],
+        });
+        collapseReason = reason;
+        collapseIteration = iterNum;
+        break;
+      }
     }
 
     // ── Final report ─────────────────────────────────────────────────────────
@@ -793,6 +867,14 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       finalReport = parseFinalReport(finalRaw);
     } catch {
       finalReport = `The simulation of "${session.idea}" concluded after ${endIter} iterations with ${finalStats.aliveCount} survivors.`;
+    }
+
+    // Phase 3: Prepend regime collapse notice if early termination was triggered
+    if (collapseReason) {
+      finalReport = `⚠️ REGIME_COLLAPSE — EARLY TERMINATION at iteration ${collapseIteration}\n`
+        + `The simulation was halted because ${collapseReason}.\n`
+        + `The societal structure tested in "${session.idea}" has been judged a systemic failure.\n\n`
+        + finalReport;
     }
 
     // ── Phase 2: Post-Mortem Review System ──────────────────────────────────
