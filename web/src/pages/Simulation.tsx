@@ -15,7 +15,7 @@ const Simulation = () => {
     currentIteration, totalIterations,
     feed, statsHistory, agents, finalReport, error,
     loadAgents, loadHistory, connectSSE,
-    pause, resume, abort, reset,
+    pause, resume, abort, abortAndReset, reset,
     continueSimulation, forkSimulation,
   } = useSimulationStore(useShallow(s => ({
     isRunning: s.isRunning, isPaused: s.isPaused, isComplete: s.isComplete,
@@ -23,7 +23,7 @@ const Simulation = () => {
     feed: s.feed, statsHistory: s.statsHistory, agents: s.agents,
     finalReport: s.finalReport, error: s.error,
     loadAgents: s.loadAgents, loadHistory: s.loadHistory, connectSSE: s.connectSSE,
-    pause: s.pause, resume: s.resume, abort: s.abort, reset: s.reset,
+    pause: s.pause, resume: s.resume, abort: s.abort, abortAndReset: s.abortAndReset, reset: s.reset,
     continueSimulation: s.continueSimulation, forkSimulation: s.forkSimulation,
   })));
 
@@ -46,14 +46,14 @@ const Simulation = () => {
   useEffect(() => {
     if (!id) return;
     reset();
-    loadAgents(id);
-    loadHistory(id);
+    // Initialization: load history first, then restore session state
+    const init = async () => {
+      await loadAgents(id);
+      await loadHistory(id);
 
-    // Immediately fetch session state to restore isRunning/isPaused/totalIterations
-    // before the first SSE event arrives (which can take a long time during iterations)
-    fetch(`/api/sessions/${id}`)
-      .then(r => r.json())
-      .then((s: { stage?: string; config?: { totalIterations?: number } | null }) => {
+      try {
+        const r = await fetch(`/api/sessions/${id}`);
+        const s = (await r.json()) as { stage?: string; config?: { totalIterations?: number } | null };
         if (s.stage) setSessionStage(s.stage);
 
         const targetIters = s.config?.totalIterations ?? 0;
@@ -64,7 +64,6 @@ const Simulation = () => {
             isRunning: true,
             isPaused: false,
             isComplete: false,
-            // Use config's totalIterations as the denominator for progress bar
             totalIterations: targetIters > 0 ? targetIters : prev.totalIterations,
           }));
         } else if (s.stage === 'simulation-paused') {
@@ -74,19 +73,20 @@ const Simulation = () => {
             isComplete: false,
             totalIterations: targetIters > 0 ? targetIters : prev.totalIterations,
           }));
-        } else if (s.stage && s.stage !== 'simulating' && s.stage !== 'simulation-paused') {
-          // Simulation already finished
+        } else if (s.stage === 'simulation-complete' || s.stage === 'reflecting' || s.stage === 'reflection-complete' || s.stage === 'reviewing' || s.stage === 'completed') {
+          // Simulation already finished — mark as complete regardless of feed
           const state = useSimulationStore.getState();
-          if (!state.isRunning && !state.isComplete && state.feed.length > 0) {
-            useSimulationStore.setState({
-              isComplete: true,
-              // For completed sims, use config target or fall back to feed length
-              totalIterations: targetIters > 0 ? targetIters : state.feed.length,
-            });
-          }
+          useSimulationStore.setState({
+            isRunning: false,
+            isPaused: false,
+            isComplete: true,
+            totalIterations: targetIters > 0 ? targetIters : (state.feed.length || state.totalIterations),
+          });
         }
-      })
-      .catch(() => { });
+      } catch { /* ignore fetch errors */ }
+    };
+
+    init();
 
     // Connect SSE for live updates; will close gracefully if simulation already done
     const disconnect = connectSSE(id);
@@ -133,7 +133,9 @@ const Simulation = () => {
 
   const handleAbort = async () => {
     if (!id) return;
-    await abort(id);
+    sseCleanupRef.current?.();
+    reset();
+    await abortAndReset(id);
     navigate(`/session/${id}/design`);
   };
 

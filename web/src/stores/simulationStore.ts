@@ -9,7 +9,8 @@ type SSEEvent =
   | { type: 'iteration-complete'; iteration: number; stats: IterationStats }
   | { type: 'simulation-complete'; finalReport: string }
   | { type: 'paused'; iteration: number }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'aborted-reset' };
 
 export interface LifecycleEvent {
   type: 'death' | 'role_change';
@@ -55,6 +56,7 @@ interface SimulationStore {
   pause: (sessionId: string) => Promise<void>;
   resume: (sessionId: string) => Promise<void>;
   abort: (sessionId: string) => Promise<void>;
+  abortAndReset: (sessionId: string) => Promise<void>;
   continueSimulation: (sessionId: string, iterations: number) => Promise<() => void>;
   forkSimulation: (sessionId: string) => Promise<string>;
   reset: () => void;
@@ -192,7 +194,18 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
             case 'error':
               isRunning = false;
+              isPaused = false;
               error = event.message;
+              // If aborted, mark as complete so progress bar and action bar render correctly
+              if (event.message.includes('abort')) {
+                isComplete = true;
+              }
+              break;
+
+            case 'aborted-reset':
+              // Server confirmed the abort-reset; component handles navigation
+              isRunning = false;
+              isPaused = false;
               break;
           }
         }
@@ -235,6 +248,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   },
 
   pause: async (sessionId: string) => {
+    set({ isPaused: true, isRunning: false });
     await fetch(`/api/sessions/${sessionId}/simulate/pause`, { method: 'POST' });
   },
 
@@ -245,7 +259,11 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
   abort: async (sessionId: string) => {
     await fetch(`/api/sessions/${sessionId}/simulate/abort`, { method: 'POST' });
-    set({ isRunning: false, isPaused: false });
+    set({ isRunning: false, isPaused: false, isComplete: true });
+  },
+
+  abortAndReset: async (sessionId: string) => {
+    await fetch(`/api/sessions/${sessionId}/simulate/abort-reset`, { method: 'POST' });
   },
 
   continueSimulation: async (sessionId: string, iterations: number) => {

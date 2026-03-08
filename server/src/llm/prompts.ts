@@ -198,7 +198,14 @@ export function buildIntentPrompt(
   agent: Agent,
   session: Pick<Session, 'idea' | 'societyOverview' | 'law' | 'timeScale'>,
   previousSummary: string | null,
-  iterationNumber: number
+  iterationNumber: number,
+  /** Phase 1: optional economy context for the agent. */
+  economyContext?: {
+    foodLevel: number;
+    toolCount: number;
+    topSkills: string;
+    isStarving: boolean;
+  },
 ): LLMMessage[] {
   // Static prefix: identical across all agent calls in an iteration → cacheable
   const staticPrefix = `You are a citizen in a simulated society based on: "${session.idea}"
@@ -211,11 +218,11 @@ ${session.law?.slice(0, 400) ?? '(no laws)'}
 
 Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
 
-You must choose ONE action code from: WORK, TRADE, REST, STRIKE, STEAL, HELP, INVEST, CONSUME.
+You must choose ONE action code from: WORK, TRADE, REST, STRIKE, STEAL, HELP, INVEST, CONSUME, PRODUCE, EAT, SABOTAGE.
 
 You MUST respond with ONLY valid JSON (no markdown, no preamble):
 {
-  "actionCode": "WORK|TRADE|REST|STRIKE|STEAL|HELP|INVEST|CONSUME",
+  "actionCode": "WORK|TRADE|REST|STRIKE|STEAL|HELP|INVEST|CONSUME|PRODUCE|EAT|SABOTAGE",
   "actionTarget": "target agent name or null",
   "intent": "what you intend to do this iteration (1-3 sentences, first person)",
   "reasoning": "your internal reasoning (1-2 sentences)"
@@ -229,7 +236,10 @@ Action meanings:
 - STEAL: take from another agent illegally (set actionTarget)
 - HELP: assist another agent at personal cost (set actionTarget)
 - INVEST: spend wealth now for future returns
-- CONSUME: spend wealth on personal comfort and health`;
+- CONSUME: spend wealth on personal comfort and health
+- PRODUCE: farm or craft goods — converts raw materials into food
+- EAT: consume extra food to recover health
+- SABOTAGE: destroy or disrupt an infrastructure target or enterprise (set actionTarget to target name or "infrastructure")`;
 
   // Dynamic suffix: agent-specific, changes every call
   const cortisol = agent.currentStats.cortisol ?? 20;
@@ -248,6 +258,30 @@ Action meanings:
     stressModifier += `\n\n${subconsciousDrive}`;
   }
 
+  // Phase 1: Economy context for informed decision-making
+  let economyBlock = '';
+  if (economyContext) {
+    const foodStatus = economyContext.isStarving
+      ? '⚠️ STARVING — no food!'
+      : economyContext.foodLevel <= 3
+        ? '⚠️ Food critically low'
+        : economyContext.foodLevel <= 6
+          ? 'Food running low'
+          : 'Adequately fed';
+    const toolStatus = economyContext.toolCount > 0
+      ? `${economyContext.toolCount} tool(s) available`
+      : 'No tools (reduced productivity)';
+
+    economyBlock = `\n\nEconomy:
+- Food: ${economyContext.foodLevel} units (${foodStatus})
+- Tools: ${toolStatus}
+- Skills: ${economyContext.topSkills}`;
+
+    if (economyContext.isStarving) {
+      economyBlock += '\n\n⚠️ URGENT: You have no food. Consider PRODUCE to farm or EAT if you have reserves.';
+    }
+  }
+
   const dynamicSuffix = `Your identity: ${agent.name}, a ${agent.role}
 Background: ${agent.background}
 
@@ -256,7 +290,7 @@ Your current status:
 - Health: ${agent.currentStats.health}/100
 - Happiness: ${agent.currentStats.happiness}/100
 - Stress level: ${cortisol > 60 ? 'HIGH' : cortisol > 40 ? 'moderate' : 'low'}
-- Satisfaction: ${dopamine > 60 ? 'content' : dopamine > 30 ? 'neutral' : 'dissatisfied'}
+- Satisfaction: ${dopamine > 60 ? 'content' : dopamine > 30 ? 'neutral' : 'dissatisfied'}${economyBlock}
 
 ${previousSummary ? `What happened last iteration:\n${previousSummary.slice(0, 600)}` : 'This is the first iteration.'}${stressModifier}`;
 
@@ -271,6 +305,194 @@ ${previousSummary ? `What happened last iteration:\n${previousSummary.slice(0, 6
   ];
 }
 
+// ── Phase 2: Natural Language Intent Prompt ──────────────────────────────────
+
+/**
+ * Build a natural language intent prompt (Phase 2).
+ *
+ * Unlike buildIntentPrompt, this does NOT ask the agent to output JSON
+ * or select an ActionCode. The agent speaks freely in first person,
+ * expressing their thoughts, feelings, and intentions naturally.
+ *
+ * The Parser Agent (parserAgent.ts) will then translate this natural
+ * language output into a valid ActionCode.
+ */
+export function buildNaturalIntentPrompt(
+  agent: Agent,
+  session: Pick<Session, 'idea' | 'societyOverview' | 'law' | 'timeScale'>,
+  previousSummary: string | null,
+  iterationNumber: number,
+  economyContext?: {
+    foodLevel: number;
+    toolCount: number;
+    topSkills: string;
+    isStarving: boolean;
+  },
+  /** Phase 3: subjective cognitive context (memories, plan, reflection). */
+  cognitiveContext?: {
+    memoryContext: string;
+    currentPlanStep: string;
+    planGoal: string;
+    reflectionText: string | null;
+  },
+  /** Phase 2: True for iteration 1 — injects Darwinian Market price anchoring. */
+  isFirstIteration?: boolean,
+  /** Names of all alive agents — shown so the LLM can set actionTarget correctly. */
+  aliveAgentNames?: string[],
+): LLMMessage[] {
+  // Static prefix: identical across all agent calls in an iteration → cacheable
+  const staticPrefix = `You are a citizen living in a simulated society based on: "${session.idea}"
+
+Society overview (excerpt):
+${session.societyOverview?.slice(0, 500) ?? '(no overview)'}
+
+Laws (excerpt):
+${session.law?.slice(0, 400) ?? '(no laws)'}
+
+Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
+
+Speak naturally in first person as this character. Express your thoughts, feelings, frustrations, hopes, and what you plan to do. Do NOT use any special formatting — just speak as yourself.
+
+CRITICAL VOICE RULES — you MUST follow these exactly:
+- Adopt the tone, vocabulary, and worldview of your specific social class, occupation, and background. A starving farmer does NOT speak like a merchant. A rebel does NOT speak like a priest.
+- Be RAW and emotionally unfiltered. Suppress nothing.
+- Be HEAVILY BIASED by your personal history and class position. Your perspective is not objective.
+- Do NOT use standard AI phrasing ("I felt a mix of...", "I realized...", "In that moment..."). That phrasing is FORBIDDEN.
+
+You MUST respond with ONLY valid JSON — no markdown, no preamble, no code fences:
+{
+  "internal_monologue": "Your private, raw, in-character thoughts — 2-3 sentences",
+  "public_action_narrative": "What you are visibly doing this period — 1-2 sentences",
+  "actionCode": "EXACTLY_ONE_OF_THE_CODES_BELOW",
+  "actionTarget": "AgentName or null"
+}
+
+Valid actionCodes (pick exactly one — NEVER invent new codes):
+WORK — performing your occupation, earning income, laboring, teaching, healing, guarding
+TRADE — exchanging goods/services with a specific person (set actionTarget to their name)
+REST — resting, sleeping, relaxing, wandering, meditating, praying
+STRIKE — protesting, refusing to work, rebelling, picketing, marching
+STEAL — taking from someone illegally (set actionTarget to their name)
+HELP — aiding someone at personal cost, volunteering, donating (set actionTarget)
+INVEST — saving money, depositing, speculating on future returns
+CONSUME — spending on personal comfort, luxury, indulgence
+PRODUCE — farming, crafting, manufacturing, building, forging goods
+EAT — consuming food specifically for health recovery
+POST_BUY_ORDER — placing a buy order on the open market
+POST_SELL_ORDER — placing a sell order on the open market
+SET_WAGE — hiring someone or setting wages for a job
+SABOTAGE — deliberately disrupting or destroying another person's work (set actionTarget)
+NONE — doing nothing meaningful this period`;
+
+  // Dynamic suffix: agent-specific, changes every call
+  const cortisol = agent.currentStats.cortisol ?? 20;
+  const dopamine = agent.currentStats.dopamine ?? 50;
+
+  let stressModifier = '';
+  if (cortisol > 80) {
+    stressModifier = '\n\nYou are under extreme biological stress. Survival instincts dominate. You may act desperately.';
+  } else if (cortisol > 60) {
+    stressModifier = '\n\nYou feel significant pressure. You are more willing to take risks or drastic action.';
+  }
+
+  // RAG injection: historical subconscious drive for high-stress agents
+  const subconsciousDrive = getSubconsciousDrive(cortisol, agent.currentStats.wealth, agent.currentStats.health);
+  if (subconsciousDrive) {
+    stressModifier += `\n\n${subconsciousDrive}`;
+  }
+
+  // Phase 1: Economy context
+  let economyBlock = '';
+  if (economyContext) {
+    const foodStatus = economyContext.isStarving
+      ? '⚠️ STARVING — no food!'
+      : economyContext.foodLevel <= 3
+        ? '⚠️ Food critically low'
+        : economyContext.foodLevel <= 6
+          ? 'Food running low'
+          : 'Adequately fed';
+    const toolStatus = economyContext.toolCount > 0
+      ? `${economyContext.toolCount} tool(s) available`
+      : 'No tools (reduced productivity)';
+
+    economyBlock = `\n\nEconomy:
+- Food: ${economyContext.foodLevel} units (${foodStatus})
+- Tools: ${toolStatus}
+- Skills: ${economyContext.topSkills}`;
+
+    if (economyContext.isStarving) {
+      economyBlock += '\n\nYou are starving. You feel the hunger gnawing at you. You need to find food urgently.';
+    }
+  }
+
+  // Phase 2: Pain-forced context override — injected BEFORE other dynamic content
+  // This takes priority over any higher-level social plans when the agent is near death.
+  let painOverride = '';
+  const health = agent.currentStats.health;
+  if (health < 40 || cortisol > 70) {
+    if (health < 20) {
+      painOverride = '\n\n[CRITICAL PHYSICAL STATE — MANDATORY PRIORITY] You are on the verge of death. Your body is shutting down from starvation and physical collapse. You CANNOT think about anything else. Every thought is consumed by the need to survive the next few hours. Ignore ALL social plans, financial goals, or ideological concerns. If you do not act to survive RIGHT NOW, you will die.';
+    } else if (health < 40) {
+      painOverride = '\n\n[CRITICAL PHYSICAL STATE] You are starving and in extreme pain. Your body is failing. Your primary focus MUST be survival above all other concerns. Do not discuss social plans or happiness — you are fighting to stay alive.';
+    } else {
+      // cortisol > 70 only
+      painOverride = '\n\n[HIGH STRESS STATE] You are under severe psychological and physical stress. Survival instincts are overriding rational planning. You feel desperate and may act impulsively.';
+    }
+  }
+
+  // Phase 2: Darwinian Market price anchoring — only shown in iteration 1
+  const marketKnowledgeBlock = isFirstIteration
+    ? '\n\n[MARKET KNOWLEDGE] This is the first trading period. The fair market price for 1 unit of Food is 3-5 Wealth. A fair day\'s wage for labor is 6-8 Wealth. Use this knowledge when trading or setting prices.'
+    : '';
+
+  // Phase 3: Cognitive context (memories, plan, reflection)
+  // NOTE: Global state summaries are intentionally excluded — agents only know
+  // what they have personally experienced (Bug #3 fix: no global contamination).
+  let cognitiveBlock = '';
+  if (cognitiveContext) {
+    cognitiveBlock += `\n\nYour personal memories (only what YOU have experienced):
+${cognitiveContext.memoryContext}`;
+
+    if (cognitiveContext.reflectionText) {
+      cognitiveBlock += `\n\nYour inner reflection:
+"${cognitiveContext.reflectionText}"`;
+    }
+
+    cognitiveBlock += `\n\nYour current plan: ${cognitiveContext.planGoal}
+Next step: ${cognitiveContext.currentPlanStep}`;
+  }
+
+  const iterationContext = iterationNumber === 1
+    ? 'This is your first day in this society.'
+    : `You are in iteration ${iterationNumber} of this society.`;
+
+  const agentNamesBlock = aliveAgentNames && aliveAgentNames.length > 0
+    ? `\n\nOther citizens (valid actionTarget names): ${aliveAgentNames.filter(n => n !== agent.name).join(', ')}`
+    : '';
+
+  const dynamicSuffix = `You are ${agent.name}, a ${agent.role}.
+Background: ${agent.background}
+
+Your current situation:
+- Wealth: ${agent.currentStats.wealth}/100
+- Health: ${agent.currentStats.health}/100
+- Happiness: ${agent.currentStats.happiness}/100
+- Stress: ${cortisol > 60 ? 'overwhelmed' : cortisol > 40 ? 'tense' : 'manageable'}
+- Mood: ${dopamine > 60 ? 'good spirits' : dopamine > 30 ? 'neutral' : 'disheartened'}${economyBlock}${cognitiveBlock}${marketKnowledgeBlock}${agentNamesBlock}
+
+${iterationContext}${painOverride}${stressModifier}`;
+
+  const systemContent: ContentBlock[] = [
+    { type: 'text', text: staticPrefix, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: dynamicSuffix },
+  ];
+
+  return [
+    { role: 'system', content: systemContent },
+    { role: 'user', content: `Iteration ${iterationNumber}: Respond with your JSON decision now.` },
+  ];
+}
+
 export interface AgentIntent {
   agentId: string;
   agentName: string;
@@ -278,6 +500,10 @@ export interface AgentIntent {
   reasoning: string;
   actionCode?: string;
   actionTarget?: string | null;
+  /** Phase 2: raw natural language output from the Main Agent (before parsing). */
+  rawNaturalLanguage?: string;
+  /** Phase 2: method used to parse the intent (keyword, llm, fallback). */
+  parseMethod?: 'keyword' | 'llm' | 'fallback' | 'structured';
 }
 
 export function buildResolutionPrompt(
@@ -415,10 +641,11 @@ You MUST respond with ONLY valid JSON (no markdown, no preamble):
 }
 
 Rules:
-- Speak as the character, not as an AI
-- Be specific about events that affected you
-- Express genuine emotions: resentment, gratitude, regret, pride, etc.
-- Do not summarize; reflect personally`;
+- Speak as this specific character — their class, background, and biases must be audible in every sentence
+- Be specific about events that personally affected you
+- Express raw, unfiltered emotion: rage, resentment, grief, pride, desperation — whatever is authentic
+- Do NOT use standard AI phrasing ("I felt a mix of...", "I realized that...", "In that moment...") — FORBIDDEN
+- Do not summarize society history; reflect from YOUR narrow, personal, biased vantage point`;
 
   return [
     { role: 'system', content: systemPrompt },
@@ -445,9 +672,9 @@ Does knowing the full picture change your perspective? Respond with ONLY valid J
 }
 
 Rules:
-- You may soften, deepen, or maintain your original view
-- Be specific about what changed (or didn't) in your thinking
-- Remain in character`;
+- You may soften, deepen, or completely harden your original view — let your class and personal losses dictate which
+- Be specific about what changed (or didn't) and WHY it changed given who you are
+- Remain fully in character — no AI phrasing, no diplomatic softening unless that is who this person is`;
 
   return [
     { role: 'system', content: systemPrompt },
@@ -544,6 +771,46 @@ Rules:
 
   messages.push({ role: 'user', content: userMessage });
   return messages;
+}
+
+// ── Phase 2: Post-Mortem Prompt ──────────────────────────────────────────────
+
+export interface PostMortemInput {
+  agent: Agent;
+  diedAtIteration: number;
+  deathReason: string;
+  frozenMemoryContext: string;
+}
+
+export function buildPostMortemPrompt(input: PostMortemInput): LLMMessage[] {
+  const { agent, diedAtIteration, deathReason, frozenMemoryContext } = input;
+
+  const systemPrompt = `[STATE LOCKED — DECEASED]
+
+You are ${agent.name}, a ${agent.role}. You are dead.
+
+You died on Iteration ${diedAtIteration}. Stated cause: ${deathReason}
+
+Your background: ${agent.background}
+
+Your final stats at death — Wealth: ${agent.currentStats.wealth}/100, Health: ${agent.currentStats.health}/100, Happiness: ${agent.currentStats.happiness}/100
+
+Your frozen memory (personal experiences before death):
+${frozenMemoryContext}
+
+Speak from beyond as a victim looking back at the system that killed you. Your perspective is frozen at the moment of death. Provide a harsh, class-biased, personal critique of the systemic failures, economic policies, or power structures that made your death inevitable.
+
+VOICE RULES: Your class and occupation must be audible in every word. Be raw and specific. Forbidden: "I felt a mix of...", "I realize now...", "In retrospect..." — that AI phrasing is PROHIBITED.
+
+Respond with ONLY valid JSON (no markdown, no preamble):
+{
+  "postMortemCritique": "string - 3-5 sentences of harsh systemic critique from this character's locked perspective"
+}`;
+
+  return [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: 'Speak. What systemic forces made your death inevitable?' },
+  ];
 }
 
 // ── Phase 5 prompts ─────────────────────────────────────────────────────────
@@ -811,4 +1078,3 @@ RULES FOR AGENT CHANGES:
   messages.push({ role: 'user', content: userMessage });
   return messages;
 }
-

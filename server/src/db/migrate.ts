@@ -122,5 +122,48 @@ export function runMigrations() {
     // Column already exists — safe to ignore
   }
 
+  // ── Phase 1 Economy migrations ──────────────────────────────────────────
+
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS economy_snapshots (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      iteration_number INTEGER NOT NULL,
+      snapshot_data TEXT NOT NULL DEFAULT '{}',
+      timestamp TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_economy_snapshots_session
+      ON economy_snapshots(session_id, iteration_number);
+
+    CREATE TABLE IF NOT EXISTS agent_economy (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      skills TEXT NOT NULL DEFAULT '{}',
+      inventory TEXT NOT NULL DEFAULT '{}',
+      last_updated INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_economy_agent
+      ON agent_economy(agent_id);
+
+    CREATE INDEX IF NOT EXISTS idx_agent_economy_session
+      ON agent_economy(session_id);
+
+    CREATE TABLE IF NOT EXISTS market_prices (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      iteration_number INTEGER NOT NULL,
+      item_type TEXT NOT NULL,
+      last_price REAL NOT NULL DEFAULT 0,
+      vwap REAL NOT NULL DEFAULT 0,
+      volume INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_market_prices_session
+      ON market_prices(session_id, iteration_number);
+  `);
+
   console.log('Database migrations applied.');
 }

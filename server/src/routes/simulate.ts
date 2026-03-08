@@ -10,9 +10,40 @@
  * GET    /stream  — SSE event stream
  */
 import { Router } from 'express';
+import { eq } from 'drizzle-orm';
+import { db, sqlite } from '../db/index.js';
+import {
+  iterations, agentIntents, resolvedActions,
+  agents, economySnapshots, agentEconomy, marketPrices, roleChanges,
+} from '../db/schema.js';
 import { sessionRepo } from '../db/repos/sessionRepo.js';
 import { runSimulation } from '../orchestration/simulationRunner.js';
 import { simulationManager } from '../orchestration/simulationManager.js';
+
+/**
+ * Wipes all simulation artifacts for a session and resets agents to their
+ * initial stats / alive status. Used by the abort-reset flow.
+ */
+async function eraseSimulationData(sessionId: string): Promise<void> {
+  // Delete all iteration-generated data (FK cascades handle child rows where applicable,
+  // but explicit deletes are safer and faster with the current schema).
+  await db.delete(iterations).where(eq(iterations.sessionId, sessionId));
+  await db.delete(agentIntents).where(eq(agentIntents.sessionId, sessionId));
+  await db.delete(resolvedActions).where(eq(resolvedActions.sessionId, sessionId));
+  await db.delete(economySnapshots).where(eq(economySnapshots.sessionId, sessionId));
+  await db.delete(agentEconomy).where(eq(agentEconomy.sessionId, sessionId));
+  await db.delete(marketPrices).where(eq(marketPrices.sessionId, sessionId));
+  await db.delete(roleChanges).where(eq(roleChanges.sessionId, sessionId));
+
+  // Reset every agent's current_stats back to initial_stats, revive the dead.
+  sqlite.prepare(
+    `UPDATE agents
+     SET current_stats = initial_stats,
+         status = 'alive',
+         died_at_iteration = NULL
+     WHERE session_id = ?`
+  ).run(sessionId);
+}
 
 const router = Router({ mergeParams: true });
 
@@ -67,6 +98,18 @@ router.post('/resume', (req, res) => {
 router.post('/abort', (req, res) => {
   const { id } = req.params as { id: string };
   simulationManager.abort(id);
+  return res.json({ ok: true });
+});
+
+// POST /simulate/abort-reset — stop simulation and wipe all artifacts, return to design
+router.post('/abort-reset', async (req, res) => {
+  const { id } = req.params as { id: string };
+  // Signal runner to stop without advancing to simulation-complete stage
+  simulationManager.abortAndReset(id);
+  // Erase all simulation artifacts and reset agents
+  await eraseSimulationData(id);
+  // Return session to design stage
+  await sessionRepo.updateStage(id, 'design-review');
   return res.json({ ok: true });
 });
 

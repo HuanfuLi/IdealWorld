@@ -321,3 +321,29 @@ export interface SessionDetail {
   createdAt: string;
   updatedAt: string;
 }
+
+// ── Phase 1 Economy re-exports ────────────────────────────────────────────────
+export type {
+  SkillCategory,
+  SkillEntry,
+  SkillMatrix,
+  ItemType,
+  InventoryItem,
+  Inventory,
+  ItemProperties,
+  MarketOrder,
+  TradeMatch,
+  PriceIndex,
+  MarketState,
+  EmploymentContract,
+  EconomySnapshot,
+} from './economyTypes.js';
+
+export {
+  DEFAULT_SKILL_MATRIX,
+  DEFAULT_INVENTORY,
+  SKILL_CATEGORIES,
+  ITEM_TYPES,
+  ITEM_PROPERTIES,
+} from './economyTypes.js';
+

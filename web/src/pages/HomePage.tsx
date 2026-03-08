@@ -5,31 +5,33 @@ import { useSessionsStore } from '../stores/sessionsStore';
 import type { SessionMetadata, SessionStage } from '@idealworld/shared';
 
 const stageRoutes: Record<SessionStage, string> = {
-  'idea-input':          '/session/:id/idea',
-  'brainstorming':       '/session/:id/brainstorm',
-  'designing':           '/session/:id/brainstorm',
-  'design-review':       '/session/:id/design',
-  'refining':            '/session/:id/design',
-  'simulating':          '/session/:id/simulation',
-  'simulation-paused':   '/session/:id/simulation',
-  'reflecting':          '/session/:id/reflection',
+  'idea-input': '/session/:id/idea',
+  'brainstorming': '/session/:id/brainstorm',
+  'designing': '/session/:id/brainstorm',
+  'design-review': '/session/:id/design',
+  'refining': '/session/:id/design',
+  'simulating': '/session/:id/simulation',
+  'simulation-paused': '/session/:id/simulation',
+  'simulation-complete': '/session/:id/simulation',
+  'reflecting': '/session/:id/reflection',
   'reflection-complete': '/session/:id/reflection',
-  'reviewing':           '/session/:id/agents',
-  'completed':           '/session/:id/agents',
+  'reviewing': '/session/:id/agents',
+  'completed': '/session/:id/agents',
 };
 
 const stageBadge: Record<SessionStage, { label: string; cls: string }> = {
-  'idea-input':          { label: 'Idea', cls: 'badge-info' },
-  'brainstorming':       { label: 'Brainstorming', cls: 'badge-warning' },
-  'designing':           { label: 'Designing', cls: 'badge-warning' },
-  'design-review':       { label: 'Design Review', cls: 'badge-warning' },
-  'refining':            { label: 'Refining', cls: 'badge-warning' },
-  'simulating':          { label: 'Simulating', cls: 'badge-warning' },
-  'simulation-paused':   { label: 'Paused', cls: 'badge-warning' },
-  'reflecting':          { label: 'Reflecting', cls: 'badge-warning' },
+  'idea-input': { label: 'Idea', cls: 'badge-info' },
+  'brainstorming': { label: 'Brainstorming', cls: 'badge-warning' },
+  'designing': { label: 'Designing', cls: 'badge-warning' },
+  'design-review': { label: 'Design Review', cls: 'badge-warning' },
+  'refining': { label: 'Refining', cls: 'badge-warning' },
+  'simulating': { label: 'Simulating', cls: 'badge-warning' },
+  'simulation-paused': { label: 'Paused', cls: 'badge-warning' },
+  'simulation-complete': { label: 'Sim Complete', cls: 'badge-info' },
+  'reflecting': { label: 'Reflecting', cls: 'badge-warning' },
   'reflection-complete': { label: 'Reflected', cls: 'badge-info' },
-  'reviewing':           { label: 'Reviewing', cls: 'badge-info' },
-  'completed':           { label: '✓ Completed', cls: 'badge-success' },
+  'reviewing': { label: 'Reviewing', cls: 'badge-info' },
+  'completed': { label: '✓ Completed', cls: 'badge-success' },
 };
 
 function getResumeRoute(session: SessionMetadata): string {

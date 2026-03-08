@@ -1,74 +1,99 @@
-# Ideal World - Physics & Economics Enhancement Implementation Plan
+# Ideal World - Neuro-Symbolic Architecture (Generative Agent Enhanced) Upgrade Blueprint
 
-This plan outlines the restructuring of the underlying physics engine and socio-economic laws in *Ideal World*. The goal is to break free from the limitations of hardcoded rules and static occupations, evolving towards dynamic skills, the circulation of tangible physical inventories, and macro-economic lifecycle simulations.
-To guarantee high cohesion, low coupling, and the ability for progressive evolution, this implementation roadmap is strictly divided into mutually independent upgrade **Components** and deployment **Phases**. Future AI Agents can use this guide to incrementally execute code refactoring in segregated sessions, minimizing regression risks.
+This blueprint establishes a perfect integration framework between the underlying deterministic physics/economic engine and the top-level generative agent cognitive architecture. The ultimate goal is to facilitate the emergence of realistic social behaviors driven by genuine economic pressures, such as class consciousness and strikes.
+
+To guarantee high cohesion, low coupling, and the ability for progressive evolution, this implementation roadmap is strictly divided into mutually independent, testable **Phases**. This ensures that AI Agents can execute incremental upgrades across different sessions without interfering with existing systems. Furthermore, dedicated integration strategies are provided to allow rapid combination and testing of workflows after each phase is completed.
 
 ---
 
-## Phase 1: Physics Engine and Economic Foundation Upgrade (Symbolic Layer)
+## Phase 1: Deterministic Physics & Economic Engine (The Symbolic Foundation)
 
-The core focus of this phase is establishing a tangible physical reality governed by actual inventory and supply-and-demand laws.
+This phase entirely shifts the symbolic layer away from hardcoded rules towards a realistic resource-based simulation. It must be able to run independently of the LLM by accepting standard `ActionCodes`.
 
-### Component 1A: Fluid Roles & Dynamic Skill Matrix
-*   **Goal**: Abolish hardcoded, static occupational incomes. Shift from "identity-based allocation" to "capability-based production" (learning by doing).
-*   **Implementation Steps**:
-    1.  **Data Structure Modification**: Update `shared/src/types.ts` and `server/src/db/schema.ts` to add a dictionary-type field `skills: Record<string, number>` (e.g., `agriculture`, `mining`, `crafting`, `commerce`) to the Agent's `currentStats`.
-    2.  **Initial Equity**: During the genesis phase in `server/src/llm/centralAgent.ts`, normalize all base-level Agents' starting skill points to zero.
-    3.  **Proficiency Decay and Growth Algorithms**: Modify `physicsEngine.ts`. After executing a specific `ActionCode` (like mining or crafting), increase the corresponding proficiency according to a designated learning rate formula. Simultaneously, introduce a minor time-based forgetting mechanism (decay).
-    4.  **Dynamic Title Assignment**: At the end of each Iteration, dynamically assign display-only occupational titles to Agents based on the extreme values within their skill matrix.
+### Component 1A: Dynamic Skills and Dual-Track Production
+*   **Goal**: Abolish static, hardcoded occupations. Empower Agents with a fluid skill system based on "learning by doing."
+*   **Design**:
+    *   Initialize all Agents with an egalitarian starting skill matrix.
+    *   Executing specific actions increases the corresponding skill multiplier while maintaining a natural decay over time.
+    *   **Dual-Track Labor**: Agents can operate independently as primary producers (subsistence/peasant mode) or expend significant capital to establish corporate entities. Capitalist Agents can use `SET_WAGE` to hire others, establishing an employer-employee dynamic.
 
-### Component 1B: Dual-Track Production & Physical Inventory Subsystem
-*   **Goal**: Transition from the one-dimensional creation of abstract money (`Wealth`) to a closed-loop physical inventory system encompassing resource gathering, circulation, consumption, and asset decay.
-*   **Implementation Steps**:
-    1.  **Inventory Schema Mapping**: Add an `Inventory` type to `shared/src/types.ts` (including attributes like `food: number`, `iron: number`, `tools: number`), and update the database schema for persistence.
-    2.  **Attribute Binding**: Introduce "spoilage rates" for consumables and "durability" mechanics for crafted tools.
-    3.  **Track 1 - Solo Labor**: Expand `actionCodes.ts` and `physicsEngine.ts`. When an individual executes a gathering action, they consume `Health` to produce basic inventory reserves instead of directly generating `Wealth`.
-    4.  **Track 2 - Corporate Employment**: Allow high-net-worth Agents to issue commands like `ORGANIZE_FIRMS` to establish corporate entities. Introduce corporate accounts and labor contract mechanics, enabling lower-class Agents to sell their stamina/labor to produce goods for the corporation in exchange for guaranteed wage compensation.
+### Component 1B: Physical Asset Inventory
+*   **Goal**: Introduce physical, consumable assets to ground survivability in tangible resources.
+*   **Design**:
+    *   Introduce items like **Food** (embodying direct survival pressure) and **Tools** (embodying means of production/productivity).
+    *   Attach physical properties to these items, such as spoilage rates for food and durability/depreciation curves for tools.
 
 ### Component 1C: Global Order Book Matching Engine
-*   **Goal**: Replace the highly inefficient and hallucination-prone 1-on-1 LLM bartering with centralized, price-spread matching.
-*   **Implementation Steps**:
-    1.  **Action Space Refactoring**: Add `PLACE_BUY_ORDER` and `PLACE_SELL_ORDER` to `actionCodes.ts`, enforcing a strict JSON payload structure (target item, unit price, quantity).
-    2.  **In-Memory Order Book**: Create an independent file `orderBook.ts` in `server/src/mechanics/` responsible for aggregating and holding all valid orders during the iteration.
-    3.  **Matching Interceptor**: Inject an aggregation matching logic step immediately after the Physics Resolution in `simulationRunner.ts`. The algorithm will queue and execute trades based on a "Price Priority, Time Priority" rule.
-    4.  **Micro-to-Macro Data Hooks**: Following execution, calculate the average market clearing price for all item types based on total circulation volume to update the global price index.
+*   **Goal**: Replace 1-on-1 bartering with a realistic market clearing mechanism.
+*   **Design**:
+    *   Abstract all market interactions into `POST_BUY_ORDER` and `POST_SELL_ORDER` commands (containing target item, price, and quantity).
+    *   All parsed orders enter a global system order book.
+    *   At the end of each iteration, the system matches orders centrally based on price/time priority, dynamically establishing the market's supply-demand equilibrium and real-time price indices.
+
+### 🔗 Phase 1 Integration & Testing Strategy
+*   **Testing**: This phase can be tested in complete isolation from LLMs. Write a dummy script that feeds randomized or deterministic `ActionCodes` (e.g., 50 Agents posting buy/sell orders) into the `physicsEngine` and verify if the Order Book resolves correctly, inventories update, and prices reflect simulated supply/demand.
 
 ---
 
-## Phase 2: Socio-Psychological RAG and Historical Cycle Engine (Neural Layer Upgrade)
+## Phase 2: The Neuro-Symbolic Bridge (Parsing & Safety)
 
-The goal of this phase is to utilize the real economic telemetry generated by Phase 1 to dynamically inject historically relevant subconscious imperatives into the neural layer via RAG, sparking macro-historical trends and class evolution.
+This phase acts as the critical translation layer, securely mapping the boundless creativity of natural language onto the rigid boundaries of the Physics Engine.
 
-### Component 2A: Real-Time Macro-Economic Telemetry Service
-*   **Goal**: Provide 24/7 aggregation of three core macro-parameters to serve as threshold triggers for the social cycle state machine.
-*   **Implementation Steps**:
-    1.  Add extended aggregation methods to the ComputeStats module in `simulationRunner.ts`.
-    2.  **Gini Index Extension**: Calculate inequality based not only on `Wealth` but also on the monopolization rate of productive physical inventory.
-    3.  **Inflation Rate**: Calculate actual purchasing power by contrasting the average price of basic survival goods (provided by Component 1C) against the weighted average societal wage.
-    4.  **Unemployment/Monopoly Rate**: Track the shifting proportions of Agents choosing independent labor, engaging in wage employment, or acting as corporate owners per iteration.
+### Component 2A: The Parser Agent (Lightweight Intermediary)
+*   **Goal**: Allow the primary Generative Agent to output purely natural language intents without worrying about system syntax.
+*   **Design**:
+    *   The Main Agent outputs its thoughts naturally (e.g., *"I can't afford food anymore! I refuse to work at the factory today, I'm going to the plaza to protest."*).
+    *   A smaller, highly-constrained LLM (the Parser Agent) receives this string and maps it strictly to the allowed symbolic action schema (e.g., `ActionCode: STRIKE`).
 
-### Component 2B: Four-Stage Historical Cycle RAG Injector
-*   **Goal**: Dynamically overwrite the "subconscious" prompt prefixes for Agents across different classes based on a state machine governed by the macro-telemetry indicators.
-*   **Implementation Steps**:
-    1.  Refactor `server/src/mechanics/historicalRAG.ts` to implement a four-stage deterministic state machine with hysteresis curves based on newly acquired macro-parameters.
-    2.  **Boom Phase Logic**: When indicators are healthy, RAG injections should feature positive reinforcement (e.g., "Early Industrial Revolution optimism") to induce further specialization and labor allocation.
-    3.  **Stratification Phase Logic**: Feed capital accumulation/monopoly hints to the wealthy class; simultaneously, inject sentiments of "relative deprivation" to wage laborers to slowly increase societal Cortisol.
-    4.  **Crisis Phase Logic**: Triggered during stagflation or depression. Issue panic-survival directives. Induce employers to enact mass layoffs for self-preservation, while directing the lower class to hoard physical goods as a hedge against hyperinflation.
-    5.  **Revolution Phase Logic**: Triggered when the Gini coefficient breaches an extreme threshold alongside systemic Cortisol spikes. Inject violent deconstruction directives from rebellious historical epochs to the lower class, guiding them to halt standard production, choose physical pillaging, initiate violent revolt, and execute actions that force the redistribution of wealth.
+### Component 2B: Safety and Fallback Mechanism
+*   **Goal**: Prevent engine crashes or undefined states caused by LLM hallucinations.
+*   **Design**:
+    *   If the Main Agent outputs a behavior that holds zero economic or physical relevance to the engine (e.g., *"Take a walk on the beach"*), the Parser Agent must safely map this to `ActionCode: REST` or `NONE`.
+    *   This guarantees the deterministic engine in Phase 1 always receives valid typed parameters.
+
+### 🔗 Phase 2 Integration & Testing Strategy
+*   **Testing**: Test the Parse Agent independently by passing it an array of diverse natural language strings (both relevant and absurd). Assert that the output is always a valid `ActionCode`.
+*   **Integration with Phase 1**: Chain the resolved `ActionCodes` from the Parser Agent directly into the Phase 1 Physics Engine inputs.
 
 ---
 
-## Phase 3: Workflow Pipeline and Orchestration Adjustment
+## Phase 3: Generative Cognitive Layer & Subjective Memory
 
-This phase adjusts the top-level orchestration and Map-Reduce partitioning to handle the massive influx of economic and psychological information.
+This phase overhauls the Agent's consciousness. It removes the "omniscient" global data injection (like broadcasting the Gini index to everyone) and grounds the Agent in a limited, subjective perspective driven by localized experiences.
 
-### Component 3A: Context Window Construction and Pass-Through
-*   **Goal**: Guarantee that Large Language Models have precise and upfront access to all necessary decision-making variables within their prompt headers.
-*   **Implementation Steps**: Refactor `buildIntentPrompt` in `prompts.ts`. Force the prompt module to integrate the "Global Price & Supply Dashboard" generated by module 2A. Ensure exact display of the individual Agent's detailed physical inventory, their corporate employee structure, or their recognized labor relations, establishing strict physical boundaries for the model’s situational awareness.
+### Component 3A: Localized Memory Stream
+*   **Goal**: Establish strict information asymmetry. Agents only know what they physically experience.
+*   **Design**:
+    *   Every experience is recorded as a natural language memory object containing a description, creation timestamp, and last-accessed timestamp.
+    *   Macro-data (prices, inequality) is *not* globally broadcast. Agents must travel to a location (e.g., a Market or Exchange) or converse with others to deduce prices, inherently simulating information delay and localization.
 
-### Component 3B: Distributed Aggregation Algorithm Optimization (Map-Reduce Logic Remastering)
-*   **Goal**: Resolve architectural blind spots where partitioning large clusters accidentally severs cross-class conflicts or relevant corporate relationships.
-*   **Implementation Steps**: Rewrite `server/src/orchestration/clustering.ts`.
-    1.  Deprecate the rigid algorithm that simply partitions evenly based on static `Role`.
-    2.  Implement a **"Firm-based"** mapping flow: Group all contracted employees and their respective employers into the same local Map processing pool to ensure seamless narrative resolution of wage disputes and internal corporate conflicts.
-    3.  Implement a **"Class-based/Faction-based"** mapping flow: During pre-revolution iterations detected by Component 2B, aggregate members of the same wealth decile together to maintain narrative coherence for large-scale collective actions like coordinated strikes or uprisings.
+### Component 3B: 3D Retrieval System
+*   **Goal**: Intelligently surface the most relevant context from a massive memory stream.
+*   **Design**:
+    *   Calculate a composite retrieval score based on three dimensions:
+        1.  **Recency**: Exponential decay based on time since creation/last access.
+        2.  **Importance**: Prompt the LLM to score the memory's fundamental significance (1-10) upon creation.
+        3.  **Relevance**: Cosine similarity between the memory embedding and the current situation/query.
+
+### Component 3C: Directed Economic Reflection Tree
+*   **Goal**: Synthesize raw experiences into high-level sociological and economic motivations.
+*   **Design**:
+    *   Trigger an asynchronous reflection cycle when the sum of incoming memory importance breaches a threshold.
+    *   **Crucial Dimension Injection**: When prompting the LLM for reflection, structurally force the inclusion of survival-centric questions (e.g., *"Based on your recent memories, what is your high-level view on your personal financial security, the difficulty of acquiring resources, and the fairness of society?"*).
+    *   This forced economic reflection gives rise to synthesized higher-order memories, serving as the direct algorithmic catalyst for class consciousness and protest motivation.
+
+### Component 3D: Recursive Planning
+*   **Goal**: Shift behavior from immediate reaction to long-term proactive strategy.
+*   **Design**:
+    *   Based on retrieved memories and reflections, the Agent drafts a macroscopic natural language daily/weekly plan.
+    *   This plan is recursively broken down into specific steps. 
+    *   **Dynamic Overwrite**: If confronted with severe sudden events (e.g., being robbed or witnessing hyperinflation), the Agent is forced to halt, trigger an immediate situational evaluation, and rewrite the recursive plan.
+
+### 🔗 Phase 3 Integration & Testing Strategy
+*   **Testing**: Can be tested by manually injecting synthetic memories (e.g., "I starved yesterday", "Bread costs $1000") and observing if the Reflection Tree successfully generates anti-establishment class consciousness.
+*   **Full System Integration (Phases 1 + 2 + 3)**:
+    1.  Agent retrieves subjective context via the **3D Retrieval System** (Phase 3).
+    2.  Agent forms a **Recursive Plan** and outputs a natural language action step (Phase 3).
+    3.  **Parser Agent** translates the step into an `ActionCode` (Phase 2).
+    4.  **Physics Engine & Order Book** completely resolves the world state (Phase 1).
+    5.  The physical outcomes (trade success/failure, wage received) are converted back into natural language experiences and injected into the Agent's **Localized Memory Stream** (Phase 3), ready for the next iteration.

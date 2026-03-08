@@ -69,6 +69,50 @@ export function parseAgentIntentStrict(text: string): ParsedAgentIntent {
   };
 }
 
+/**
+ * Parse the single-pass structured JSON output from buildNaturalIntentPrompt.
+ *
+ * Expected schema:
+ *   { internal_monologue, public_action_narrative, actionCode, actionTarget }
+ *
+ * Throws on structural failure so retryWithHealing can append a healing message.
+ * Falls back gracefully to old-style { intent, reasoning } fields for resilience.
+ */
+export function parseSinglePassIntent(text: string): ParsedAgentIntent {
+  // Strip markdown code fences if the model wrapped its output
+  const stripped = text.trim()
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/```\s*$/i, '');
+
+  const raw = parseJSON<Record<string, unknown>>(stripped);
+
+  const narrative = String(
+    raw.public_action_narrative ?? raw.intent ?? ''
+  ).trim();
+  const monologue = String(
+    raw.internal_monologue ?? raw.reasoning ?? ''
+  ).trim();
+
+  if (!narrative && !monologue) {
+    throw new Error('Single-pass response missing both public_action_narrative and internal_monologue');
+  }
+
+  const actionCode = normalizeActionCode(String(raw.actionCode ?? 'NONE'));
+
+  const rawTarget = raw.actionTarget ?? (raw.parameters as Record<string, unknown> | undefined)?.target;
+  const actionTarget = rawTarget && String(rawTarget).toLowerCase() !== 'null'
+    ? String(rawTarget).trim() || null
+    : null;
+
+  return {
+    intent: narrative || monologue.slice(0, 300),
+    reasoning: monologue,
+    actionCode,
+    actionTarget,
+  };
+}
+
 function clampDelta(v: unknown): number {
   const n = typeof v === 'number' ? v : Number(v ?? 0);
   return Math.max(-30, Math.min(30, Math.round(isNaN(n) ? 0 : n)));

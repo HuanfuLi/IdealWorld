@@ -2,15 +2,33 @@
  * Deterministic physics engine for the neuro-symbolic simulation.
  * Given an agent and their chosen action code, compute exact stat deltas.
  * All values clamped to [-30, +30] for deltas, [0, 100] for final stats.
+ *
+ * Phase 1 Enhancement: Now integrate with the economy engine for
+ * skill multipliers, inventory effects, and production bonuses.
  */
-import type { Agent } from '@idealworld/shared';
+import type { Agent, SkillMatrix, Inventory } from '@idealworld/shared';
 import type { ActionCode } from './actionCodes.js';
+import { getActionMultiplier } from './skillSystem.js';
+import { getToolMultiplier } from './inventorySystem.js';
 
 export interface PhysicsInput {
   agent: Agent;
   actionCode: ActionCode;
   actionTarget?: string;    // target agentId for TRADE/STEAL/HELP
   allAgents: Agent[];
+  /** Phase 1: Agent's skill matrix (optional — backward compatible). */
+  skills?: SkillMatrix;
+  /** Phase 1: Agent's inventory (optional — backward compatible). */
+  inventory?: Inventory;
+  /** Phase 1: Economy deltas to layer on top (from economy engine). */
+  economyDeltas?: {
+    wealthDelta: number;
+    healthDelta: number;
+    cortisolDelta: number;
+    happinessDelta: number;
+  };
+  /** Phase 2: Whether this agent is currently the victim of a SABOTAGE (-50% productivity). */
+  isSabotaged?: boolean;
 }
 
 export interface PhysicsOutput {
@@ -50,14 +68,24 @@ const clampDelta = (v: number): number => Math.max(-30, Math.min(30, Math.round(
 
 /**
  * Resolve an agent's action into deterministic stat deltas.
+ *
+ * Phase 1 Enhancement: When skills/inventory are provided, the engine
+ * uses skill multipliers for production and layers economy deltas on top.
  */
 export function resolveAction(input: PhysicsInput): PhysicsOutput {
-  const { agent, actionCode, actionTarget, allAgents } = input;
+  const { agent, actionCode, actionTarget, allAgents, skills, inventory, economyDeltas, isSabotaged } = input;
   let w = 0, h = 0, hap = 0, cor = 0, dop = 0;
+
+  // Compute skill and tool multipliers if available
+  const skillMult = skills ? getActionMultiplier(skills, actionCode) : 1.0;
+  const toolMult = inventory ? getToolMultiplier(inventory) : 1.0;
+  // Phase 2: Active sabotage reduces this agent's productivity by 50%
+  const sabotageMult = isSabotaged ? 0.5 : 1.0;
+  const productionMult = skillMult * toolMult * sabotageMult;
 
   switch (actionCode) {
     case 'WORK':
-      w = roleIncome(agent.role);
+      w = Math.round(roleIncome(agent.role) * productionMult);
       h = -2;
       hap = -1;
       cor = -3;
@@ -112,6 +140,50 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
       cor = -8;
       dop = 8;
       break;
+    // ── Phase 1 new action codes ──────────────────────────────────────
+    case 'PRODUCE':
+      // Subsistence production: no wealth change, but skill improves output
+      w = 0;
+      h = -3;    // Physical labor
+      hap = 1;   // Satisfaction from self-sufficiency
+      cor = -2;
+      dop = 2;
+      break;
+    case 'EAT':
+      // Extra food consumption (inventory handles the food mechanics)
+      w = 0;
+      h = 2;
+      hap = 3;
+      cor = -4;
+      dop = 3;
+      break;
+    case 'POST_BUY_ORDER':
+    case 'POST_SELL_ORDER':
+      // Market participation: minimal stat changes, real impact through economy engine
+      w = 0;
+      h = 0;
+      hap = 1;
+      cor = -1;
+      dop = 1;
+      break;
+    case 'SET_WAGE':
+      // Management action: small stress, leadership satisfaction
+      w = 0;
+      h = 0;
+      hap = 2;
+      cor = 2;
+      dop = 2;
+      break;
+    // ── Phase 2 new action codes ──────────────────────────────────────
+    case 'SABOTAGE':
+      // Expected-value outcome: physical danger, ideological satisfaction, high anxiety.
+      // Target's -50% productivity is tracked externally via sabotageRegistry.
+      w = 0;
+      h = -8;    // Physical risk (injuries, hiding, confrontation)
+      hap = 5;   // Ideological satisfaction from resistance
+      cor = 18;  // High anxiety from danger and legal risk
+      dop = 7;   // Adrenaline rush
+      break;
     case 'NONE':
     default:
       w = 0;
@@ -120,6 +192,14 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
       cor = 2;
       dop = -2;
       break;
+  }
+
+  // ── Layer economy deltas on top (from inventory/market) ──────────────
+  if (economyDeltas) {
+    w += economyDeltas.wealthDelta;
+    h += economyDeltas.healthDelta;
+    cor += economyDeltas.cortisolDelta;
+    hap += economyDeltas.happinessDelta;
   }
 
   // Automatic adjustments applied AFTER action resolution

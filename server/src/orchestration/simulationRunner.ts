@@ -24,11 +24,14 @@ import { getProvider, getCitizenProvider } from '../llm/gateway.js';
 import { readSettings } from '../settings.js';
 import {
   buildIntentPrompt,
+  buildNaturalIntentPrompt,
   buildResolutionPrompt,
   buildGroupResolutionMessages,
   buildMergeResolutionMessages,
   buildFinalReportPrompt,
+  buildPostMortemPrompt,
   type AgentIntent,
+  type PostMortemInput,
 } from '../llm/prompts.js';
 import {
   parseAgentIntentStrict,
@@ -36,6 +39,7 @@ import {
   parseGroupResolutionStrict,
   parseMergeResolutionStrict,
   parseFinalReport,
+  parseSinglePassIntent,
 } from '../parsers/simulation.js';
 import { runWithConcurrency } from './concurrencyPool.js';
 import { asyncLogFlusher } from '../db/asyncLogFlusher.js';
@@ -43,6 +47,20 @@ import { resolveAction } from '../mechanics/physicsEngine.js';
 import { type ActionCode } from '../mechanics/actionCodes.js';
 import { clusterByRole } from './clustering.js';
 import { retryWithHealing } from '../llm/retryWithHealing.js';
+// Phase 1 Economy imports
+import { runEconomyIteration, initializeAgentEconomy, cleanupSessionEconomy, type EconomyAgentInput } from '../mechanics/economyEngine.js';
+import { economyRepo, type AgentEconomyState } from '../db/repos/economyRepo.js';
+import type { SkillMatrix, Inventory } from '@idealworld/shared';
+import { DEFAULT_SKILL_MATRIX, DEFAULT_INVENTORY } from '@idealworld/shared';
+import { v4 as ecoUuid } from 'uuid';
+// Phase 3 Cognitive Engine imports
+import {
+  runCognitivePreProcessing,
+  runCognitivePostProcessing,
+  cleanupSessionCognition,
+  type CognitivePreInput,
+  type CognitivePostInput,
+} from '../cognition/cognitiveEngine.js';
 
 /** Agents per resolution batch when session is large */
 const MAPREDUCE_THRESHOLD = 30;
@@ -115,11 +133,68 @@ export async function runSimulation(sessionId: string, totalIterations: number):
     let agents = await agentRepo.listBySession(sessionId);
     let previousSummary: string | null = null;
 
+    // Phase 2: Track active sabotage effects → targetAgentId → remaining iterations
+    const sabotageRegistry = new Map<string, number>();
+    // Phase 2: Track death reasons for post-mortem system → agentId → { iteration, reason }
+    const deathReasonMap = new Map<string, { iteration: number; reason: string }>();
+
+    // ── Phase 1: Initialize economy state for all agents ──────────────────
+    const citizenAgents = agents.filter(a => a.isAlive && !a.isCentralAgent);
+    await economyRepo.initializeForSession(
+      sessionId,
+      citizenAgents.map(a => ({ id: a.id, role: a.role }))
+    );
+    let agentEconomyMap = new Map<string, AgentEconomyState>();
+    const econStates = await economyRepo.listBySession(sessionId);
+    for (const state of econStates) {
+      agentEconomyMap.set(state.agentId, state);
+    }
+
     // Support continuation: find max existing iteration number
     const [maxRow] = await db.select({ max: sql<number>`max(${iterationsTable.iterationNumber})` })
       .from(iterationsTable).where(eq(iterationsTable.sessionId, sessionId));
     const startIter = (maxRow?.max ?? 0) + 1;
     const endIter = startIter + totalIterations - 1;
+
+    // ── Phase 2: Darwinian Market Protocol — Genesis Endowment ────────────
+    // Override default food surplus (10) with scarce starting ration (3)
+    // to force immediate market participation and prevent trivial first iterations.
+    // Minimum wealth floor of 20 ensures agents can buy at least one round of food.
+    if (startIter === 1) {
+      const genesisUpdates: Array<{ agentId: string; sessionId: string; skills: import('@idealworld/shared').SkillMatrix; inventory: import('@idealworld/shared').Inventory; lastUpdated: number }> = [];
+      for (const [agentId, econState] of agentEconomyMap) {
+        const updatedInventory = {
+          ...econState.inventory,
+          food: { ...econState.inventory?.food, quantity: 3, quality: 100 },
+        } as import('@idealworld/shared').Inventory;
+        genesisUpdates.push({
+          agentId,
+          sessionId,
+          skills: econState.skills,
+          inventory: updatedInventory,
+          lastUpdated: 0,
+        });
+        agentEconomyMap.set(agentId, { ...econState, inventory: updatedInventory });
+      }
+      if (genesisUpdates.length > 0) {
+        await economyRepo.bulkUpsertAgentEconomy(genesisUpdates);
+      }
+      // Apply wealth floor: any agent below 20 wealth gets topped up
+      const wealthFloorUpdates = agents
+        .filter(a => a.isAlive && !a.isCentralAgent && a.currentStats.wealth < 20)
+        .map(a => ({
+          id: a.id,
+          wealth: 20,
+          health: a.currentStats.health,
+          happiness: a.currentStats.happiness,
+          cortisol: a.currentStats.cortisol ?? 20,
+          dopamine: a.currentStats.dopamine ?? 50,
+        }));
+      if (wealthFloorUpdates.length > 0) {
+        sqlite.transaction(() => { agentRepo.bulkUpdateStats(wealthFloorUpdates); })();
+        agents = await agentRepo.listBySession(sessionId);
+      }
+    }
 
     // Load previous summaries for final report if continuing
     if (startIter > 1) {
@@ -142,8 +217,16 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       // ── Abort check ──────────────────────────────────────────────────────
       if (simulationManager.isAbortRequested(sessionId)) {
         asyncLogFlusher.stop();
-        simulationManager.broadcast(sessionId, { type: 'error', message: 'Simulation aborted.' });
-        await sessionRepo.updateStage(sessionId, 'design-review');
+        cleanupSessionEconomy(sessionId);
+        cleanupSessionCognition(sessionId);
+        if (simulationManager.isResetRequested(sessionId)) {
+          // The abort-reset endpoint already cleaned the DB and set the stage.
+          // Just exit — do not overwrite the stage with 'simulation-complete'.
+          simulationManager.broadcast(sessionId, { type: 'aborted-reset' });
+        } else {
+          simulationManager.broadcast(sessionId, { type: 'error', message: 'Simulation aborted.' });
+          await sessionRepo.updateStage(sessionId, 'simulation-complete');
+        }
         simulationManager.finish(sessionId);
         return;
       }
@@ -166,8 +249,14 @@ export async function runSimulation(sessionId: string, totalIterations: number):
 
         if (simulationManager.isAbortRequested(sessionId)) {
           asyncLogFlusher.stop();
-          simulationManager.broadcast(sessionId, { type: 'error', message: 'Simulation aborted.' });
-          await sessionRepo.updateStage(sessionId, 'design-review');
+          cleanupSessionEconomy(sessionId);
+          cleanupSessionCognition(sessionId);
+          if (simulationManager.isResetRequested(sessionId)) {
+            simulationManager.broadcast(sessionId, { type: 'aborted-reset' });
+          } else {
+            simulationManager.broadcast(sessionId, { type: 'error', message: 'Simulation aborted.' });
+            await sessionRepo.updateStage(sessionId, 'simulation-complete');
+          }
           simulationManager.finish(sessionId);
           return;
         }
@@ -181,34 +270,116 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         total: endIter,
       });
 
-      // ── Collect intents (parallel) ───────────────────────────────────────
+      // Phase 2: Decay sabotage effects at the start of each iteration
+      for (const [agentId, remaining] of sabotageRegistry) {
+        if (remaining <= 1) {
+          sabotageRegistry.delete(agentId);
+        } else {
+          sabotageRegistry.set(agentId, remaining - 1);
+        }
+      }
+
+      // ── Collect intents: Phase 2+3 cognitive → natural language → parser ──
       const aliveAgents = agents.filter(a => a.isAlive && !a.isCentralAgent);
+      const isFirstIteration = iterNum === startIter && startIter === 1;
       const iterationId = uuidv4();
       const now = new Date().toISOString();
+      const aliveAgentNames = aliveAgents.map(a => a.name);
 
+      // ── Phase 3: Cognitive pre-processing (memories, reflections, planning) ──
+      const cognitiveInputs: CognitivePreInput[] = aliveAgents.map(agent => {
+        const econState = agentEconomyMap.get(agent.id);
+        return {
+          agentId: agent.id,
+          agentName: agent.name,
+          agentRole: agent.role,
+          currentStats: {
+            wealth: agent.currentStats.wealth,
+            health: agent.currentStats.health,
+            happiness: agent.currentStats.happiness,
+          },
+          isStarving: (econState?.inventory?.food?.quantity ?? 10) <= 0,
+        };
+      });
+
+      const cognitiveOutputs = await runCognitivePreProcessing(
+        sessionId, iterNum, cognitiveInputs, citizenProv,
+        { model: settings.citizenAgentModel },
+        settings.maxConcurrency,
+      );
+
+      // Single-pass structured intent collection (replaces two-step natural language → parser flow)
       const intentTasks = aliveAgents.map(agent => async (): Promise<AgentIntent> => {
-        const messages = buildIntentPrompt(agent, session, previousSummary, iterNum);
         const fallbackIntent: AgentIntent = {
           agentId: agent.id, agentName: agent.name,
-          intent: `${agent.name} continues their routine.`, reasoning: '',
-          actionCode: 'NONE', actionTarget: null,
+          intent: `${agent.name} rests, conserving energy.`, reasoning: '',
+          actionCode: 'REST', actionTarget: null,
+          parseMethod: 'fallback',
         };
-        const parsed = await retryWithHealing({
-          provider: citizenProv,
-          messages,
-          options: { model: settings.citizenAgentModel },
-          parse: (raw) => {
-            const p = parseAgentIntentStrict(raw);
-            return {
-              agentId: agent.id, agentName: agent.name,
-              intent: p.intent, reasoning: p.reasoning,
-              actionCode: p.actionCode, actionTarget: p.actionTarget,
-            } as AgentIntent;
-          },
-          fallback: fallbackIntent,
-          label: `intent:${agent.name}`,
-        });
-        return parsed;
+
+        try {
+          // Build economy context for the agent
+          const econState = agentEconomyMap.get(agent.id);
+          let economyContext: { foodLevel: number; toolCount: number; topSkills: string; isStarving: boolean } | undefined;
+          if (econState) {
+            const inv = econState.inventory;
+            const skills = econState.skills;
+            const skillEntries = Object.entries(skills)
+              .map(([k, v]) => ({ name: k, level: (v as { level: number }).level }))
+              .sort((a, b) => b.level - a.level)
+              .slice(0, 3);
+            const topSkills = skillEntries.map(s => `${s.name}: ${Math.round(s.level)}`).join(', ');
+            economyContext = {
+              foodLevel: inv?.food?.quantity ?? 10,
+              toolCount: inv?.tools?.quantity ?? 1,
+              topSkills,
+              isStarving: (inv?.food?.quantity ?? 10) <= 0,
+            };
+          }
+
+          // Phase 3: Get cognitive context for this agent
+          const cogOutput = cognitiveOutputs.get(agent.id);
+          const cognitiveContext = cogOutput ? {
+            memoryContext: cogOutput.memoryContext,
+            currentPlanStep: cogOutput.currentPlanStep,
+            planGoal: cogOutput.planGoal,
+            reflectionText: cogOutput.reflectionText,
+          } : undefined;
+
+          // Single-pass: one LLM call returns structured JSON with narrative + actionCode
+          const messages = buildNaturalIntentPrompt(
+            agent, session, previousSummary, iterNum,
+            economyContext, cognitiveContext, isFirstIteration, aliveAgentNames,
+          );
+
+          const parsed = await retryWithHealing({
+            provider: citizenProv,
+            messages,
+            options: { model: settings.citizenAgentModel },
+            parse: parseSinglePassIntent,
+            fallback: {
+              intent: fallbackIntent.intent,
+              reasoning: '',
+              actionCode: 'REST' as ActionCode,
+              actionTarget: null,
+            },
+            label: `intent:${agent.name}`,
+          });
+
+          return {
+            agentId: agent.id,
+            agentName: agent.name,
+            intent: parsed.intent.slice(0, 500),
+            reasoning: parsed.reasoning,
+            actionCode: parsed.actionCode,
+            actionTarget: parsed.actionTarget,
+            parseMethod: 'structured',
+          };
+        } catch (err) {
+          // Catch-all: log and return REST fallback so the iteration never crashes
+          console.warn(`[SimulationRunner] Intent generation failed for ${agent.name}: ${err instanceof Error ? err.message : String(err)}`);
+          return fallbackIntent;
+        }
       });
 
       const intents = await runWithConcurrency(intentTasks, settings.maxConcurrency);
@@ -228,7 +399,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       for (const intent of intents) {
         asyncLogFlusher.enqueue('agent_intents', intentCols, [
           uuidv4(), sessionId, intent.agentId, iterationId,
-          intent.intent, intent.reasoning, now,
+          intent.intent, intent.reasoning ?? '', now,
         ]);
       }
 
@@ -281,7 +452,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         };
       } else {
         // ── Standard path ────────────────────────────────────────────────
-        const resolutionMessages = buildResolutionPrompt(session, agents, intents, iterNum, previousSummary);
+        // Bug #1 fix: pass aliveAgents only — dead agents must never appear in resolution
+        const resolutionMessages = buildResolutionPrompt(session, aliveAgents, intents, iterNum, previousSummary);
         resolution = await retryWithHealing({
           provider,
           messages: resolutionMessages,
@@ -302,16 +474,36 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       // ── Build actionCode map from intents ──────────────────────────────
       const intentMap = new Map(intents.map(i => [i.agentId, i]));
 
-      // ── Apply physics engine + LLM narrative outcomes ─────────────────
+      // ── Phase 1: Run economy engine ─────────────────────────────────────
+      const economyInputs: EconomyAgentInput[] = aliveAgents.map(agent => {
+        const agentIntent = intentMap.get(agent.id);
+        const actionCode = (agentIntent?.actionCode ?? 'NONE') as ActionCode;
+        const econState = agentEconomyMap.get(agent.id);
+        return {
+          agentId: agent.id,
+          agentName: agent.name,
+          role: agent.role,
+          actionCode,
+          wealth: agent.currentStats.wealth,
+          skills: econState?.skills ?? structuredClone(DEFAULT_SKILL_MATRIX),
+          inventory: econState?.inventory ?? structuredClone(DEFAULT_INVENTORY),
+        };
+      });
+
+      const economyResult = runEconomyIteration(sessionId, iterNum, economyInputs);
+
+      // ── Apply physics engine + economy deltas + LLM narrative outcomes ─
       const outcomeMap = new Map(resolution.agentOutcomes.map(o => [o.agentId, o]));
 
       const statUpdates: Array<{ id: string; wealth: number; health: number; happiness: number; cortisol: number; dopamine: number }> = [];
       const deaths: Array<{ id: string; iterationNumber: number }> = [];
       const actionRows: Array<typeof resolvedActions.$inferInsert> = [];
+      const economyUpdates: Array<{ agentId: string; sessionId: string; skills: SkillMatrix; inventory: Inventory; lastUpdated: number }> = [];
 
       for (const agent of aliveAgents) {
         const outcome = outcomeMap.get(agent.id);
         const agentIntent = intentMap.get(agent.id);
+        const econOutput = economyResult.agentOutputs.get(agent.id);
 
         // Resolve action code via physics engine
         const actionCode = (agentIntent?.actionCode ?? 'NONE') as ActionCode;
@@ -324,23 +516,63 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           actionTargetId = targetAgent?.id;
         }
 
+        // Get economy state for physics engine integration
+        const econState = agentEconomyMap.get(agent.id);
+
         const physics = resolveAction({
           agent,
           actionCode,
           actionTarget: actionTargetId,
           allAgents: aliveAgents,
+          skills: econOutput?.skills ?? econState?.skills,
+          inventory: econOutput?.inventory ?? econState?.inventory,
+          economyDeltas: econOutput ? {
+            wealthDelta: econOutput.wealthDelta,
+            healthDelta: econOutput.healthDelta,
+            cortisolDelta: econOutput.cortisolDelta,
+            happinessDelta: econOutput.happinessDelta,
+          } : undefined,
+          // Phase 2: apply -50% productivity if this agent is a sabotage victim
+          isSabotaged: sabotageRegistry.has(agent.id),
         });
 
-        const newWealth = agent.currentStats.wealth + physics.wealthDelta;
-        const newHealth = agent.currentStats.health + physics.healthDelta;
-        const newHappiness = agent.currentStats.happiness + physics.happinessDelta;
-        const newCortisol = (agent.currentStats.cortisol ?? 20) + physics.cortisolDelta;
-        const newDopamine = (agent.currentStats.dopamine ?? 50) + physics.dopamineDelta;
+        let newWealth = agent.currentStats.wealth + physics.wealthDelta;
+        let newHealth = agent.currentStats.health + physics.healthDelta;
+        let newHappiness = agent.currentStats.happiness + physics.happinessDelta;
+        let newCortisol = (agent.currentStats.cortisol ?? 20) + physics.cortisolDelta;
+        let newDopamine = (agent.currentStats.dopamine ?? 50) + physics.dopamineDelta;
 
         const shouldDie = (outcome?.died === true) || newHealth <= 0;
 
+        // Phase 2: Darwinian Market Protocol — Humiliation Fallback
+        // If health dropped to lethal threshold (but agent hasn't died outright),
+        // the state force-feeds "Synthetic Slop" and strips remaining wealth.
+        const HUMILIATION_THRESHOLD = 20;
+        const shouldHumiliate = !shouldDie && newHealth <= HUMILIATION_THRESHOLD;
+
         if (shouldDie) {
           deaths.push({ id: agent.id, iterationNumber: iterNum });
+          // Capture death reason for post-mortem
+          const lifecycleEvent = resolution.lifecycleEvents?.find(
+            (e: { type: string; agentId: string; detail?: string }) => e.agentId === agent.id && e.type === 'death'
+          );
+          const deathReason = lifecycleEvent?.detail ?? (newHealth <= 0 ? 'health depleted to zero' : 'fatal circumstances');
+          deathReasonMap.set(agent.id, { iteration: iterNum, reason: deathReason });
+        } else if (shouldHumiliate) {
+          // Synthetic Slop intervention: restore to survival floor, strip wealth, max cortisol
+          newHealth = 30;
+          newWealth = 0;
+          newCortisol = 100;
+          statUpdates.push({
+            id: agent.id,
+            wealth: newWealth,
+            health: newHealth,
+            happiness: newHappiness,
+            cortisol: newCortisol,
+            dopamine: newDopamine,
+          });
+          // Inject humiliation into cognitive memory stream (will be processed post-iteration)
+          console.log(`[Humiliation] ${agent.name} received synthetic slop intervention at iteration ${iterNum}`);
         } else {
           statUpdates.push({
             id: agent.id,
@@ -349,6 +581,27 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             happiness: newHappiness,
             cortisol: newCortisol,
             dopamine: newDopamine,
+          });
+        }
+
+        // Phase 2: Register SABOTAGE target for 3-iteration productivity penalty
+        if (actionCode === 'SABOTAGE' && agentIntent?.actionTarget) {
+          const targetName = agentIntent.actionTarget.toLowerCase();
+          const targetAgent = aliveAgents.find(a => a.name.toLowerCase() === targetName);
+          if (targetAgent) {
+            sabotageRegistry.set(targetAgent.id, 3);
+            console.log(`[Sabotage] ${agent.name} sabotaged ${targetAgent.name} — productivity -50% for 3 iterations`);
+          }
+        }
+
+        // Collect economy state updates
+        if (econOutput) {
+          economyUpdates.push({
+            agentId: agent.id,
+            sessionId,
+            skills: econOutput.skills,
+            inventory: econOutput.inventory,
+            lastUpdated: iterNum,
           });
         }
 
@@ -363,10 +616,58 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             wealthDelta: physics.wealthDelta,
             healthDelta: physics.healthDelta,
             happinessDelta: physics.happinessDelta,
+            // Phase 1: include economy events in outcome
+            economyEvents: econOutput?.events ?? [],
+            isStarving: econOutput?.isStarving ?? false,
+            skillMultiplier: econOutput?.skillMultiplier ?? 1.0,
           }),
           resolvedAt: now,
         });
       }
+
+      // ── Phase 3: Cognitive post-processing (create experience memories) ──
+      // Build a quick set of humiliated agent IDs for memory injection
+      const humiliatedAgentIds = new Set(
+        aliveAgents
+          .filter(agent => {
+            const agentIntent = intentMap.get(agent.id);
+            const econOutput = economyResult.agentOutputs.get(agent.id);
+            const actionCode = (agentIntent?.actionCode ?? 'NONE') as ActionCode;
+            const physics = resolveAction({ agent, actionCode, allAgents: aliveAgents });
+            const newHealth = agent.currentStats.health + physics.healthDelta + (econOutput ? econOutput.healthDelta : 0);
+            return !deaths.some(d => d.id === agent.id) && newHealth <= 20;
+          })
+          .map(a => a.id)
+      );
+
+      const cognitivePostInputs: CognitivePostInput[] = aliveAgents.map(agent => {
+        const agentIntent = intentMap.get(agent.id);
+        const econOutput = economyResult.agentOutputs.get(agent.id);
+        const physics = resolveAction({
+          agent,
+          actionCode: (agentIntent?.actionCode ?? 'NONE') as ActionCode,
+          allAgents: aliveAgents,
+        });
+
+        const isHumiliated = humiliatedAgentIds.has(agent.id);
+        return {
+          agentId: agent.id,
+          sessionId,
+          iteration: iterNum,
+          // Phase 2: humiliated agents get an overriding memory of the event
+          actionPerformed: isHumiliated
+            ? `[HUMILIATION] I ran out of resources and was force-fed synthetic slop by the state. My remaining wealth was stripped. I am at the absolute bottom of society. I feel extreme rage and despair.`
+            : (agentIntent?.intent ?? 'continued routine'),
+          actionCode: agentIntent?.actionCode ?? 'NONE',
+          wealthDelta: isHumiliated ? -agent.currentStats.wealth : physics.wealthDelta,
+          healthDelta: isHumiliated ? -(agent.currentStats.health - 30) : physics.healthDelta,
+          happinessDelta: isHumiliated ? -20 : physics.happinessDelta,
+          economyEvents: econOutput?.events ?? [],
+          isStarving: econOutput?.isStarving ?? false,
+          narrativeSummary: resolution.narrativeSummary,
+        };
+      });
+      runCognitivePostProcessing(cognitivePostInputs);
 
       // Stat updates + deaths are critical (next iteration reads them) → synchronous batch
       sqlite.transaction(() => {
@@ -377,6 +678,25 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           agentRepo.bulkMarkDead(deaths);
         }
       })();
+
+      // ── Phase 1: Persist economy state ────────────────────────────────
+      if (economyUpdates.length > 0) {
+        await economyRepo.bulkUpsertAgentEconomy(economyUpdates);
+        // Update in-memory map for next iteration
+        for (const eu of economyUpdates) {
+          agentEconomyMap.set(eu.agentId, eu);
+        }
+      }
+
+      // Persist economy snapshot and market prices
+      await economyRepo.saveSnapshot(sessionId, iterNum, economyResult.snapshot);
+      if (economyResult.marketState.priceIndices.length > 0) {
+        await economyRepo.savePriceIndices(
+          sessionId,
+          iterNum,
+          economyResult.marketState.priceIndices,
+        );
+      }
 
       // Resolved-action rows are log data → enqueue for async flush
       const actionCols = ['id', 'session_id', 'agent_id', 'iteration_id', 'action', 'outcome', 'resolved_at'];
@@ -389,6 +709,25 @@ export async function runSimulation(sessionId: string, totalIterations: number):
 
       // Reload agents after updates
       agents = await agentRepo.listBySession(sessionId);
+
+      // ── Race guard: abort-reset may have fired mid-iteration ─────────────
+      // The route handler erases the DB as soon as the abort is signaled.
+      // If we reach here while abort is in flight, skip persisting the
+      // iteration row — otherwise one ghost row survives the erase and
+      // causes the next simulation to start at the wrong iteration number.
+      if (simulationManager.isAbortRequested(sessionId)) {
+        asyncLogFlusher.stop();
+        cleanupSessionEconomy(sessionId);
+        cleanupSessionCognition(sessionId);
+        if (simulationManager.isResetRequested(sessionId)) {
+          simulationManager.broadcast(sessionId, { type: 'aborted-reset' });
+        } else {
+          simulationManager.broadcast(sessionId, { type: 'error', message: 'Simulation aborted.' });
+          await sessionRepo.updateStage(sessionId, 'simulation-complete');
+        }
+        simulationManager.finish(sessionId);
+        return;
+      }
 
       // ── Persist iteration record ─────────────────────────────────────────
       const stats = computeStats(agents, iterNum);
@@ -428,14 +767,62 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       finalReport = `The simulation of "${session.idea}" concluded after ${endIter} iterations with ${finalStats.aliveCount} survivors.`;
     }
 
+    // ── Phase 2: Post-Mortem Review System ──────────────────────────────────
+    // Dead agents provide retrospective systemic critique from their frozen perspective.
+    // Memory is frozen at death — no new observations were pushed after isAlive → false.
+    const deadAgents = agents.filter(a => !a.isAlive && !a.isCentralAgent);
+    if (deadAgents.length > 0) {
+      const postMortemTasks = deadAgents.slice(0, 8).map(agent => async () => {
+        const deathInfo = deathReasonMap.get(agent.id);
+        const diedAtIteration = deathInfo?.iteration ?? agent.diedAtIteration ?? endIter;
+        const deathReason = deathInfo?.reason ?? 'unknown causes';
+        const frozenMemoryContext = [
+          `Background: ${agent.background}`,
+          `Final wealth: ${agent.currentStats.wealth}/100`,
+          `Final health: ${agent.currentStats.health}/100`,
+          `Final happiness: ${agent.currentStats.happiness}/100`,
+          `Society: ${session.idea}`,
+        ].join('\n');
+
+        const input: PostMortemInput = {
+          agent,
+          diedAtIteration,
+          deathReason,
+          frozenMemoryContext,
+        };
+
+        try {
+          const messages = buildPostMortemPrompt(input);
+          const raw = await citizenProv.chat(messages, { model: settings.citizenAgentModel });
+          const parsed = JSON.parse(raw.trim().replace(/^```json\s*/i, '').replace(/```\s*$/i, ''));
+          return `${agent.name} (${agent.role}, died Iter ${diedAtIteration}): "${parsed.postMortemCritique}"`;
+        } catch {
+          return null;
+        }
+      });
+
+      const postMortemResults = await runWithConcurrency(postMortemTasks, settings.maxConcurrency);
+      const critiques = postMortemResults.filter((c): c is string => c !== null);
+      if (critiques.length > 0) {
+        finalReport += `\n\n--- VOICES FROM THE DEAD ---\n${critiques.join('\n\n')}`;
+      }
+    }
+
     // Drain all pending log writes before finishing
     asyncLogFlusher.stop();
+
+    // Phase 1: Clean up session economy state
+    cleanupSessionEconomy(sessionId);
+    // Phase 3: Clean up cognitive state
+    cleanupSessionCognition(sessionId);
 
     await sessionRepo.updateStage(sessionId, 'simulation-complete');
     simulationManager.broadcast(sessionId, { type: 'simulation-complete', finalReport });
     simulationManager.finish(sessionId);
   } catch (err) {
     asyncLogFlusher.stop();
+    cleanupSessionEconomy(sessionId);
+    cleanupSessionCognition(sessionId);
     const message = err instanceof Error ? err.message : 'Simulation error';
     simulationManager.broadcast(sessionId, { type: 'error', message });
     simulationManager.finish(sessionId);
