@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Play, Pause, Square, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle, ArrowRight, GitFork, Zap, ChevronDown, ChevronRight } from 'lucide-react';
+import { Play, Pause, Square, X, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle, ArrowRight, GitFork, Zap, ChevronDown, ChevronRight } from 'lucide-react';
 import { useSimulationStore, type AgentIntentRecord } from '../stores/simulationStore';
 import { useShallow } from 'zustand/react/shallow';
 import MarkdownText from '../components/MarkdownText';
@@ -39,6 +39,7 @@ const Simulation = () => {
   const [sessionStage, setSessionStage] = useState<string>('');
   const [extraIterations, setExtraIterations] = useState(10);
   const [agentStatusTab, setAgentStatusTab] = useState<'lifecycle' | 'intents'>('intents');
+  const [confirmDialog, setConfirmDialog] = useState<'end' | 'abort' | null>(null);
   const [autoProceed, setAutoProceed] = useState(() => localStorage.getItem('sim-auto-proceed') === 'true');
   const autoProceedRef = useRef(autoProceed);
   const sseCleanupRef = useRef<(() => void) | null>(null);
@@ -134,6 +135,18 @@ const Simulation = () => {
     if (!id) return;
     if (isPaused) await resume(id);
     else await pause(id);
+  };
+
+  const handleEndAndProceed = async () => {
+    if (!id) return;
+    sseCleanupRef.current?.();
+    await abort(id);
+    await fetch(`/api/sessions/${id}/stage`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stage: 'reflecting' }),
+    });
+    navigate(`/session/${id}/reflection`);
   };
 
   const handleAbort = async () => {
@@ -242,13 +255,24 @@ const Simulation = () => {
             </button>
           )}
           {!isComplete && (
-            <button
-              className="btn-secondary"
-              style={{ color: 'var(--danger)', borderColor: 'rgba(239,68,68,0.3)' }}
-              onClick={handleAbort}
-            >
-              <Square size={18} /> Abort
-            </button>
+            <>
+              <button
+                className="btn-secondary"
+                onClick={() => setConfirmDialog('end')}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                title="End simulation now and proceed to Reflection (keeps all completed iterations)"
+              >
+                <Square size={18} /> End & Proceed
+              </button>
+              <button
+                className="btn-secondary"
+                style={{ color: 'var(--danger)', borderColor: 'rgba(239,68,68,0.3)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                onClick={() => setConfirmDialog('abort')}
+                title="Cancel simulation and discard all data, returning to Design"
+              >
+                <X size={18} /> Abort
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -548,9 +572,79 @@ const Simulation = () => {
           )}
         </div>
       )}
+      {/* Confirmation dialog */}
+      {confirmDialog && (
+        <ConfirmDialog
+          variant={confirmDialog}
+          onConfirm={() => {
+            setConfirmDialog(null);
+            if (confirmDialog === 'end') handleEndAndProceed();
+            else handleAbort();
+          }}
+          onCancel={() => setConfirmDialog(null)}
+        />
+      )}
     </div>
   );
 };
+
+// ── ConfirmDialog ─────────────────────────────────────────────────────────────
+
+interface ConfirmDialogProps {
+  variant: 'end' | 'abort';
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+function ConfirmDialog({ variant, onConfirm, onCancel }: ConfirmDialogProps) {
+  const isAbort = variant === 'abort';
+  return (
+    /* Backdrop */
+    <div
+      onClick={onCancel}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      {/* Panel */}
+      <div
+        onClick={e => e.stopPropagation()}
+        className="glass-panel"
+        style={{ width: '420px', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {isAbort
+            ? <X size={22} color="var(--danger)" />
+            : <Square size={22} color="var(--color-bright)" />}
+          <h3 style={{ fontSize: '1.1rem', margin: 0 }}>
+            {isAbort ? 'Abort Simulation?' : 'End & Proceed to Reflection?'}
+          </h3>
+        </div>
+
+        <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', lineHeight: 1.6, margin: 0 }}>
+          {isAbort
+            ? 'This will cancel the simulation and permanently discard all completed iterations. The session will return to the Design stage.'
+            : 'This will stop the simulation at the current iteration and immediately proceed to Reflection. All completed iterations will be preserved.'}
+        </p>
+
+        <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
+          <button className="btn-secondary" onClick={onCancel}>
+            Keep Running
+          </button>
+          <button
+            className={isAbort ? 'btn-secondary' : 'btn-primary'}
+            style={isAbort ? { color: 'var(--danger)', borderColor: 'rgba(239,68,68,0.4)' } : undefined}
+            onClick={onConfirm}
+          >
+            {isAbort ? <><X size={15} /> Abort</> : <><Square size={15} /> End & Proceed</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── Action Code Styling ───────────────────────────────────────────────────────
 
