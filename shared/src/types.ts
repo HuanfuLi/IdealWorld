@@ -77,6 +77,10 @@ export interface Agent {
   type: string;
   bornAtIteration: number | null;
   diedAtIteration: number | null;
+  /** Agent age in years — used by the MET age-inefficiency modifier (physical labour penalty >60). */
+  age?: number;
+  /** Agent body weight in kg — used by the MET satiety-cost formula (BMR baseline). */
+  weightKg?: number;
 }
 
 /** @alias Agent — kept for backward compat with Phase 1/2 imports */
@@ -193,6 +197,28 @@ export interface ComparisonResult {
   verdict: string;
 }
 
+/**
+ * Per-iteration deterministic economy telemetry.
+ * Computed by the physics engine — no LLM inference involved.
+ */
+export interface TelemetryLog {
+  iterationNumber: number;
+  /** Sum of all living agent wealth + AMM fiat reserve */
+  totalFiatSupply: number;
+  /** AMM food reserve (Y in x·y=k) */
+  ammFoodReserve_Y: number;
+  /** AMM fiat reserve (X in x·y=k) */
+  ammFiatReserve_X: number;
+  /** AMM spot price: fiat per food unit */
+  ammSpotPrice_Food: number;
+  /** Total food units consumed by MET metabolism across all agents */
+  totalCaloriesBurned: number;
+  /** Total food units produced (via PRODUCE_AND_SELL + sys_farm injection) */
+  totalCaloriesProduced: number;
+  /** Fraction of actions that explicitly failed/were rejected (0–1) */
+  actionFailureRate: number;
+}
+
 /** Full-fidelity export envelope */
 export interface SessionExport {
   version: 1;
@@ -227,6 +253,8 @@ export interface SessionExport {
     iterationNumber: number;
     timestamp: string;
   }>;
+  /** Deterministic physics telemetry — one snapshot per completed iteration */
+  telemetryLogs?: TelemetryLog[];
 }
 
 // ── Settings ───────────────────────────────────────────────────────────────

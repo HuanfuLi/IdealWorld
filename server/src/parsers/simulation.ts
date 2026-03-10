@@ -4,11 +4,17 @@
 import { parseJSON } from './json.js';
 import { normalizeActionCode, type ActionCode } from '../mechanics/actionCodes.js';
 
+export interface ParsedQueuedAction {
+  actionCode: ActionCode;
+  parameters: Record<string, unknown>;
+}
+
 export interface ParsedAgentIntent {
   intent: string;
   reasoning: string;
-  actionCode: ActionCode;
-  actionTarget: string | null;
+  actions: ParsedQueuedAction[];
+  primaryActionCode: ActionCode;
+  primaryActionTarget: string | null;
 }
 
 export interface ParsedAgentOutcome {
@@ -36,19 +42,23 @@ export interface ParsedResolution {
 export function parseAgentIntent(text: string): ParsedAgentIntent {
   try {
     const raw = parseJSON<Record<string, unknown>>(text);
+    const actionCode = normalizeActionCode(String(raw.actionCode ?? 'NONE'));
+    const actionTarget = raw.actionTarget ? String(raw.actionTarget) : null;
     return {
       intent: String(raw.intent ?? '').trim() || 'No specific intent.',
       reasoning: String(raw.reasoning ?? '').trim(),
-      actionCode: normalizeActionCode(String(raw.actionCode ?? 'NONE')),
-      actionTarget: raw.actionTarget ? String(raw.actionTarget) : null,
+      actions: [{ actionCode, parameters: actionTarget ? { target: actionTarget } : {} }],
+      primaryActionCode: actionCode,
+      primaryActionTarget: actionTarget,
     };
   } catch {
     // LLM returned prose — treat the whole text as the intent
     return {
       intent: text.trim().slice(0, 500) || 'No specific intent.',
       reasoning: '',
-      actionCode: 'NONE',
-      actionTarget: null,
+      actions: [{ actionCode: 'NONE', parameters: {} }],
+      primaryActionCode: 'NONE',
+      primaryActionTarget: null,
     };
   }
 }
@@ -61,11 +71,14 @@ export function parseAgentIntentStrict(text: string): ParsedAgentIntent {
   const raw = parseJSON<Record<string, unknown>>(text);
   const intent = String(raw.intent ?? '').trim();
   if (!intent) throw new Error('Missing or empty "intent" field');
+  const actionCode = normalizeActionCode(String(raw.actionCode ?? 'NONE'));
+  const actionTarget = raw.actionTarget ? String(raw.actionTarget) : null;
   return {
     intent,
     reasoning: String(raw.reasoning ?? '').trim(),
-    actionCode: normalizeActionCode(String(raw.actionCode ?? 'NONE')),
-    actionTarget: raw.actionTarget ? String(raw.actionTarget) : null,
+    actions: [{ actionCode, parameters: actionTarget ? { target: actionTarget } : {} }],
+    primaryActionCode: actionCode,
+    primaryActionTarget: actionTarget,
   };
 }
 
@@ -73,7 +86,7 @@ export function parseAgentIntentStrict(text: string): ParsedAgentIntent {
  * Parse the single-pass structured JSON output from buildNaturalIntentPrompt.
  *
  * Expected schema:
- *   { internal_monologue, public_action_narrative, actionCode, actionTarget }
+ *   { internal_monologue, public_narrative, actions[] }
  *
  * Throws on structural failure so retryWithHealing can append a healing message.
  * Falls back gracefully to old-style { intent, reasoning } fields for resilience.
@@ -88,7 +101,7 @@ export function parseSinglePassIntent(text: string): ParsedAgentIntent {
   const raw = parseJSON<Record<string, unknown>>(stripped);
 
   const narrative = String(
-    raw.public_action_narrative ?? raw.intent ?? ''
+    raw.public_narrative ?? raw.public_action_narrative ?? raw.intent ?? ''
   ).trim();
   const monologue = String(
     raw.internal_monologue ?? raw.reasoning ?? ''
@@ -98,18 +111,42 @@ export function parseSinglePassIntent(text: string): ParsedAgentIntent {
     throw new Error('Single-pass response missing both public_action_narrative and internal_monologue');
   }
 
-  const actionCode = normalizeActionCode(String(raw.actionCode ?? 'NONE'));
+  const rawActions = Array.isArray(raw.actions) ? raw.actions : [];
+  const actions: ParsedQueuedAction[] = rawActions.slice(0, 3).map((entry) => {
+    const item = (entry && typeof entry === 'object') ? entry as Record<string, unknown> : {};
+    const parameters = (item.parameters && typeof item.parameters === 'object')
+      ? item.parameters as Record<string, unknown>
+      : {};
+    return {
+      actionCode: normalizeActionCode(String(item.actionCode ?? 'NONE')),
+      parameters,
+    };
+  });
 
-  const rawTarget = raw.actionTarget ?? (raw.parameters as Record<string, unknown> | undefined)?.target;
-  const actionTarget = rawTarget && String(rawTarget).toLowerCase() !== 'null'
-    ? String(rawTarget).trim() || null
+  if (actions.length === 0) {
+    const fallbackActionCode = normalizeActionCode(String(raw.actionCode ?? 'NONE'));
+    const rawTarget = raw.actionTarget ?? (raw.parameters as Record<string, unknown> | undefined)?.target;
+    const actionTarget = rawTarget && String(rawTarget).toLowerCase() !== 'null'
+      ? String(rawTarget).trim() || null
+      : null;
+    actions.push({
+      actionCode: fallbackActionCode,
+      parameters: actionTarget ? { target: actionTarget } : {},
+    });
+  }
+
+  const primaryAction = actions[0] ?? { actionCode: 'NONE' as ActionCode, parameters: {} };
+  const rawPrimaryTarget = primaryAction.parameters.target ?? primaryAction.parameters.agent_id ?? primaryAction.parameters.enterprise_id;
+  const primaryActionTarget = rawPrimaryTarget && String(rawPrimaryTarget).toLowerCase() !== 'null'
+    ? String(rawPrimaryTarget).trim() || null
     : null;
 
   return {
     intent: narrative || monologue.slice(0, 300),
     reasoning: monologue,
-    actionCode,
-    actionTarget,
+    actions,
+    primaryActionCode: primaryAction.actionCode,
+    primaryActionTarget,
   };
 }
 

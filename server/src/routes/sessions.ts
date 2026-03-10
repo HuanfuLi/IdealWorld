@@ -172,6 +172,7 @@ router.get('/:id/agent-intents', async (req, res) => {
         role: agents.role,
         actionCode: agentIntents.actionCode,
         actionTarget: agentIntents.actionTarget,
+        actionQueue: agentIntents.actionQueue,
         intent: agentIntents.intent,
         iterationNumber: iterations.iterationNumber,
       })
@@ -179,21 +180,41 @@ router.get('/:id/agent-intents', async (req, res) => {
       .innerJoin(agents, eq(agentIntents.agentId, agents.id))
       .leftJoin(iterations, eq(agentIntents.iterationId, iterations.id))
       .where(eq(agentIntents.sessionId, id))
-      .orderBy(asc(iterations.iterationNumber));
+      .orderBy(asc(sql`COALESCE(${iterations.iterationNumber}, 9999999)`), asc(agentIntents.createdAt));
+
+    // Find the max completed iteration to infer the iteration number of mid-flight intents
+    const [maxIterRow] = await db.select({ max: sql<number>`max(${iterations.iterationNumber})` })
+      .from(iterations).where(eq(iterations.sessionId, id));
+    const maxCompleted = maxIterRow?.max ?? 0;
+    const currentRunning = maxCompleted + 1;
 
     // Group by agentId preserving insertion order
     const byAgent = new Map<string, {
       agentId: string; agentName: string; role: string;
-      intents: Array<{ iterationNumber: number; actionCode: string; actionTarget: string | null; narrative: string }>;
+      intents: Array<{
+        iterationNumber: number;
+        actionCode: string;
+        actionTarget: string | null;
+        actions: Array<{ actionCode: string; parameters: Record<string, unknown> }>;
+        narrative: string;
+      }>;
     }>();
     for (const row of rows) {
       if (!byAgent.has(row.agentId)) {
         byAgent.set(row.agentId, { agentId: row.agentId, agentName: row.agentName, role: row.role, intents: [] });
       }
+      let actions: Array<{ actionCode: string; parameters: Record<string, unknown> }> = [];
+      if (row.actionQueue) {
+        try {
+          const parsed = JSON.parse(row.actionQueue);
+          if (Array.isArray(parsed)) actions = parsed;
+        } catch { /* ignore malformed queue */ }
+      }
       byAgent.get(row.agentId)!.intents.push({
-        iterationNumber: row.iterationNumber ?? 0,
+        iterationNumber: row.iterationNumber ?? currentRunning,
         actionCode: row.actionCode ?? 'NONE',
         actionTarget: row.actionTarget ?? null,
+        actions,
         narrative: row.intent,
       });
     }

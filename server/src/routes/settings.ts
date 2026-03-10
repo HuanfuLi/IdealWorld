@@ -1,7 +1,12 @@
 import { Router } from 'express';
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import path from 'path';
 import { readSettings, writeSettings } from '../settings.js';
 import { getProvider, invalidateProvider, createProviderFromSettings } from '../llm/gateway.js';
 import type { AppSettings } from '@idealworld/shared';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const router = Router();
 
@@ -149,6 +154,30 @@ router.post('/test', async (req, res) => {
       error: err instanceof Error ? err.message : String(err),
     });
   }
+});
+
+// POST /api/settings/sandbox — run the deterministic physics sandbox test (no LLM calls)
+router.post('/sandbox', (_req, res) => {
+  const sandboxPath = path.resolve(__dirname, '../mechanics/__tests__/physics_sandbox.ts');
+
+  res.setHeader('Content-Type', 'application/json');
+
+  const child = spawn('npx', ['tsx', sandboxPath], {
+    cwd: path.resolve(__dirname, '../../..'), // repo root (IdealWorld/)
+    shell: process.platform === 'win32',
+  });
+
+  let output = '';
+  child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+  child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+
+  child.on('close', (code) => {
+    res.json({ output, exitCode: code ?? 1 });
+  });
+
+  child.on('error', (err) => {
+    res.json({ output: `Failed to start sandbox: ${err.message}`, exitCode: 1 });
+  });
 });
 
 export default router;

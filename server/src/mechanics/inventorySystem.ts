@@ -27,9 +27,6 @@ import type { ActionCode } from './actionCodes.js';
 
 // ── Configuration Constants ───────────────────────────────────────────────────
 
-/** Food consumed per iteration for survival. */
-const FOOD_CONSUMPTION_PER_ITER = 2;
-
 /** Minimum food quality before it's considered spoiled (unusable). */
 const SPOILAGE_THRESHOLD = 10;
 
@@ -51,8 +48,12 @@ const STARVATION_HEALTH_PENALTY = -10;
 /** Cortisol increase per iteration of starvation. */
 const STARVATION_CORTISOL_PENALTY = 15;
 
-/** Tool productivity bonus multiplier (how much tools boost WORK). */
-const TOOL_PRODUCTIVITY_BONUS = 0.3;
+/**
+ * Tool productivity bonus multiplier.
+ * At 1.0: one tool at full quality gives 1.0 + 1.0×log2(2)×1.0 = 2.0× (the spec 2.0× buff).
+ * Diminishing returns via log2 prevent infinite stacking with many tools.
+ */
+const TOOL_PRODUCTIVITY_BONUS = 1.0;
 
 // ── Core Functions ────────────────────────────────────────────────────────────
 
@@ -142,7 +143,7 @@ export function processInventory(
     }
 
     // ── 2. Tool depreciation from use ──────────────────────────────────────
-    if (action === 'WORK' || action === 'PRODUCE') {
+    if (action === 'WORK' || action === 'WORK_AT_ENTERPRISE' || action === 'PRODUCE_AND_SELL') {
         const tools = inventory.tools;
         if (tools.quantity > 0) {
             tools.quality = Math.max(0, tools.quality - TOOL_WEAR_PER_WORK);
@@ -154,30 +155,27 @@ export function processInventory(
         }
     }
 
-    // ── 3. Food consumption (survival) ──────────────────────────────────────
+    // ── 3. Luxury services cortisol reduction ─────────────────────────────
+    // Consuming luxury_goods drastically reduces Cortisol, preventing mental
+    // breakdown spirals. One unit consumed per iteration if available.
+    if (inventory.luxury_goods.quantity > 0) {
+        inventory.luxury_goods.quantity -= 1;
+        cortisolDelta -= 20;
+        happinessDelta += 5;
+    }
+
+    // ── 4. Weekly metabolism is now handled after all actions resolve. ─────
     const food = inventory.food;
     const usableFood = food.quality >= SPOILAGE_THRESHOLD ? food.quantity : 0;
-
-    if (usableFood >= FOOD_CONSUMPTION_PER_ITER) {
-        food.quantity -= FOOD_CONSUMPTION_PER_ITER;
-        healthDelta += 1; // Nourishment bonus
-        happinessDelta += 1; // Satisfaction from eating
-    } else if (usableFood > 0) {
-        // Partial food: consume what's available
-        food.quantity = 0;
-        healthDelta -= 3;
-        cortisolDelta += 5;
-        happinessDelta -= 2;
-    } else {
-        // Starvation
+    if (usableFood <= 0) {
         isStarving = true;
         healthDelta += STARVATION_HEALTH_PENALTY;
         cortisolDelta += STARVATION_CORTISOL_PENALTY;
         happinessDelta -= 5;
     }
 
-    // ── 4. Production (PRODUCE action) ──────────────────────────────────────
-    if (action === 'PRODUCE') {
+    // ── 5. Production (PRODUCE_AND_SELL action) ────────────────────────────
+    if (action === 'PRODUCE_AND_SELL') {
         const rawMat = inventory.raw_materials;
         if (rawMat.quantity >= RAW_MATERIALS_PER_PRODUCE) {
             rawMat.quantity -= RAW_MATERIALS_PER_PRODUCE;
@@ -189,25 +187,6 @@ export function processInventory(
             // Can still produce without raw materials, just less
             const produced = Math.round(BASE_FOOD_PRODUCTION * skillMultiplier * 0.3);
             food.quantity += produced;
-        }
-    }
-
-    // ── 5. EAT action: extra food consumption for health ────────────────────
-    if (action === 'EAT') {
-        const eatAmount = Math.min(3, food.quantity);
-        food.quantity -= eatAmount;
-        healthDelta += eatAmount * 3;
-        happinessDelta += eatAmount;
-        cortisolDelta -= eatAmount * 2;
-    }
-
-    // ── 6. CONSUME action: use luxury goods for satisfaction ────────────────
-    if (action === 'CONSUME') {
-        const luxuries = inventory.luxury_goods;
-        if (luxuries.quantity > 0) {
-            luxuries.quantity -= 1;
-            happinessDelta += 5;
-            cortisolDelta -= 5;
         }
     }
 

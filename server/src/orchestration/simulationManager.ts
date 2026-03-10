@@ -16,12 +16,22 @@ interface SimulationState {
   pauseRequested: boolean;
   /** When true, abort also resets all simulation data and returns to design stage. */
   resetRequested: boolean;
+  /** When false, regime-collapse early stopping is suppressed for this session. */
+  earlyStoppingEnabled: boolean;
   clients: Set<Response>;
 }
 
 export type SimulationEvent =
   | { type: 'iteration-start'; iteration: number; total: number }
-  | { type: 'agent-intent'; agentId: string; agentName: string; intent: string; actionCode: string; actionTarget: string | null }
+  | {
+      type: 'agent-intent';
+      agentId: string;
+      agentName: string;
+      intent: string;
+      actionCode: string;
+      actionTarget: string | null;
+      actions?: Array<{ actionCode: string; parameters: Record<string, unknown> }>;
+    }
   | { type: 'resolution'; iteration: number; narrativeSummary: string; lifecycleEvents: unknown[] }
   | { type: 'iteration-complete'; iteration: number; stats: Record<string, unknown> }
   | { type: 'simulation-complete'; finalReport: string }
@@ -39,6 +49,7 @@ class SimulationManager {
         abortRequested: false,
         pauseRequested: false,
         resetRequested: false,
+        earlyStoppingEnabled: true,
         clients: new Set(),
       });
     }
@@ -54,6 +65,16 @@ class SimulationManager {
     state.status = 'running';
     state.abortRequested = false;
     state.pauseRequested = false;
+    // earlyStoppingEnabled is intentionally NOT reset here — it may be
+    // pre-set by the route handler from request body before start() is called.
+  }
+
+  setEarlyStopping(sessionId: string, enabled: boolean): void {
+    this.getOrCreate(sessionId).earlyStoppingEnabled = enabled;
+  }
+
+  isEarlyStoppingEnabled(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.earlyStoppingEnabled ?? true;
   }
 
   pause(sessionId: string): void {

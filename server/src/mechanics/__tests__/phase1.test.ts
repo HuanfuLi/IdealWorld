@@ -111,10 +111,9 @@ assert(inv5.tools.quality < startToolQuality, 'Tool quality degrades with use');
 // Test 11: PRODUCE generates food
 const inv6 = structuredClone(DEFAULT_INVENTORY);
 const startFood = inv6.food.quantity;
-processInventory(inv6, 'PRODUCE', 1.5);
-// Account for food consumed during iteration
-assert(inv6.food.quantity >= startFood - 2, 'PRODUCE generates food from raw materials');
-assert(inv6.raw_materials.quantity < 5, 'PRODUCE consumes raw materials');
+processInventory(inv6, 'PRODUCE_AND_SELL', 1.5);
+assert(inv6.food.quantity >= startFood, 'PRODUCE_AND_SELL generates food from raw materials');
+assert(inv6.raw_materials.quantity < 5, 'PRODUCE_AND_SELL consumes raw materials');
 
 // Test 12: Tool multiplier
 const inv7 = structuredClone(DEFAULT_INVENTORY);
@@ -254,7 +253,7 @@ section('Economy Engine (Full Pipeline)');
 const agents: EconomyAgentInput[] = [
     {
         agentId: 'agent-1', agentName: 'Alice', role: 'Farmer',
-        actionCode: 'PRODUCE', wealth: 50,
+        actionCode: 'PRODUCE_AND_SELL', wealth: 50,
         skills: createSkillMatrix('Farmer'),
         inventory: createInventory('Farmer'),
     },
@@ -278,7 +277,7 @@ assert(result.agentOutputs.size === 3, 'All 3 agents have outputs');
 
 const aliceOutput = result.agentOutputs.get('agent-1');
 assert(aliceOutput !== undefined, 'Alice has output');
-assert(aliceOutput!.skills.farming.experience > 0, 'Alice gained farming XP from PRODUCE');
+assert(aliceOutput!.skills.farming.experience > 0, 'Alice gained farming XP from PRODUCE_AND_SELL');
 
 const bobOutput = result.agentOutputs.get('agent-2');
 assert(bobOutput !== undefined, 'Bob has output');

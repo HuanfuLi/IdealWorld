@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { FileText, ArrowRight, TrendingDown, TrendingUp, Minus, Loader2, AlertCircle, CheckCircle, ChevronDown, ChevronUp, BarChart2 } from 'lucide-react';
+import { FileText, ArrowRight, TrendingDown, TrendingUp, Minus, Loader2, AlertCircle, CheckCircle, ChevronDown, ChevronUp, BarChart2, SkipForward, RotateCcw } from 'lucide-react';
 import { useReflectionStore } from '../stores/reflectionStore';
 import { useSimulationStore } from '../stores/simulationStore';
 import { useSessionDetailStore } from '../stores/sessionDetailStore';
@@ -46,6 +46,9 @@ const Reflection = () => {
   const [agentStatsLoaded, setAgentStatsLoaded] = useState(false);
   // Which agent cards have expanded stats
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
+
+  // Track whether the user has skipped reflection (set true on Skip, false on Redo)
+  const [isSkipped, setIsSkipped] = useState(false);
 
   // Use agents from simulation store if reflection store hasn't loaded yet
   const displayAgents = agents.length > 0 ? agents : simAgents;
@@ -99,6 +102,43 @@ const Reflection = () => {
     };
   }, []);
 
+  // Detect skipped state on page revisit: stage advanced past 'reflecting' but no evaluation loaded
+  useEffect(() => {
+    if (
+      (session?.stage === 'reflection-complete' || session?.stage === 'reviewing' || session?.stage === 'completed')
+      && !isComplete
+    ) {
+      setIsSkipped(true);
+    }
+  }, [session?.stage, isComplete]);
+
+  const handleSkip = async () => {
+    sseCleanupRef.current?.();
+    if (id) {
+      await fetch(`/api/sessions/${id}/stage`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage: 'reflection-complete' }),
+      }).catch(() => null);
+    }
+    setIsSkipped(true);
+  };
+
+  const handleRedo = async () => {
+    if (!id) return;
+    sseCleanupRef.current?.();
+    setIsSkipped(false);
+    reset();
+    await fetch(`/api/sessions/${id}/stage`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stage: 'reflecting' }),
+    }).catch(() => null);
+    await startReflection(id);
+    const cleanup = connectSSE(id);
+    sseCleanupRef.current = cleanup;
+  };
+
   // Use simStatsHistory as fallback for society stats
   const displayStats = societyStats.length > 0 ? societyStats : simStatsHistory;
 
@@ -129,23 +169,46 @@ const Reflection = () => {
     <div className="animate-fade-in" style={{ height: 'calc(100vh - 4rem)', display: 'flex', flexDirection: 'column' }}>
       <div className="page-header" style={{ marginBottom: '1rem' }}>
         <h1 className="page-title" style={{ fontSize: '1.5rem' }}>Reflection</h1>
-        <button
-          className="btn-primary"
-          onClick={async () => {
-            if (id) {
-              await fetch(`/api/sessions/${id}/stage`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ stage: 'reviewing' }),
-              }).catch(() => null);
-            }
-            navigate(`/session/${id}/agents`);
-          }}
-          disabled={!isComplete}
-          style={{ opacity: isComplete ? 1 : 0.5 }}
-        >
-          Review Agents <ArrowRight size={18} />
-        </button>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          {/* Skip / Redo button */}
+          {isSkipped || isComplete ? (
+            <button
+              className="btn-secondary"
+              onClick={handleRedo}
+              disabled={isRunning}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', opacity: isRunning ? 0.5 : 1 }}
+              title="Re-run reflection from scratch"
+            >
+              <RotateCcw size={16} /> Redo
+            </button>
+          ) : (
+            <button
+              className="btn-secondary"
+              onClick={handleSkip}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+              title="Skip reflection to save tokens (can redo later)"
+            >
+              <SkipForward size={16} /> Skip
+            </button>
+          )}
+          <button
+            className="btn-primary"
+            onClick={async () => {
+              if (id) {
+                await fetch(`/api/sessions/${id}/stage`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ stage: 'reviewing' }),
+                }).catch(() => null);
+              }
+              navigate(`/session/${id}/agents`);
+            }}
+            disabled={!isComplete && !isSkipped}
+            style={{ opacity: isComplete || isSkipped ? 1 : 0.5 }}
+          >
+            Review Agents <ArrowRight size={18} />
+          </button>
+        </div>
       </div>
 
       {/* Running indicator */}

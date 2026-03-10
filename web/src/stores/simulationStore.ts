@@ -4,7 +4,15 @@ import type { Agent, Iteration, IterationStats } from '@idealworld/shared';
 // SSE event shapes mirroring server's SimulationEvent union
 type SSEEvent =
   | { type: 'iteration-start'; iteration: number; total: number }
-  | { type: 'agent-intent'; agentId: string; agentName: string; intent: string; actionCode: string; actionTarget: string | null }
+  | {
+      type: 'agent-intent';
+      agentId: string;
+      agentName: string;
+      intent: string;
+      actionCode: string;
+      actionTarget: string | null;
+      actions?: ActionQueueRecord[];
+    }
   | { type: 'resolution'; iteration: number; narrativeSummary: string; lifecycleEvents: LifecycleEvent[] }
   | { type: 'iteration-complete'; iteration: number; stats: IterationStats }
   | { type: 'simulation-complete'; finalReport: string }
@@ -18,12 +26,18 @@ export interface LifecycleEvent {
   detail: string;
 }
 
+export interface ActionQueueRecord {
+  actionCode: string;
+  parameters: Record<string, unknown>;
+}
+
 export interface AgentIntentRecord {
   agentId: string;
   agentName: string;
   iterationNumber: number;
   actionCode: string;
   actionTarget: string | null;
+  actions: ActionQueueRecord[];
   narrative: string;
 }
 
@@ -45,7 +59,7 @@ interface SimulationStore {
   // Live feed
   feed: IterationFeed[];
   pendingIntents: Record<string, string>; // agentId → narrative
-  pendingActionCodes: Record<string, { actionCode: string; actionTarget: string | null }>;
+  pendingActionCodes: Record<string, { actionCode: string; actionTarget: string | null; actions: ActionQueueRecord[] }>;
   agentIntentHistory: Record<string, AgentIntentRecord[]>; // agentId → sorted history
 
   // Stats history
@@ -69,7 +83,7 @@ interface SimulationStore {
   resume: (sessionId: string) => Promise<void>;
   abort: (sessionId: string) => Promise<void>;
   abortAndReset: (sessionId: string) => Promise<void>;
-  continueSimulation: (sessionId: string, iterations: number) => Promise<() => void>;
+  continueSimulation: (sessionId: string, iterations: number, earlyStoppingEnabled?: boolean) => Promise<() => void>;
   forkSimulation: (sessionId: string) => Promise<string>;
   reset: () => void;
 }
@@ -82,7 +96,7 @@ const initialState = {
   totalIterations: 0,
   feed: [] as IterationFeed[],
   pendingIntents: {} as Record<string, string>,
-  pendingActionCodes: {} as Record<string, { actionCode: string; actionTarget: string | null }>,
+  pendingActionCodes: {} as Record<string, { actionCode: string; actionTarget: string | null; actions: ActionQueueRecord[] }>,
   agentIntentHistory: {} as Record<string, AgentIntentRecord[]>,
   statsHistory: [] as IterationStats[],
   agents: [] as Agent[],
@@ -137,7 +151,13 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       const data = await res.json() as {
         agents: Array<{
           agentId: string; agentName: string; role: string;
-          intents: Array<{ iterationNumber: number; actionCode: string; actionTarget: string | null; narrative: string }>;
+          intents: Array<{
+            iterationNumber: number;
+            actionCode: string;
+            actionTarget: string | null;
+            actions: ActionQueueRecord[];
+            narrative: string;
+          }>;
         }>;
       };
       const history: Record<string, AgentIntentRecord[]> = {};
@@ -148,6 +168,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
           iterationNumber: i.iterationNumber,
           actionCode: i.actionCode,
           actionTarget: i.actionTarget,
+          actions: i.actions ?? [],
           narrative: i.narrative,
         }));
       }
@@ -195,7 +216,11 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
             case 'agent-intent': {
               pendingIntents[event.agentId] = event.intent;
-              pendingActionCodes[event.agentId] = { actionCode: event.actionCode, actionTarget: event.actionTarget };
+              pendingActionCodes[event.agentId] = {
+                actionCode: event.actionCode,
+                actionTarget: event.actionTarget,
+                actions: event.actions ?? [],
+              };
               // Accumulate in history (deduplicate by agentId + iterationNumber)
               const agentHistory = agentIntentHistory[event.agentId] ?? [];
               const alreadyRecorded = agentHistory.some(r => r.iterationNumber === currentIteration);
@@ -206,6 +231,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
                   iterationNumber: currentIteration,
                   actionCode: event.actionCode,
                   actionTarget: event.actionTarget,
+                  actions: event.actions ?? [],
                   narrative: event.intent,
                 }];
               }
@@ -333,12 +359,12 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
     await fetch(`/api/sessions/${sessionId}/simulate/abort-reset`, { method: 'POST' });
   },
 
-  continueSimulation: async (sessionId: string, iterations: number) => {
+  continueSimulation: async (sessionId: string, iterations: number, earlyStoppingEnabled = true) => {
     set({ isComplete: false, finalReport: null, error: null });
     await fetch(`/api/sessions/${sessionId}/simulate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ iterations }),
+      body: JSON.stringify({ iterations, earlyStoppingEnabled }),
     });
     return get().connectSSE(sessionId);
   },

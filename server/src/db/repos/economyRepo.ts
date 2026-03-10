@@ -6,11 +6,12 @@
  *  - Economy snapshots per iteration
  *  - Market price history
  */
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { db, sqlite } from '../index.js';
-import { agentEconomy, economySnapshots, marketPrices } from '../schema.js';
+import { agentEconomy, economySnapshots, marketPrices, ammSnapshots } from '../schema.js';
 import type { SkillMatrix, Inventory, EconomySnapshot, PriceIndex } from '@idealworld/shared';
+import type { AMMState } from '../../mechanics/automatedMarketMaker.js';
 import { DEFAULT_SKILL_MATRIX, DEFAULT_INVENTORY } from '@idealworld/shared';
 
 // ── Agent Economy State ──────────────────────────────────────────────────────
@@ -247,5 +248,68 @@ export const economyRepo = {
             vwap: r.vwap,
             volume: r.volume,
         }));
+    },
+
+    // ── AMM Snapshots ──────────────────────────────────────────────────────
+
+    /**
+     * Persist AMM reserve state at the end of an iteration.
+     * Stores both primary food AMM and all multi-commodity pool states.
+     */
+    async saveAMMSnapshot(
+        sessionId: string,
+        iterationNumber: number,
+        primary: AMMState,
+        multi: Record<string, AMMState>,
+    ): Promise<void> {
+        await db.insert(ammSnapshots).values({
+            id: uuidv4(),
+            sessionId,
+            iterationNumber,
+            snapshotData: JSON.stringify({ primary, multi }),
+            timestamp: new Date().toISOString(),
+        });
+    },
+
+    /**
+     * Load the most recent AMM snapshot for a session (for restore on server restart).
+     * Returns null if no snapshot exists yet.
+     */
+    async getLatestAMMSnapshot(
+        sessionId: string,
+    ): Promise<{ primary: AMMState; multi: Record<string, AMMState> } | null> {
+        const [row] = await db.select()
+            .from(ammSnapshots)
+            .where(eq(ammSnapshots.sessionId, sessionId))
+            .orderBy(desc(ammSnapshots.iterationNumber))
+            .limit(1);
+
+        if (!row) return null;
+        try {
+            return JSON.parse(row.snapshotData);
+        } catch {
+            return null;
+        }
+    },
+
+    /**
+     * Vacuum old AMM snapshots, keeping only decadal rows (iteration % keepInterval == 0)
+     * plus the absolute latest row, to bound table growth while preserving a sparse
+     * historical timeline for charting.
+     *
+     * Rows retained:  iteration_number % keepInterval == 0  (e.g. 10, 20, 30...)
+     *                 OR iteration_number == MAX for this session (crash-recovery anchor)
+     * Rows deleted:   everything else (e.g. 1–9, 11–19, ...)
+     */
+    vacuumAMMSnapshots(sessionId: string, keepInterval = 10): void {
+        if (!keepInterval || keepInterval < 1) return;
+        sqlite.prepare(`
+            DELETE FROM amm_snapshots
+            WHERE session_id = ?
+              AND iteration_number % ? != 0
+              AND iteration_number != (
+                SELECT MAX(iteration_number) FROM amm_snapshots WHERE session_id = ?
+              )
+        `).run(sessionId, keepInterval, sessionId);
     },
 };

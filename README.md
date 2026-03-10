@@ -1,22 +1,31 @@
 # Ideal World
 
-**Ideal World** is a local-first, LLM-powered multi-agent society simulation platform. It models micro-societies by having dozens to hundreds of distinct LLM-driven "Citizen Agents" interact in turn-based iterations, guided and adjudicated by an omniscient "Central Agent".
+**Ideal World** is a local-first, LLM-powered multi-agent society simulation platform. It models micro-societies by having dozens of distinct LLM-driven "Citizen Agents" interact in turn-based iterations, guided by an omniscient "Central Agent" and a deterministic **Neuro-Symbolic Engine**.
 
-## Features
+## Key Features
 
-- **Multi-Agent Simulation**: Form a complex virtual society featuring up to 150+ autonomous citizen agents.
-- **Neuro-Symbolic Engine**: Combines strict deterministic physics/economic engines with emergent LLM psychology.
-- **HMAS Map-Reduce Architecture**: Uses clustering algorithms and intermediate "Coordinator Agents" to massively reduce LLM context windows, API limits, and token costs by over 90%.
-- **High-Performance Infrastructure**: 
-  - **Backend**: Node.js, Express, and a highly optimized SQLite DB using WAL mode and asynchronous memory queues for heavy I/O iteration logging.
-  - **Frontend**: React 19 + Zustand with `requestAnimationFrame` (rAF) debouncing, Server-Sent Events (SSE), and virtualized lists capable of rendering thousands of agent updates in real-time without stuttering.
-- **Provider-Agnostic LLM Gateway**: Easily configure Anthropic (Claude), OpenAI, or local, offline models (via LM Studio/Ollama) to act as central or citizen agents. 
+- **Hybrid Micro-Turn System**: Replaced abstract "years" with "1 Iteration = 1 Week" ticks. Agents now utilize a **Multi-Action Queue** (up to 3 actions per turn) allowing for complex behaviors like "Work, then Buy Food, then Rest."
+- **Neuro-Symbolic Engine**: Combines strict deterministic physics/economic algorithms with emergent LLM psychology. High-level intent is parsed into `ActionCodes`, while material outcomes are calculated by a hard-coded engine.
+- **Empirical Metabolism (MET)**: Replaced flat survival costs with a **Metabolic Equivalent of Task** system. High-intensity labor (e.g., `WORK_HEAVY_MANUAL`) depletes satiety up to 7x faster than `REST`.
+- **Allostatic Load Pipeline**: Replaced simple stress stats with a psychosomatic decay model. Cortisol mathematically converts into reversible **Strain**, which calcifies into irreversible **Allostatic Load** (chronic health damage).
+- **Constant Product AMM**: Eradicated fragile peer-to-peer bartering in favor of a **Constant Product Automated Market Maker ($x \cdot y = k$)** for essential commodities like Food, ensuring constant liquidity and algorithmic pricing.
+- **Stock-Flow Consistent UBI**: Implemented a **2% Demurrage Tax** on wealth that is redistributed as **Universal Basic Income (UBI)** every macro-cycle to prevent extreme wealth stagnation.
+- **Darwinian Humiliation Fallback**: Agents failing to meet basic survival thresholds are "humiliated" by the state—stripped of wealth and force-fed "synthetic slop"—rather than immediately killed, creating a persistent underclass.
+- **Provider-Agnostic LLM Gateway**: Supports Anthropic (Claude), OpenAI, Google (Vertex/Gemini), and local models (via LM Studio/Ollama).
 
 ## Project Architecture
 
-### The Two-Phase Iteration Loop
-1. **Intent Phase (Parallel)**: All living Citizen Agents process their surroundings and neurobiological states (e.g., *cortisol*, *dopamine*) to declare their *intentions*, processed locally or via batched fast models.
-2. **Resolution Phase (Serial/Map-Reduce)**: Regional Coordinator Agents compress intents, and the Central Agent calculates outcomes combining hard laws with LLM-based logic. The deterministic Physics Engine calculates material outcomes, creating the final iteration truth.
+### The Three-Stage Iteration Loop
+1. **Cognitive Phase (Pre-Processing)**: Agents retrieve **Subjective Memories** (3D retrieval), run **Directional Economic Reflections**, and update their **Recursive Plans** based on material reality.
+2. **Intent Phase (Parallel)**: Citizen Agents declare their intentions in natural language, which is parsed into an Action Queue.
+3. **Resolution Phase (Serial/Map-Reduce)**: The Central Agent narrates the social outcomes, while the **Physics Engine** calculates deterministic stat deltas, MET metabolism, and AMM market clearing.
+
+## Technical Notes
+
+- **Local-First**: All data is stored in a local SQLite database (`~/.idealworld/idealworld.db`).
+- **Current Limitations**: 
+  - Allostatic load and AMM reserves are currently stored in volatile memory (reset on server restart).
+  - Agent age and weight are currently hardcoded (database schema updates pending).
 
 ## Quick Start
 
@@ -24,14 +33,14 @@
    ```bash
    npm install
    ```
-2. Start the application (starts both Vite frontend and backend via Concurrently):
+2. Start the application:
    ```bash
    npm run dev
    ```
 
 ## Documentation
 
-Full project design, architectural plans, UI specifications, and detailed mechanism enhancements can be found in the `Documents/` directory. 
+Full project design, architectural plans, and detailed mechanism explanations can be found in the `Documents/` directory. 
 
 ## License
 

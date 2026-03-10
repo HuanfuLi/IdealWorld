@@ -38,6 +38,7 @@ export const agentIntents = sqliteTable('agent_intents', {
   reasoning: text('reasoning'),
   actionCode: text('action_code').notNull().default('NONE'),
   actionTarget: text('action_target'),
+  actionQueue: text('action_queue'),
   createdAt: text('created_at').notNull(),
 });
 
@@ -123,6 +124,16 @@ export const agentEconomy = sqliteTable('agent_economy', {
   inventory: text('inventory').notNull().default('{}'),
   /** Last iteration this was updated. */
   lastUpdated: integer('last_updated').notNull().default(0),
+});
+
+/** Stores AMM reserve state per iteration for SFC resilience across server restarts. */
+export const ammSnapshots = sqliteTable('amm_snapshots', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  iterationNumber: integer('iteration_number').notNull(),
+  /** JSON: { primary: AMMState, multi: Record<string, AMMState> } */
+  snapshotData: text('snapshot_data').notNull().default('{}'),
+  timestamp: text('timestamp').notNull(),
 });
 
 /** Stores market price history for charting/analytics. */

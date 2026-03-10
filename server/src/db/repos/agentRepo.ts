@@ -82,7 +82,7 @@ export const agentRepo = {
   async updateStats(id: string, wealth: number, health: number, happiness: number, cortisol: number = 20, dopamine: number = 50): Promise<Agent> {
     const clamp = (v: number) => Math.min(100, Math.max(0, Math.round(v)));
     const stats: AgentStats = {
-      wealth: clamp(wealth),
+      wealth: Math.max(0, Math.round(wealth)),
       health: clamp(health),
       happiness: clamp(happiness),
       cortisol: clamp(cortisol),
@@ -118,7 +118,7 @@ export const agentRepo = {
     const run = sqlite.transaction((items: typeof updates) => {
       for (const u of items) {
         const stats: AgentStats = {
-          wealth: clamp(u.wealth),
+          wealth: Math.max(0, Math.round(u.wealth)),
           health: clamp(u.health),
           happiness: clamp(u.happiness),
           cortisol: clamp(u.cortisol ?? 20),

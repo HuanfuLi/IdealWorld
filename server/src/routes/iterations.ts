@@ -49,21 +49,31 @@ router.get('/agent-stats', async (req, res) => {
       .from(resolvedActions)
       .where(eq(resolvedActions.sessionId, id));
 
-    // Group actions by iterationId → agentId
-    const actionsByIter = new Map<string, Map<string, { wealthDelta: number; healthDelta: number; happinessDelta: number }>>();
+    // Group actions by iterationId → agentId.
+    // Prefer finalWealth/finalHealth/finalHappiness (stored after physiology clamping)
+    // over raw deltas to match Society Trend values exactly.
+    interface AgentIterStats {
+      finalWealth?: number; finalHealth?: number; finalHappiness?: number;
+      wealthDelta: number; healthDelta: number; happinessDelta: number;
+    }
+    const actionsByIter = new Map<string, Map<string, AgentIterStats>>();
     for (const a of actions) {
       const iterId = a.iterationId ?? '';
       if (!actionsByIter.has(iterId)) actionsByIter.set(iterId, new Map());
       let w = 0, h = 0, hap = 0;
+      let finalW: number | undefined, finalH: number | undefined, finalHap: number | undefined;
       if (a.outcome) {
         try {
           const parsed = JSON.parse(a.outcome);
           w = Number(parsed.wealthDelta ?? 0);
           h = Number(parsed.healthDelta ?? 0);
           hap = Number(parsed.happinessDelta ?? 0);
+          if (parsed.finalWealth !== undefined) finalW = Number(parsed.finalWealth);
+          if (parsed.finalHealth !== undefined) finalH = Number(parsed.finalHealth);
+          if (parsed.finalHappiness !== undefined) finalHap = Number(parsed.finalHappiness);
         } catch { /* ignore */ }
       }
-      actionsByIter.get(iterId)!.set(a.agentId, { wealthDelta: w, healthDelta: h, happinessDelta: hap });
+      actionsByIter.get(iterId)!.set(a.agentId, { finalWealth: finalW, finalHealth: finalH, finalHappiness: finalHap, wealthDelta: w, healthDelta: h, happinessDelta: hap });
     }
 
     const clamp = (v: number) => Math.min(100, Math.max(0, Math.round(v)));
@@ -77,11 +87,18 @@ router.get('/agent-stats', async (req, res) => {
       const history: Array<{ iter: number; wealth: number; health: number; happiness: number }> = [];
 
       for (const iter of iters) {
-        const deltas = actionsByIter.get(iter.id)?.get(agent.id);
-        if (deltas) {
-          w = clamp(w + deltas.wealthDelta);
-          h = clamp(h + deltas.healthDelta);
-          hap = clamp(hap + deltas.happinessDelta);
+        const entry = actionsByIter.get(iter.id)?.get(agent.id);
+        if (entry) {
+          // Use final clamped values if available (new data); fall back to delta accumulation (old data)
+          if (entry.finalWealth !== undefined && entry.finalHealth !== undefined && entry.finalHappiness !== undefined) {
+            w = entry.finalWealth;
+            h = entry.finalHealth;
+            hap = entry.finalHappiness;
+          } else {
+            w = clamp(w + entry.wealthDelta);
+            h = clamp(h + entry.healthDelta);
+            hap = clamp(hap + entry.happinessDelta);
+          }
         }
         history.push({ iter: iter.iterationNumber, wealth: w, health: h, happiness: hap });
       }

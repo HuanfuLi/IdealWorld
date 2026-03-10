@@ -317,7 +317,14 @@ export const useSessionDetailStore = create<SessionDetailStore>((set, get) => ({
     const { failedMessage, refinementMessages } = get();
     if (!failedMessage) return;
     // Remove the failed user message before retrying
-    const lastUserIdx = refinementMessages.findLastIndex(m => m.role === 'user' && m.content === failedMessage);
+    let lastUserIdx = -1;
+    for (let i = refinementMessages.length - 1; i >= 0; i -= 1) {
+      const message = refinementMessages[i];
+      if (message.role === 'user' && message.content === failedMessage) {
+        lastUserIdx = i;
+        break;
+      }
+    }
     if (lastUserIdx >= 0) {
       set(state => ({
         refinementMessages: state.refinementMessages.filter((_, i) => i !== lastUserIdx),

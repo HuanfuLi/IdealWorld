@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Server, CheckCircle2, AlertTriangle, Key, XCircle, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Server, CheckCircle2, AlertTriangle, Key, XCircle, ToggleLeft, ToggleRight, FlaskConical } from 'lucide-react';
 import { useSettingsStore } from '../stores/settingsStore';
 import type { AppSettings } from '@idealworld/shared';
 
@@ -88,6 +88,11 @@ const SettingsPage = () => {
   const [maxMessageLength, setMaxMessageLength] = useState(64000);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Developer tools
+  const [sandboxRunning, setSandboxRunning] = useState(false);
+  const [sandboxOutput, setSandboxOutput] = useState<string | null>(null);
+  const [sandboxExitCode, setSandboxExitCode] = useState<number | null>(null);
 
   // Separate citizen provider state
   const [separateCitizen, setSeparateCitizen] = useState(false);
@@ -188,6 +193,23 @@ const SettingsPage = () => {
       setSaveError(err instanceof Error ? err.message : 'Failed to save settings');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const runSandbox = async () => {
+    setSandboxRunning(true);
+    setSandboxOutput(null);
+    setSandboxExitCode(null);
+    try {
+      const res = await fetch('/api/settings/sandbox', { method: 'POST' });
+      const data = await res.json() as { output: string; exitCode: number };
+      setSandboxOutput(data.output);
+      setSandboxExitCode(data.exitCode);
+    } catch (err) {
+      setSandboxOutput(`Network error: ${err instanceof Error ? err.message : String(err)}`);
+      setSandboxExitCode(1);
+    } finally {
+      setSandboxRunning(false);
     }
   };
 
@@ -515,6 +537,67 @@ const SettingsPage = () => {
             {saving ? 'Saving...' : 'Save Settings'}
           </button>
         </div>
+      </div>
+      {/* Developer Tools */}
+      <div className="glass-panel" style={{ marginBottom: '2rem', padding: '1.5rem' }}>
+        <h2 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <FlaskConical size={20} /> Developer Tools
+        </h2>
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.88rem', marginBottom: '1.5rem' }}>
+          Run deterministic engine tests that make no LLM calls. Use these to verify the physics
+          and economy algorithms are working correctly before starting a simulation.
+        </p>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: sandboxOutput ? '1.25rem' : 0 }}>
+          <button
+            className="btn-secondary"
+            onClick={runSandbox}
+            disabled={sandboxRunning}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+          >
+            <FlaskConical size={16} />
+            {sandboxRunning ? 'Running sandbox…' : 'Run Physics Sandbox'}
+          </button>
+          {sandboxExitCode !== null && (
+            <span
+              style={{
+                fontSize: '0.85rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                color: sandboxExitCode === 0 ? 'var(--success)' : 'var(--danger)',
+              }}
+              className="animate-fade-in"
+            >
+              {sandboxExitCode === 0
+                ? <><CheckCircle2 size={16} /> All tests passed</>
+                : <><XCircle size={16} /> Tests failed (exit {sandboxExitCode})</>}
+            </span>
+          )}
+        </div>
+
+        {sandboxOutput && (
+          <pre
+            className="animate-fade-in"
+            style={{
+              background: 'rgba(0,0,0,0.45)',
+              border: `1px solid ${sandboxExitCode === 0 ? 'rgba(74,222,128,0.25)' : 'rgba(248,113,113,0.25)'}`,
+              borderRadius: 8,
+              padding: '1rem 1.25rem',
+              fontSize: '0.78rem',
+              lineHeight: 1.65,
+              color: '#e2e8f0',
+              fontFamily: 'monospace',
+              overflowX: 'auto',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              maxHeight: '420px',
+              overflowY: 'auto',
+            }}
+          >
+            {sandboxOutput}
+          </pre>
+        )}
       </div>
     </div>
   );

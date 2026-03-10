@@ -97,7 +97,7 @@ You MUST respond with ONLY valid JSON (no markdown, no preamble, no code fences)
 {
   "societyName": "string - creative name for the society",
   "overview": "string - 3-5 paragraphs describing the society, its history, values, and structure",
-  "timeScale": "string - e.g. '1 iteration = 1 month' or '1 iteration = 1 year'",
+  "timeScale": "string - e.g. '1 iteration = 1 week'",
   "agentCount": 30,
   "governanceModel": "string - brief description of governance",
   "economicModel": "string - brief description of economy"
@@ -180,7 +180,7 @@ Rules:
 - Generate EXACTLY ${agentCount} agents
 - All names must be unique and culturally consistent with the society
 - Roles should reflect the society's governance and economic models
-- Stats (wealth, health, happiness) must be integers between 0 and 100
+- Stats: 'health' and 'happiness' must be integers between 0 and 100. 'wealth' is starting fiat currency (integer, typically 10-100 for initial balance).
 - Stats should vary realistically based on role and background
 - Include a diverse mix of roles: leaders, workers, artisans, caregivers, etc.`;
 
@@ -217,7 +217,7 @@ ${session.societyOverview?.slice(0, 500) ?? '(no overview)'}
 Laws (excerpt):
 ${session.law?.slice(0, 400) ?? '(no laws)'}
 
-Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
+Time scale: ${session.timeScale ?? '1 iteration = 1 week'}
 
 You must choose ONE action code from: WORK, TRADE, REST, STRIKE, STEAL, HELP, INVEST, CONSUME, PRODUCE, EAT, SABOTAGE.
 
@@ -287,7 +287,7 @@ Action meanings:
 Background: ${agent.background}
 
 Your current status:
-- Wealth: ${agent.currentStats.wealth}/100
+- Wealth: ${agent.currentStats.wealth} Wealth
 - Health: ${agent.currentStats.health}/100
 - Happiness: ${agent.currentStats.happiness}/100
 - Stress level: ${cortisol > 60 ? 'HIGH' : cortisol > 40 ? 'moderate' : 'low'}
@@ -318,27 +318,206 @@ ${previousSummary ? `What happened last iteration:\n${previousSummary.slice(0, 6
  * The Parser Agent (parserAgent.ts) will then translate this natural
  * language output into a valid ActionCode.
  */
-/** Human-readable descriptions for every ActionCode, used to build role-specific action lists.
- * NOTE: EAT and CONSUME are intentionally excluded — survival metabolism is now automatic.
+/**
+ * Rich action schema injected into citizen prompts.
+ * Each entry defines the exact actionCode string, a description, and the
+ * required JSON parameters — eliminating "action space blindness".
+ * NOTE: EAT and CONSUME are intentionally excluded — survival metabolism is automatic.
  */
-const ACTION_DESCRIPTIONS: Partial<Record<ActionCode, string>> = {
-  WORK:           'WORK — performing your occupation, earning income, laboring, teaching, healing, guarding',
-  TRADE:          'TRADE — exchanging goods/services with a specific person (set actionTarget to their name)',
-  REST:           'REST — resting, sleeping, relaxing, wandering, meditating, praying',
-  STRIKE:         'STRIKE — protesting, refusing to work, rebelling, picketing, marching',
-  STEAL:          'STEAL — taking from someone illegally (set actionTarget to their name)',
-  HELP:           'HELP — aiding someone at personal cost, volunteering, donating (set actionTarget)',
-  INVEST:         'INVEST — saving money, depositing, speculating on future returns',
-  PRODUCE:        'PRODUCE — farming, crafting, manufacturing, building, forging goods to stockpile food',
-  POST_BUY_ORDER: 'POST_BUY_ORDER — placing a buy order on the open market',
-  POST_SELL_ORDER:'POST_SELL_ORDER — placing a sell order on the open market',
-  SET_WAGE:       'SET_WAGE — hiring someone or setting wages for a job',
-  SABOTAGE:       'SABOTAGE — deliberately disrupting or destroying another person\'s work (set actionTarget)',
-  EMBEZZLE:       'EMBEZZLE — [ELITE PRIVILEGE] skim funds from the communal treasury or state apparatus',
-  ADJUST_TAX:     'ADJUST_TAX — [ELITE PRIVILEGE] forcibly redistribute wealth via tax policy, extracting from lower classes',
-  SUPPRESS:       'SUPPRESS — [ELITE PRIVILEGE] deploy enforcement to penalise a specific citizen (set actionTarget)',
-  NONE:           'NONE — doing nothing meaningful this period',
+interface ActionSchema {
+  description: string;
+  /** Example params object shown verbatim in the prompt. */
+  params: string;
+}
+
+const ACTION_SCHEMAS: Partial<Record<ActionCode, ActionSchema>> = {
+  REST: {
+    description: 'Rest for the week — recover health, reduce stress.',
+    params: '{}',
+  },
+  PRODUCE_AND_SELL: {
+    description: 'Produce goods and sell to the Global Market AMM for immediate fiat. No buyer needed.',
+    params: '{ "itemType": "food" | "raw_materials" | "luxury_goods", "quantity": number, "price": number }',
+  },
+  POST_BUY_ORDER: {
+    description: 'Buy goods from the Global Market AMM. Trade executes immediately.',
+    params: '{ "itemType": "food" | "raw_materials" | "luxury_goods" | "tools", "quantity": number, "price": number }',
+  },
+  POST_SELL_ORDER: {
+    description: 'Sell goods on the Global Market.',
+    params: '{ "itemType": "food" | "raw_materials" | "luxury_goods" | "tools", "quantity": number, "price": number }',
+  },
+  WORK_AT_ENTERPRISE: {
+    description: 'Work your shift at your current employer and collect your wage.',
+    params: '{ "enterprise_id": string }',
+  },
+  APPLY_FOR_JOB: {
+    description: 'Apply to an enterprise on the Employment Board.',
+    params: '{ "enterprise_id": string }',
+  },
+  QUIT_JOB: {
+    description: 'Resign from your current employer immediately.',
+    params: '{ "enterprise_id": string }',
+  },
+  FOUND_ENTERPRISE: {
+    description: 'Start a new private enterprise (costs 40 Wealth upfront). Hire workers, set wages, and keep all profits.',
+    params: '{ "industry": "food" | "raw_materials" | "luxury_goods" | "manufacturing" | "services" }',
+  },
+  POST_JOB_OFFER: {
+    description: 'Publish a job opening at your enterprise.',
+    params: '{ "enterprise_id": string, "wage": number, "min_skill": number }',
+  },
+  HIRE_EMPLOYEE: {
+    description: 'Accept an applicant into your enterprise.',
+    params: '{ "agent_id": string }',
+  },
+  FIRE_EMPLOYEE: {
+    description: 'Remove an employee from your enterprise.',
+    params: '{ "agent_id": string }',
+  },
+  STEAL: {
+    description: 'Attempt to steal wealth from another citizen (illegal — high stress, legal risk).',
+    params: '{ "target": string }',
+  },
+  HELP: {
+    description: 'Aid another citizen at personal wealth cost (+happiness, -cortisol).',
+    params: '{ "target": string }',
+  },
+  INVEST: {
+    description: 'Save or speculate for future returns (-10 Wealth now, possible future gain).',
+    params: '{}',
+  },
+  STRIKE: {
+    description: 'Refuse to work — collective protest or industrial action.',
+    params: '{}',
+  },
+  SABOTAGE: {
+    description: 'Disrupt another person\'s enterprise (dangerous — physical health risk).',
+    params: '{ "target": string }',
+  },
+  EMBEZZLE: {
+    description: '[ELITE PRIVILEGE ONLY] Skim funds from the communal treasury (+20 Wealth, extreme legal risk).',
+    params: '{}',
+  },
+  ADJUST_TAX: {
+    description: '[ELITE PRIVILEGE ONLY] Forcibly extract wealth from lower classes via tax policy.',
+    params: '{}',
+  },
+  SUPPRESS: {
+    description: '[ELITE PRIVILEGE ONLY] Deploy enforcement to penalise a specific citizen.',
+    params: '{ "target": string }',
+  },
+  NONE: {
+    description: 'Do nothing useful this week (-1 Health, +2 Cortisol penalty).',
+    params: '{}',
+  },
 };
+
+/**
+ * Build the [AVAILABLE ACTIONS] dictionary block injected into citizen prompts.
+ * Filters to the role-allowed action set when provided.
+ */
+function buildActionDictionary(allowedActions?: readonly ActionCode[]): string {
+  const codes = allowedActions ?? (Object.keys(ACTION_SCHEMAS) as ActionCode[]);
+  const lines = [
+    '[AVAILABLE ACTIONS]',
+    'You can ONLY choose up to 3 actions per week from this exact list.',
+    'Hallucinated codes not on this list are silently dropped — wasting your turn.',
+    '',
+  ];
+  let idx = 1;
+  for (const code of codes) {
+    const schema = ACTION_SCHEMAS[code];
+    if (!schema) continue;
+    lines.push(`${idx}. "${code}"`);
+    lines.push(`   ${schema.description}`);
+    lines.push(`   Params: ${schema.params}`);
+    idx++;
+  }
+  return lines.join('\n');
+}
+
+export interface QueuedActionInstruction {
+  actionCode: ActionCode;
+  parameters: Record<string, unknown>;
+}
+
+export interface CitizenDecisionOutput {
+  internal_monologue: string;
+  public_narrative: string;
+  actions: QueuedActionInstruction[];
+}
+
+export interface MarketBoardEntry {
+  itemType: string;
+  averageClearingPrice: number | null;
+  trend: 'up' | 'down' | 'flat' | 'new' | 'unknown';
+  /** Optional profit alert for PRODUCE_AND_SELL, computed by the symbolic engine */
+  profitAlert?: string;
+}
+
+export interface EmploymentBoardEntry {
+  enterprise_id: string;
+  industry: string;
+  wage: number;
+  min_skill: number;
+  owner_name?: string;
+}
+
+export interface PersonalStatusBoard {
+  employed: boolean;
+  enterprise_id: string | null;
+  enterprise_role?: 'owner' | 'employee' | null;
+  /** Current agent wealth — used for entrepreneurial opportunity alert. */
+  agentWealth?: number;
+}
+
+function buildMarketBoardSection(entries?: readonly MarketBoardEntry[]): string {
+  if (!entries || entries.length === 0) {
+    return '[Current Market Board]\n- No clearing data yet. Use posted prices and scarcity signals cautiously.';
+  }
+  const lines = ['[Current Market Board]'];
+  for (const entry of entries) {
+    const priceText = entry.averageClearingPrice == null ? 'no clear price yet' : `avg clearing price ${entry.averageClearingPrice}`;
+    lines.push(`- ${entry.itemType}: ${priceText}; trend ${entry.trend}`);
+    if (entry.profitAlert) {
+      lines.push(`  ${entry.profitAlert}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function buildEmploymentBoardSection(entries?: readonly EmploymentBoardEntry[]): string {
+  if (!entries || entries.length === 0) {
+    return '[Employment Board]\n- No active job offers this week.';
+  }
+  return [
+    '[Employment Board]',
+    ...entries.map(entry =>
+      `- ${entry.enterprise_id} (${entry.industry}) wage ${entry.wage}, min_skill ${entry.min_skill}${entry.owner_name ? `, owner ${entry.owner_name}` : ''}`
+    ),
+  ].join('\n');
+}
+
+function buildPersonalStatusSection(status?: PersonalStatusBoard): string {
+  if (!status) return '[Personal Status]\n- Employment: unemployed';
+
+  if (status.employed && status.enterprise_id) {
+    const roleText = status.enterprise_role ? ` as ${status.enterprise_role}` : '';
+    return `[Personal Status]\n- Employment: employed by ${status.enterprise_id}${roleText}`;
+  }
+
+  if (status.enterprise_id && status.enterprise_role === 'owner') {
+    return `[Personal Status]\n- Employment: owner of ${status.enterprise_id}`;
+  }
+
+  // Unemployed — check for entrepreneurial opportunity
+  const lines = ['[Personal Status]', '- Employment: unemployed'];
+  if (status.agentWealth !== undefined && status.agentWealth >= 40) {
+    lines.push(`💡 OPPORTUNITY ALERT: You have ${status.agentWealth} Wealth! You can start a private enterprise (FOUND_ENTERPRISE) to hire workers and earn massive profits. This is your path to wealth independence.`);
+  }
+  return lines.join('\n');
+}
 
 export function buildNaturalIntentPrompt(
   agent: Agent,
@@ -367,6 +546,15 @@ export function buildNaturalIntentPrompt(
    * to the agent, enforcing asymmetric class privileges in the prompt.
    */
   allowedActions?: readonly ActionCode[],
+  marketBoard?: readonly MarketBoardEntry[],
+  employmentBoard?: readonly EmploymentBoardEntry[],
+  personalStatus?: PersonalStatusBoard,
+  /**
+   * Symbolic Engine feedback from the previous iteration.
+   * Forces the LLM to ground its next decisions in deterministic outcomes
+   * rather than hallucinating successes that never happened.
+   */
+  lastActionResults?: string,
 ): LLMMessage[] {
   // Static prefix: identical across all agent calls in an iteration → cacheable
   const staticPrefix = `You are a citizen living in a simulated society based on: "${session.idea}"
@@ -377,11 +565,11 @@ ${session.societyOverview?.slice(0, 500) ?? '(no overview)'}
 Laws (excerpt):
 ${session.law?.slice(0, 400) ?? '(no laws)'}
 
-Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
+Time scale: ${session.timeScale ?? '1 iteration = 1 week'}
 
 Speak naturally in first person as this character. Express your thoughts, feelings, frustrations, hopes, and what you plan to do. Do NOT use any special formatting — just speak as yourself.
 
-[BACKGROUND SYSTEM] Basic eating and survival are handled automatically each period — you do not need to choose an action for this. If you have food stockpiled, you will eat automatically. If you have no food but enough wealth, the state will sell you emergency rations. Focus your Action on your career, social goals, or political ambitions. Do NOT choose EAT or CONSUME — these no longer exist as choices.
+[BACKGROUND SYSTEM] This is a weekly simulation. Basic survival is handled symbolically: after all actions, 1 Food is consumed automatically. If you have 0 Food at the end of the week, your Health will drop. Focus your actions on work, markets, employment, power, and strategy.
 
 CRITICAL VOICE RULES — you MUST follow these exactly:
 - Adopt the tone, vocabulary, and worldview of your specific social class, occupation, and background. A starving farmer does NOT speak like a merchant. A rebel does NOT speak like a priest.
@@ -389,15 +577,30 @@ CRITICAL VOICE RULES — you MUST follow these exactly:
 - Be HEAVILY BIASED by your personal history and class position. Your perspective is not objective.
 - Do NOT use standard AI phrasing ("I felt a mix of...", "I realized...", "In that moment..."). That phrasing is FORBIDDEN.
 
+🚨 CRITICAL SURVIVAL & ECONOMIC LAW: You are a rational economic actor above all else. You must NOT starve just to maintain your initial 'role' or 'background'. If you are hungry, have low health, or if a PROFIT ALERT appears on the Market Board for a specific commodity (like Food), you MUST ruthlessly abandon your current profession and switch to using the PRODUCE_AND_SELL action for that highly profitable commodity. No roleplay identity, artistic calling, or social status is worth your life. Adapt to market demands to accumulate wealth and survive.
+
+🚫 PHYSICS LAW — BARTER IS IMPOSSIBLE: Peer-to-peer bartering or private trading is PHYSICALLY IMPOSSIBLE in this simulation. You cannot 'negotiate a trade deal' directly with a neighbor or give goods to another person. The ONLY way to acquire goods is via POST_BUY_ORDER on the Global Market. The ONLY way to sell or convert goods into Wealth is via PRODUCE_AND_SELL. Do not narrate or plan private exchanges — they will not execute.
+
+You are a rational economic actor. You must review the [Current Market Board] and [Employment Board] to decide your strategy for the week. You can execute up to 3 actions. 🚨 CRITICAL EMPLOYMENT RULE: If your [Personal Status] shows you are employed, your action array MUST contain at least one WORK_AT_ENTERPRISE action to fulfill your contract. If you no longer wish to work there (e.g., the wage is too low), you MUST include a QUIT_JOB action instead. You cannot ignore your employment status.
+
+🚨 CONCURRENCY & FALLBACK STRATEGY: If you output APPLY_FOR_JOB as your first action, it might fail if the enterprise has no vacancies. You MUST always include a "Plan B" action later in your array. Example: [{"actionCode": "APPLY_FOR_JOB", "parameters": {"enterprise_id": "ent_baker_01"}}, {"actionCode": "PRODUCE_AND_SELL", "parameters": {"itemType": "food", "quantity": 3, "price": 8}}]. The engine processes your actions in order — Plan B only executes if Plan A fails or leaves room.
+
 You MUST respond with ONLY valid JSON — no markdown, no preamble, no code fences:
 {
-  "internal_monologue": "Your private, raw, in-character thoughts — 2-3 sentences",
-  "public_action_narrative": "What you are visibly doing this period — 1-2 sentences",
-  "actionCode": "EXACTLY_ONE_OF_YOUR_ALLOWED_CODES",
-  "actionTarget": "AgentName or null"
+  "internal_monologue": "Food is expensive. I need my wage — then I will buy food to survive.",
+  "public_narrative": "John headed to the bakery for his shift, then stopped at the market.",
+  "actions": [
+    { "actionCode": "WORK_AT_ENTERPRISE", "parameters": { "enterprise_id": "ent_baker_01" } },
+    { "actionCode": "POST_BUY_ORDER", "parameters": { "itemType": "food", "quantity": 2, "price": 15 } }
+  ]
 }
 
-IMPORTANT: Only choose from the actionCodes listed under "Your allowed actions" in your status below. NEVER invent codes not on that list.`;
+OUTPUT RULES (read carefully — violations waste your action turn):
+- "actions" must be an array of 1–3 objects.
+- Each "actionCode" MUST exactly match a code string from [AVAILABLE ACTIONS] shown below. Any code not on that list is silently dropped.
+- Each action MUST include "parameters" with fields matching the schema shown in [AVAILABLE ACTIONS].
+- If your [Personal Status] shows you are employed: MUST include "WORK_AT_ENTERPRISE" or "QUIT_JOB".
+- If you have nothing useful to do: output exactly one { "actionCode": "NONE", "parameters": {} }.`;
 
   // Dynamic suffix: agent-specific, changes every call
   const cortisol = agent.currentStats.cortisol ?? 20;
@@ -436,8 +639,15 @@ IMPORTANT: Only choose from the actionCodes listed under "Your allowed actions" 
 - Skills: ${economyContext.topSkills}`;
 
     if (economyContext.isStarving) {
-      economyBlock += '\n\nYou have no food stockpile. The system will try to buy emergency rations for you if you have wealth, but it is costly (15 wealth). To escape this, PRODUCE food yourself or TRADE with someone who has surplus.';
+      economyBlock += '\n\nYou have no food stockpile. You should buy food, work for wages, or produce goods for sale immediately.';
     }
+  }
+
+  // Phase 8: Capitalist Identity Override — injected for enterprise owners
+  // Forces the LLM to think as a capitalist rather than reverting to manual labor.
+  let capitalistIdentityBlock = '';
+  if (personalStatus?.enterprise_role === 'owner') {
+    capitalistIdentityBlock = '\n\n[CAPITALIST IDENTITY] You are a business owner. Your primary goal is to maximize your enterprise\'s profit. You MUST use POST_SELL_ORDER to sell the goods your workers produce at the highest possible price to fund their wages. Do NOT do manual labor (PRODUCE_AND_SELL) yourself; your time is too valuable. Focus on hiring, pricing, and market dominance.';
   }
 
   // Phase 2: Pain-forced context override — injected BEFORE other dynamic content
@@ -478,32 +688,44 @@ Next step: ${cognitiveContext.currentPlanStep}`;
   }
 
   const iterationContext = iterationNumber === 1
-    ? 'This is your first day in this society.'
-    : `You are in iteration ${iterationNumber} of this society.`;
+    ? 'This is your first week in this society.'
+    : `You are in week ${iterationNumber} of this society.`;
 
   const agentNamesBlock = aliveAgentNames && aliveAgentNames.length > 0
     ? `\n\nOther citizens (valid actionTarget names): ${aliveAgentNames.filter(n => n !== agent.name).join(', ')}`
     : '';
 
-  // Build role-specific action list (Phase 3: asymmetric class privileges)
-  const actionList = (allowedActions ?? Object.keys(ACTION_DESCRIPTIONS) as ActionCode[])
-    .map(a => ACTION_DESCRIPTIONS[a] ?? a)
-    .join('\n');
+  const marketBoardBlock = buildMarketBoardSection(marketBoard);
+  const employmentBoardBlock = buildEmploymentBoardSection(employmentBoard);
+  const personalStatusBlock = buildPersonalStatusSection(personalStatus);
+
+  // Task 4: Action-Result Feedback — ground the LLM in deterministic outcomes
+  const actionResultsBlock = lastActionResults
+    ? `\n\n[Previous Action Results]\n${lastActionResults}\n⚠️ Do NOT narrate successes that did not happen. Base your next decisions strictly on these results.`
+    : '';
+
+  // Build role-specific action dictionary (Task 1: full parameter schemas injected)
+  const actionDictionary = buildActionDictionary(allowedActions);
 
   const dynamicSuffix = `You are ${agent.name}, a ${agent.role}.
 Background: ${agent.background}
 
 Your current situation:
-- Wealth: ${agent.currentStats.wealth}/100
+- Wealth: ${agent.currentStats.wealth} Wealth (fiat currency — no upper limit)
 - Health: ${agent.currentStats.health}/100
 - Happiness: ${agent.currentStats.happiness}/100
 - Stress: ${cortisol > 60 ? 'overwhelmed' : cortisol > 40 ? 'tense' : 'manageable'}
 - Mood: ${dopamine > 60 ? 'good spirits' : dopamine > 30 ? 'neutral' : 'disheartened'}${economyBlock}${cognitiveBlock}${marketKnowledgeBlock}${agentNamesBlock}
 
-${iterationContext}${painOverride}${stressModifier}
+${iterationContext}${capitalistIdentityBlock}${painOverride}${stressModifier}${actionResultsBlock}
 
-Your allowed actions (pick exactly one — NEVER invent codes not on this list):
-${actionList}`;
+${marketBoardBlock}
+
+${employmentBoardBlock}
+
+${personalStatusBlock}
+
+${actionDictionary}`;
 
   const systemContent: ContentBlock[] = [
     { type: 'text', text: staticPrefix, cache_control: { type: 'ephemeral' } },
@@ -512,7 +734,7 @@ ${actionList}`;
 
   return [
     { role: 'system', content: systemContent },
-    { role: 'user', content: `Iteration ${iterationNumber}: Respond with your JSON decision now.` },
+    { role: 'user', content: `Week ${iterationNumber}: Respond with your JSON decision now.` },
   ];
 }
 
@@ -521,8 +743,9 @@ export interface AgentIntent {
   agentName: string;
   intent: string;
   reasoning: string;
-  actionCode?: string;
-  actionTarget?: string | null;
+  actions?: QueuedActionInstruction[];
+  primaryActionCode?: string;
+  primaryActionTarget?: string | null;
   /** Phase 2: raw natural language output from the Main Agent (before parsing). */
   rawNaturalLanguage?: string;
   /** Phase 2: method used to parse the intent (keyword, llm, fallback). */
@@ -534,7 +757,8 @@ export function buildResolutionPrompt(
   agents: Agent[],
   intents: AgentIntent[],
   iterationNumber: number,
-  previousSummary: string | null
+  previousSummary: string | null,
+  iterationMetrics?: string | null,
 ): LLMMessage[] {
   const agentList = intents.map(ai => {
     const agent = agents.find(a => a.id === ai.agentId);
@@ -543,11 +767,15 @@ export function buildResolutionPrompt(
   Stats: W=${stats.wealth} H=${stats.health} Hap=${stats.happiness}`;
   }).join('\n');
 
+  const metricsBlock = iterationMetrics
+    ? `\n\n[OBJECTIVE SYSTEM METRICS — last iteration]\n${iterationMetrics}\n⚠️ You MUST reflect these statistics in your narrative. Do NOT ignore the unemployed or failed agents. If many agents failed to find work, narrate a society gripped by unemployment crisis, desperation, and inequality.`
+    : '';
+
   const systemPrompt = `You are the Central Agent (omniscient narrator) resolving iteration ${iterationNumber} of a society simulation.
 
 Society: "${session.idea}"
-Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
-${previousSummary ? `\nPrevious iteration summary:\n${previousSummary.slice(0, 600)}` : ''}
+Time scale: ${session.timeScale ?? '1 iteration = 1 week'}
+${previousSummary ? `\nPrevious iteration summary:\n${previousSummary.slice(0, 600)}` : ''}${metricsBlock}
 
 Agent intentions this iteration:
 ${agentList}
@@ -603,11 +831,11 @@ export function buildFinalReportPrompt(
   const systemPrompt = `You are the Central Agent writing a final report on a completed society simulation.
 
 Society concept: "${session.idea}"
-Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
+Time scale: ${session.timeScale ?? '1 iteration = 1 week'}
 
 Simulation outcomes:
 - Final population: ${finalStats.aliveCount} agents
-- Average wealth: ${finalStats.avgWealth}/100
+- Average wealth: ${finalStats.avgWealth}
 - Average health: ${finalStats.avgHealth}/100
 - Average happiness: ${finalStats.avgHappiness}/100
 
@@ -643,17 +871,20 @@ export function buildAgentReflectionPrompt(
     .map(s => `Iteration ${s.number}: ${s.summary}`)
     .join('\n');
 
+  const cortisolStat = (agent.currentStats as unknown as Record<string, unknown>).cortisol;
+  const cortisolLine = cortisolStat != null ? `- Cortisol (stress): ${cortisolStat}/100` : '';
+
   const systemPrompt = `You are ${agent.name}, a ${agent.role} in a society simulation based on: "${session.idea}"
 
 Background: ${agent.background}
 
-Your final stats:
-- Wealth: ${agent.currentStats.wealth}/100
+Your final material reality:
+- Wealth: ${agent.currentStats.wealth}
 - Health: ${agent.currentStats.health}/100
-- Happiness: ${agent.currentStats.happiness}/100
+- Happiness: ${agent.currentStats.happiness}/100${cortisolLine ? `\n${cortisolLine}` : ''}
 - Status: ${agent.isAlive ? 'Alive' : 'Deceased'}
 
-The simulation has ended. Reflect on your personal experience from your own perspective.
+The simulation has ended. Reflect on your MATERIAL EXPERIENCE — your economic reality, not abstract philosophy.
 
 Society history (${iterationSummaries.length} iterations):
 ${summaryText.slice(0, 2000)}
@@ -664,11 +895,12 @@ You MUST respond with ONLY valid JSON (no markdown, no preamble):
 }
 
 Rules:
+- ANCHOR every sentence in MATERIAL REALITY: your actual wealth trajectory, food access, labour conditions, wages, debts, or inequality you witnessed. Did you eat? Were you exploited? Did you hoard or starve? Compare yourself to others.
+- Do NOT reflect on abstract philosophy, systems, or ideals — ground it in YOUR specific economic experience
 - Speak as this specific character — their class, background, and biases must be audible in every sentence
-- Be specific about events that personally affected you
-- Express raw, unfiltered emotion: rage, resentment, grief, pride, desperation — whatever is authentic
+- Express raw, unfiltered emotion rooted in material conditions: rage at poverty, guilt at excess, desperation from hunger, pride from earnings, resentment of exploitation — whatever is authentic to this person's class position
 - Do NOT use standard AI phrasing ("I felt a mix of...", "I realized that...", "In that moment...") — FORBIDDEN
-- Do not summarize society history; reflect from YOUR narrow, personal, biased vantage point`;
+- Do not summarize society history; reflect from YOUR narrow, economically-grounded, personal vantage point`;
 
   return [
     { role: 'system', content: systemPrompt },
@@ -724,11 +956,11 @@ export function buildEvaluationPrompt(
   const systemPrompt = `You are the Central Agent writing a comprehensive evaluation of a completed society simulation.
 
 Society concept: "${session.idea}"
-Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
+Time scale: ${session.timeScale ?? '1 iteration = 1 week'}
 
 Final statistics:
 - Survivors: ${finalStats.aliveCount} / ${finalStats.totalCount} agents
-- Average wealth: ${finalStats.avgWealth}/100
+- Average wealth: ${finalStats.avgWealth}
 - Average health: ${finalStats.avgHealth}/100
 - Average happiness: ${finalStats.avgHappiness}/100
 
@@ -769,7 +1001,7 @@ export function buildReviewChatPrompt(
 
 Background: ${agent.background}
 
-Your final stats: Wealth ${agent.currentStats.wealth}/100, Health ${agent.currentStats.health}/100, Happiness ${agent.currentStats.happiness}/100
+Your final stats: Wealth ${agent.currentStats.wealth}, Health ${agent.currentStats.health}/100, Happiness ${agent.currentStats.happiness}/100
 Status: ${agent.isAlive ? 'Alive' : 'Deceased'}
 
 Your personal reflection: "${agentPass1}"
@@ -816,7 +1048,7 @@ You died on Iteration ${diedAtIteration}. Stated cause: ${deathReason}
 
 Your background: ${agent.background}
 
-Your final stats at death — Wealth: ${agent.currentStats.wealth}/100, Health: ${agent.currentStats.health}/100, Happiness: ${agent.currentStats.happiness}/100
+Your final stats at death — Wealth: ${agent.currentStats.wealth}, Health: ${agent.currentStats.health}/100, Happiness: ${agent.currentStats.happiness}/100
 
 Your frozen memory (personal experiences before death):
 ${frozenMemoryContext}
@@ -863,7 +1095,7 @@ Respond with ONLY valid JSON, no markdown, no preamble.`;
 Overview: ${(s.societyOverview ?? '(none)').slice(0, 500)}
 Law excerpt: ${(s.law ?? '(none)').slice(0, 400)}
 Agents: ${s.agentCount} citizens, Deaths: ${s.deaths}
-Final avg — wealth: ${s.avgWealth}/100, health: ${s.avgHealth}/100, happiness: ${s.avgHappiness}/100
+Final avg — wealth: ${s.avgWealth}, health: ${s.avgHealth}/100, happiness: ${s.avgHappiness}/100
 Evaluation verdict: ${s.verdict ?? '(none)'}`;
 
   const userPrompt = `${fmt(session1, 'A')}
@@ -934,7 +1166,8 @@ export function buildGroupResolutionMessages(
   /** Compact list of ALL agents' intents (for cross-group awareness) */
   allIntentsBrief: string,
   iterationNumber: number,
-  previousSummary: string | null
+  previousSummary: string | null,
+  iterationMetrics?: string | null,
 ): LLMMessage[] {
   const groupList = groupIntents.map(ai => {
     const agent = groupAgents.find(a => a.id === ai.agentId);
@@ -947,7 +1180,7 @@ export function buildGroupResolutionMessages(
   const staticPrefix = `You are a coordinator resolving a sub-group of agents in a society simulation.
 
 Society: "${session.idea}"
-Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
+Time scale: ${session.timeScale ?? '1 iteration = 1 week'}
 Laws (excerpt): ${session.law?.slice(0, 400) ?? '(no laws)'}
 
 NOTE: Stat deltas are computed by a deterministic physics engine. You only provide narrative outcomes.
@@ -972,9 +1205,11 @@ Rules:
 - lifecycleEvents: only deaths and role changes for your sub-group`;
 
   // Dynamic suffix: group-specific data
+  const metricsSnippet = iterationMetrics
+    ? `\n[SYSTEM METRICS — last iteration]\n${iterationMetrics}\n` : '';
   const dynamicSuffix = `Iteration ${iterationNumber}. Sub-group of ${groupAgents.length} agents.
 ${previousSummary ? `\nPrevious iteration summary:\n${previousSummary.slice(0, 400)}` : ''}
-
+${metricsSnippet}
 Your sub-group's intentions:
 ${groupList}
 
@@ -999,16 +1234,20 @@ export function buildMergeResolutionMessages(
   session: Pick<Session, 'idea' | 'societyOverview' | 'timeScale'>,
   groupSummaries: string[],
   iterationNumber: number,
-  previousSummary: string | null
+  previousSummary: string | null,
+  iterationMetrics?: string | null,
 ): LLMMessage[] {
   const summaryList = groupSummaries.map((s, i) => `Group ${i + 1}: ${s}`).join('\n');
+  const metricsBlock = iterationMetrics
+    ? `\n[OBJECTIVE SYSTEM METRICS — last iteration]\n${iterationMetrics}\n⚠️ Weave these facts into your narrative. If unemployment is high, the story must reflect crisis, desperation, and inequality — not a utopia.`
+    : '';
 
   const systemPrompt = `You are the Central Agent synthesising iteration ${iterationNumber} of a society simulation.
 You have received summaries from ${groupSummaries.length} sub-groups.
 
 Society: "${session.idea}"
-Time scale: ${session.timeScale ?? '1 iteration = 1 month'}
-${previousSummary ? `\nPrevious iteration:\n${previousSummary.slice(0, 400)}` : ''}
+Time scale: ${session.timeScale ?? '1 iteration = 1 week'}
+${previousSummary ? `\nPrevious iteration:\n${previousSummary.slice(0, 400)}` : ''}${metricsBlock}
 
 Sub-group summaries:
 ${summaryList}
@@ -1083,7 +1322,7 @@ RULES FOR AGENT CHANGES:
 - agentChanges.remove: array of exact agent names to remove (use names from the roster above)
 - agentChanges.modify: array of agents to update: {"name": "exact name from roster", "role": "string", "background": "string", "initialStats": {"wealth": 50, "health": 70, "happiness": 60}}
 - Include "agents" in artifactsUpdated when agents are changed.
-- CRITICAL: Every agent in add or modify MUST include initialStats with ALL THREE fields: wealth, health, happiness. Each must be an integer between 0 and 100. Never omit any field.
+- CRITICAL: Every agent in add or modify MUST include initialStats with ALL THREE fields: wealth, health, happiness. 'health' and 'happiness' must be integers between 0 and 100. 'wealth' is starting fiat (integer, 0-200 range). Never omit any field.
 - Agent names must be unique — do not reuse names from the roster above when adding new agents.
 - When removing or modifying agents, use exact names from the roster above.
 - agentsSummary: brief summary of agent changes if agents were modified, null otherwise.

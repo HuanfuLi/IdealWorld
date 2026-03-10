@@ -165,12 +165,29 @@ export function runMigrations() {
       ON market_prices(session_id, iteration_number);
   `);
 
+  // AMM snapshots: persist AMM reserve state for SFC resilience across server restarts
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS amm_snapshots (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      iteration_number INTEGER NOT NULL,
+      snapshot_data TEXT NOT NULL DEFAULT '{}',
+      timestamp TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_amm_snapshots_session
+      ON amm_snapshots(session_id, iteration_number);
+  `);
+
   // Agent intents: add actionCode and actionTarget columns (idempotent)
   try {
     sqlite.exec(`ALTER TABLE agent_intents ADD COLUMN action_code TEXT NOT NULL DEFAULT 'NONE';`);
   } catch { /* column already exists */ }
   try {
     sqlite.exec(`ALTER TABLE agent_intents ADD COLUMN action_target TEXT;`);
+  } catch { /* column already exists */ }
+  try {
+    sqlite.exec(`ALTER TABLE agent_intents ADD COLUMN action_queue TEXT;`);
   } catch { /* column already exists */ }
 
   console.log('Database migrations applied.');

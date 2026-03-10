@@ -328,8 +328,8 @@ function processAgentEconomy(
         }
     }
 
-    // 4. Handle SET_WAGE (employment)
-    if (input.actionCode === 'SET_WAGE' && input.wageOffer != null && input.wageTarget) {
+    // 4. Handle POST_JOB_OFFER (legacy economy-engine employment path)
+    if (input.actionCode === 'POST_JOB_OFFER' && input.wageOffer != null && input.wageTarget) {
         // Remove existing contract if any
         const existingIdx = contracts.findIndex(
             c => c.employerId === input.agentId && c.employeeId === input.wageTarget

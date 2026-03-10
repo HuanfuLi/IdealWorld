@@ -1,7 +1,19 @@
 import { v4 as uuidv4 } from 'uuid';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { sessions, agents, chatMessages } from '../db/schema.js';
+import {
+  sessions,
+  agents,
+  chatMessages,
+  agentIntents,
+  resolvedActions,
+  iterations,
+  roleChanges,
+  reflections,
+  agentEconomy,
+  economySnapshots,
+  marketPrices,
+} from '../db/schema.js';
 import { getProvider } from './gateway.js';
 import { withRetry } from './retry.js';
 import {
@@ -200,7 +212,17 @@ export async function generateDesign(
     return parsed;
   });
 
-  // Clear existing agents and insert new ones in batches of 25
+  // Clear design/simulation artifacts explicitly before replacing the roster.
+  // This avoids FK failures on older local DBs whose schema may predate some
+  // ON DELETE CASCADE rules.
+  await db.delete(agentIntents).where(eq(agentIntents.sessionId, session.id));
+  await db.delete(resolvedActions).where(eq(resolvedActions.sessionId, session.id));
+  await db.delete(roleChanges).where(eq(roleChanges.sessionId, session.id));
+  await db.delete(agentEconomy).where(eq(agentEconomy.sessionId, session.id));
+  await db.delete(marketPrices).where(eq(marketPrices.sessionId, session.id));
+  await db.delete(economySnapshots).where(eq(economySnapshots.sessionId, session.id));
+  await db.delete(iterations).where(eq(iterations.sessionId, session.id));
+  await db.delete(reflections).where(eq(reflections.sessionId, session.id));
   await db.delete(agents).where(eq(agents.sessionId, session.id));
 
   const agentRows = agentsData.agents.map(a => ({
@@ -296,7 +318,7 @@ export async function refine(
   const clampStats = (s: unknown) => {
     const obj = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>;
     return {
-      wealth: Math.max(0, Math.min(100, Math.round(Number(obj.wealth) || 50))),
+      wealth: Math.max(0, Math.round(Number(obj.wealth) || 50)),
       health: Math.max(0, Math.min(100, Math.round(Number(obj.health) || 70))),
       happiness: Math.max(0, Math.min(100, Math.round(Number(obj.happiness) || 60))),
     };

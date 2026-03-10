@@ -17,7 +17,7 @@ import {
   agents, economySnapshots, agentEconomy, marketPrices, roleChanges,
 } from '../db/schema.js';
 import { sessionRepo } from '../db/repos/sessionRepo.js';
-import { runSimulation } from '../orchestration/simulationRunner.js';
+import { runSimulation, getSessionTelemetry } from '../orchestration/simulationRunner.js';
 import { simulationManager } from '../orchestration/simulationManager.js';
 
 /**
@@ -60,15 +60,25 @@ router.post('/', async (req, res) => {
   if (!session) return res.status(404).json({ error: 'Session not found' });
 
   const status = simulationManager.getStatus(id);
-  if (status === 'running') {
-    return res.status(409).json({ error: 'Simulation already running' });
+  if (status === 'running' || status === 'paused') {
+    return res.status(409).json({ error: 'Simulation is currently running or paused. Please abort before starting a new one.' });
   }
 
-  // Persist totalIterations in session config so resume-after-restart can compute remaining count
+  const earlyStoppingEnabled = req.body?.earlyStoppingEnabled !== false;
+
+  // Persist config so resume-after-restart can compute remaining count
   const existingConfig = (session.config as Record<string, unknown> | null) ?? {};
-  const updatedConfig = JSON.stringify({ ...existingConfig, totalIterations });
+  const updatedConfig = JSON.stringify({ ...existingConfig, totalIterations, earlyStoppingEnabled });
   sqlite.prepare(`UPDATE sessions SET config = ?, updated_at = ? WHERE id = ?`)
     .run(updatedConfig, new Date().toISOString(), id);
+
+  // Set early-stopping flag BEFORE start() so the runner sees it immediately
+  simulationManager.setEarlyStopping(id, earlyStoppingEnabled);
+
+  // Mark as running synchronously BEFORE firing the background task so that any
+  // concurrent POST /simulate request hitting getStatus() in the same event-loop
+  // cycle sees 'running' and returns 409 instead of spawning a second runner.
+  simulationManager.start(id);
 
   // Fire-and-forget: run in background
   runSimulation(id, totalIterations).catch(err =>
@@ -121,12 +131,24 @@ router.post('/resume', async (req, res) => {
   const plannedTotal = typeof config.totalIterations === 'number' ? config.totalIterations : 20;
   const remaining = Math.max(1, plannedTotal - completedCount);
 
+  // Mark as running synchronously before firing background task (same race-condition
+  // guard as the start route) so concurrent resume requests see 'running' immediately.
+  simulationManager.start(id);
+
   // Restart runner fire-and-forget
   runSimulation(id, remaining).catch(err =>
     console.error('[resume route] unhandled error:', err)
   );
 
   return res.json({ ok: true });
+});
+
+// PATCH /simulate/early-stopping — toggle regime-collapse early stopping mid-run
+router.patch('/early-stopping', (req, res) => {
+  const { id } = req.params as { id: string };
+  const enabled = req.body?.enabled !== false;
+  simulationManager.setEarlyStopping(id, enabled);
+  return res.json({ ok: true, earlyStoppingEnabled: enabled });
 });
 
 // POST /simulate/abort
@@ -146,6 +168,12 @@ router.post('/abort-reset', async (req, res) => {
   // Return session to design stage
   await sessionRepo.updateStage(id, 'design-review');
   return res.json({ ok: true });
+});
+
+// GET /simulate/telemetry — deterministic physics telemetry log
+router.get('/telemetry', (req, res) => {
+  const { id } = req.params as { id: string };
+  return res.json(getSessionTelemetry(id));
 });
 
 // GET /simulate/stream — SSE long-lived connection

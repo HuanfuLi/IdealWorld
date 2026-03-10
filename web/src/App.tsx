@@ -1,6 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import React, { useState, useEffect } from 'react';
-import { Home, Settings, Box, MessageSquare, Edit3, Activity, PieChart, Users, FileText, LayoutDashboard, Sun, Moon, GitCompare } from 'lucide-react';
+import { Home, Settings, Box, MessageSquare, Edit3, Activity, PieChart, Users, FileText, LayoutDashboard, Sun, Moon, GitCompare, BarChart2 } from 'lucide-react';
 
 // STUB COMPONENTS
 import HomePage from './pages/HomePage';
@@ -13,6 +13,7 @@ import AgentReview from './pages/AgentReview';
 import Artifacts from './pages/Artifacts';
 import SettingsPage from './pages/SettingsPage';
 import CompareSessions from './pages/CompareSessions';
+import TelemetryPanel from './components/TelemetryPanel';
 import { useSessionDetailStore } from './stores/sessionDetailStore';
 import type { Stage } from '@idealworld/shared';
 
@@ -140,6 +141,7 @@ function SessionNav({ sessionId }: { sessionId: string }) {
 
 const MainLayout = ({ children }: { children: React.ReactNode }) => {
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'dark');
+  const [showTelemetry, setShowTelemetry] = useState(false);
   const location = useLocation();
   const isSessionActive = location.pathname.includes('/session/');
   const sessionId = location.pathname.match(/\/session\/([^/]+)/)?.[1] ?? '';
@@ -200,6 +202,16 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
         </nav>
 
         <div style={{ marginTop: 'auto', padding: '1rem' }}>
+          {isSessionActive && sessionId && sessionId !== 'new' && (
+            <button
+              onClick={() => setShowTelemetry(true)}
+              className="nav-item"
+              style={{ width: '100%', background: 'transparent', border: 'none', cursor: 'pointer', justifyContent: 'flex-start' }}
+            >
+              <BarChart2 size={22} />
+              <span>📊 Telemetry</span>
+            </button>
+          )}
           <button
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
             className="nav-item"
@@ -210,6 +222,10 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
           </button>
         </div>
       </aside>
+
+      {showTelemetry && sessionId && sessionId !== 'new' && (
+        <TelemetryPanel sessionId={sessionId} onClose={() => setShowTelemetry(false)} />
+      )}
 
       <main className="main-content">
         {children}

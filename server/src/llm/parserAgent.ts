@@ -67,21 +67,24 @@ const KEYWORD_RULES: Array<{
         // Market actions (Phase 1)
         { patterns: /\b(buy|purchase|acquire|procure)\b.*\b(order|market|goods|food|tools|materials)\b/i, action: 'POST_BUY_ORDER' },
         { patterns: /\b(sell|offer|list|put up)\b.*\b(order|market|goods|food|tools|materials)\b/i, action: 'POST_SELL_ORDER' },
-        { patterns: /\b(set\s*wage|hire|employ|recruit|offer\s*job)\b/i, action: 'SET_WAGE' },
+        { patterns: /\b(post\s*job|job\s*offer|offer\s*job)\b/i, action: 'POST_JOB_OFFER' },
+        { patterns: /\b(hire|employ)\b/i, action: 'HIRE_EMPLOYEE' },
+        { patterns: /\b(fire|dismiss)\b/i, action: 'FIRE_EMPLOYEE' },
+        { patterns: /\b(apply|application)\b.*\b(job|enterprise|factory|shop)\b/i, action: 'APPLY_FOR_JOB' },
+        { patterns: /\b(quit|resign|leave\s*the\s*job)\b/i, action: 'QUIT_JOB' },
 
         // Production (allow -ing, -ed, -s suffixes)
-        { patterns: /\b(farm|grow|harvest|cultivat|plant|sow|produc|craft|manufactur|forg|build|construct)\w*/i, action: 'PRODUCE' },
-        { patterns: /\b(eat|feed|nourish|feast|din)\w*\b.*\b(food|meal|supper|dinner|lunch|breakfast)?\b/i, action: 'EAT' },
+        { patterns: /\b(farm|grow|harvest|cultivat|plant|sow|produc|craft|manufactur|forg|build|construct)\w*/i, action: 'PRODUCE_AND_SELL' },
 
         // Core actions — specific patterns
         { patterns: /\b(strike|protest|rebel|revolt|refuse\s*to\s*work|picket|march|demonstrate|riot|uprising)\b/i, action: 'STRIKE' },
         { patterns: /\b(steal|rob|thieve|loot|pilfer|burgle|mug|take\s*from|pickpocket|plunder)\b/i, action: 'STEAL', extractTarget: true },
-        { patterns: /\b(trade|barter|exchange|swap|deal|negotiate|commerce|buy\s*from|sell\s*to)\b/i, action: 'TRADE', extractTarget: true },
+        { patterns: /\b(trade|barter|exchange|swap|deal|negotiate|commerce|buy\s*from|sell\s*to)\b/i, action: 'POST_BUY_ORDER', extractTarget: true },
         { patterns: /\b(help|aid|assist|support|volunteer|donate|give|charity|care\s*for|tend\s*to)\b/i, action: 'HELP', extractTarget: true },
         { patterns: /\b(invest|save|deposit|fund|finance|speculate|put\s*money)\b/i, action: 'INVEST' },
-        { patterns: /\b(consume|indulge|luxury|treat|spend|shop|buy\s*for\s*self|enjoy|splurge|pleasure)\b/i, action: 'CONSUME' },
+        { patterns: /\b(consume|indulge|luxury|treat|spend|shop|buy\s*for\s*self|enjoy|splurge|pleasure)\b/i, action: 'REST' },
         { patterns: /\b(rest|sleep|relax|recuperate|recover|take\s*a\s*break|take\s*it\s*easy|meditate|pray|wander|walk|stroll)\b/i, action: 'REST' },
-        { patterns: /\b(work|labor|toil|earn|job|occupation|duty|task|employ|mine|dig|serve|patrol|guard|teach|heal|study|research|practise)\b/i, action: 'WORK' },
+        { patterns: /\b(work|labor|toil|earn|job|occupation|duty|task|mine|dig|serve|patrol|guard|teach|heal|study|research|practise)\b/i, action: 'WORK_AT_ENTERPRISE' },
     ];
 
 /**
@@ -136,9 +139,11 @@ function buildParserPrompt(
     aliveAgentNames: string[],
 ): LLMMessage[] {
     const validActions = [
-        'WORK', 'TRADE', 'REST', 'STRIKE', 'STEAL', 'HELP',
-        'INVEST', 'CONSUME', 'PRODUCE', 'EAT',
-        'POST_BUY_ORDER', 'POST_SELL_ORDER', 'SET_WAGE', 'NONE',
+        'WORK_AT_ENTERPRISE', 'REST', 'STRIKE', 'STEAL', 'HELP',
+        'INVEST', 'PRODUCE_AND_SELL',
+        'POST_BUY_ORDER', 'POST_SELL_ORDER',
+        'FOUND_ENTERPRISE', 'POST_JOB_OFFER', 'APPLY_FOR_JOB',
+        'HIRE_EMPLOYEE', 'FIRE_EMPLOYEE', 'QUIT_JOB', 'NONE',
     ];
 
     const systemPrompt = `You are a strict action parser. Your ONLY job is to read a citizen's natural language statement and output the single most appropriate ActionCode.
@@ -146,23 +151,25 @@ function buildParserPrompt(
 Valid ActionCodes: ${validActions.join(', ')}
 
 Action definitions:
-- WORK: performing occupation, earning income, laboring, mining, teaching, healing, guarding
-- TRADE: exchanging goods/services with a specific person (requires actionTarget)
+- WORK_AT_ENTERPRISE: fulfilling formal paid work at an enterprise
 - REST: resting, sleeping, relaxing, wandering, meditating, praying, taking a break
 - STRIKE: protesting, refusing to work, rebelling, marching, demonstrating
 - STEAL: taking from someone illegally, robbing, looting (requires actionTarget)
 - HELP: aiding someone at personal cost, volunteering, donating (requires actionTarget)
 - INVEST: saving money, depositing, speculating on future returns
-- CONSUME: spending on personal comfort, luxury, indulgence, shopping
-- PRODUCE: farming, crafting, building, manufacturing, forging goods
-- EAT: consuming food for health recovery, feasting, dining
+- PRODUCE_AND_SELL: producing goods independently and listing them on the market
 - POST_BUY_ORDER: placing a buy order on the market
 - POST_SELL_ORDER: placing a sell order on the market
-- SET_WAGE: hiring someone, setting wages
+- FOUND_ENTERPRISE: creating a new enterprise
+- POST_JOB_OFFER: publishing a formal job offer
+- APPLY_FOR_JOB: applying for a job at an enterprise
+- HIRE_EMPLOYEE: selecting an applicant to hire
+- FIRE_EMPLOYEE: dismissing an employee
+- QUIT_JOB: resigning from an enterprise role
 - NONE: doing nothing, or intent is too vague/irrelevant to map
 
 If the statement has no economic or physical relevance (e.g., "I dream of clouds"), use REST or NONE.
-If the statement mentions interacting with a specific person for TRADE/STEAL/HELP, set actionTarget to that person's name.
+If the statement mentions interacting with a specific person for STEAL/HELP, set actionTarget to that person's name.
 
 Available citizens: ${aliveAgentNames.slice(0, 30).join(', ')}${aliveAgentNames.length > 30 ? '...' : ''}
 

@@ -14,6 +14,13 @@ import type { ActionCode } from './actionCodes.js';
 import { getActionMultiplier } from './skillSystem.js';
 import { getToolMultiplier } from './inventorySystem.js';
 
+const PASSIVE_STARVATION_HEALTH_PENALTY = 10;
+
+export interface PhysicsQueuedAction {
+  actionCode: ActionCode;
+  parameters?: Record<string, unknown>;
+}
+
 export interface PhysicsInput {
   agent: Agent;
   actionCode: ActionCode;
@@ -36,12 +43,33 @@ export interface PhysicsInput {
   isSuppressed?: boolean;
 }
 
+export interface PhysicsQueueInput {
+  agent: Agent;
+  actionQueue: PhysicsQueuedAction[];
+  allAgents: Agent[];
+  skills?: SkillMatrix;
+  inventory?: Inventory;
+  economyDeltasByAction?: Array<PhysicsInput['economyDeltas'] | undefined>;
+  isSabotaged?: boolean;
+  isSuppressed?: boolean;
+}
+
 export interface PhysicsOutput {
   wealthDelta: number;
   healthDelta: number;
   happinessDelta: number;
   cortisolDelta: number;
   dopamineDelta: number;
+}
+
+export interface PhysicsQueueOutput extends PhysicsOutput {
+  actionsAttempted: number;
+  actionsExecuted: number;
+  interrupted: boolean;
+  interruptedReason: 'starvation' | 'mental_breakdown' | null;
+  executedActions: PhysicsQueuedAction[];
+  skippedActions: PhysicsQueuedAction[];
+  foodConsumed: number;
 }
 
 /**
@@ -58,15 +86,6 @@ function roleIncome(role: string): number {
   return 6;
 }
 
-/** Calculate trade wealth delta based on partner's wealth */
-function tradeCalc(agent: Agent, allAgents: Agent[], targetId?: string): number {
-  const target = targetId ? allAgents.find(a => a.id === targetId) : undefined;
-  if (!target || !target.isAlive) return 2; // no valid partner → small gain
-  // Both parties gain a small amount; wealthier party gains less
-  const diff = target.currentStats.wealth - agent.currentStats.wealth;
-  return Math.round(Math.max(-5, Math.min(5, diff * 0.1)) + 2);
-}
-
 /** Calculate steal wealth gain */
 function stealCalc(agent: Agent, allAgents: Agent[], targetId?: string): number {
   const target = targetId ? allAgents.find(a => a.id === targetId) : undefined;
@@ -75,6 +94,30 @@ function stealCalc(agent: Agent, allAgents: Agent[], targetId?: string): number 
 }
 
 const clampDelta = (v: number): number => Math.max(-30, Math.min(30, Math.round(v)));
+
+/**
+ * Psychological clamping — prevents LLM hallucinations of high Happiness
+ * during extreme physiological distress.
+ *
+ * Formula:  maxAllowedHappiness = 100 - (cortisol × 0.5) - (100 - health)
+ *                               = health - cortisol × 0.5
+ *
+ * Examples:
+ *   Health=30, Cortisol=90 → max = 30 - 45 = -15 → floor 0
+ *   Health=60, Cortisol=20 → max = 60 - 10 = 50
+ *   Health=100, Cortisol=0 → max = 100  (no cap under normal conditions)
+ *
+ * Called by the Symbolic Engine AFTER all stat deltas have been applied,
+ * so it always operates on the final values for the iteration.
+ */
+export function clampHappinessByPhysiology(
+  happiness: number,
+  health: number,
+  cortisol: number,
+): number {
+  const maxAllowed = Math.max(0, health - cortisol * 0.5);
+  return Math.min(happiness, Math.round(maxAllowed));
+}
 
 /**
  * Resolve an agent's action into deterministic stat deltas.
@@ -98,6 +141,7 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
 
   switch (actionCode) {
     case 'WORK':
+    case 'WORK_AT_ENTERPRISE':
       w = Math.round(roleIncome(agent.role) * productionMult);
       h = -2;
       hap = -1;
@@ -110,13 +154,6 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
       hap = 2;
       cor = -5;
       dop = 1;
-      break;
-    case 'TRADE':
-      w = tradeCalc(agent, allAgents, actionTarget);
-      h = 0;
-      hap = 3;
-      cor = -2;
-      dop = 3;
       break;
     case 'STRIKE':
       w = 0;
@@ -146,29 +183,13 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
       cor = 3;
       dop = 2;
       break;
-    case 'CONSUME':
-      w = -8;
-      h = 3;
-      hap = 8;
-      cor = -8;
-      dop = 8;
-      break;
-    // ── Phase 1 new action codes ──────────────────────────────────────
-    case 'PRODUCE':
-      // Subsistence production: no wealth change, but skill improves output
+    case 'PRODUCE_AND_SELL':
+      // Independent production is priced and matched elsewhere; physics models labor cost.
       w = 0;
       h = -3;    // Physical labor
       hap = 1;   // Satisfaction from self-sufficiency
       cor = -2;
       dop = 2;
-      break;
-    case 'EAT':
-      // Extra food consumption (inventory handles the food mechanics)
-      w = 0;
-      h = 2;
-      hap = 3;
-      cor = -4;
-      dop = 3;
       break;
     case 'POST_BUY_ORDER':
     case 'POST_SELL_ORDER':
@@ -179,13 +200,36 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
       cor = -1;
       dop = 1;
       break;
-    case 'SET_WAGE':
+    case 'FOUND_ENTERPRISE':
+      w = -8;
+      h = -1;
+      hap = 3;
+      cor = 5;
+      dop = 4;
+      break;
+    case 'POST_JOB_OFFER':
+    case 'HIRE_EMPLOYEE':
+    case 'FIRE_EMPLOYEE':
       // Management action: small stress, leadership satisfaction
       w = 0;
       h = 0;
       hap = 2;
       cor = 2;
       dop = 2;
+      break;
+    case 'APPLY_FOR_JOB':
+      w = 0;
+      h = 0;
+      hap = 1;
+      cor = 1;
+      dop = 1;
+      break;
+    case 'QUIT_JOB':
+      w = 0;
+      h = 0;
+      hap = -1;
+      cor = 4;
+      dop = 0;
       break;
     // ── Phase 2 new action codes ──────────────────────────────────────
     case 'SABOTAGE':
@@ -244,10 +288,6 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
     hap += economyDeltas.happinessDelta;
   }
 
-  // Automatic adjustments applied AFTER action resolution
-  // Health baseline: -2/iter (metabolism). REST/CONSUME partially offset this.
-  h -= 2;
-
   // Cortisol auto-escalation for low resources
   const stats = agent.currentStats;
   if (stats.wealth < 20) cor += 10;
@@ -268,5 +308,116 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
     happinessDelta: clampDelta(hap),
     cortisolDelta: clampDelta(cor),
     dopamineDelta: clampDelta(dop),
+  };
+}
+
+export function resolveActionQueue(input: PhysicsQueueInput): PhysicsQueueOutput {
+  const {
+    agent,
+    actionQueue,
+    allAgents,
+    skills,
+    inventory,
+    economyDeltasByAction,
+    isSabotaged,
+    isSuppressed,
+  } = input;
+
+  const queue = actionQueue.slice(0, 3);
+  const runningStats = {
+    wealth: agent.currentStats.wealth,
+    health: agent.currentStats.health,
+    happiness: agent.currentStats.happiness,
+    cortisol: agent.currentStats.cortisol ?? 20,
+    dopamine: agent.currentStats.dopamine ?? 50,
+  };
+
+  let wealthDelta = 0;
+  let healthDelta = 0;
+  let happinessDelta = 0;
+  let cortisolDelta = 0;
+  let dopamineDelta = 0;
+  let interrupted = false;
+  let interruptedReason: PhysicsQueueOutput['interruptedReason'] = null;
+
+  const executedActions: PhysicsQueuedAction[] = [];
+  const skippedActions: PhysicsQueuedAction[] = [];
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const queued = queue[index];
+    const targetCandidate = queued.parameters?.target ?? queued.parameters?.agent_id;
+    const targetId = typeof targetCandidate === 'string' ? targetCandidate : undefined;
+
+    const effect = resolveAction({
+      agent: {
+        ...agent,
+        currentStats: {
+          ...agent.currentStats,
+          wealth: runningStats.wealth,
+          health: runningStats.health,
+          happiness: runningStats.happiness,
+          cortisol: runningStats.cortisol,
+          dopamine: runningStats.dopamine,
+        },
+      },
+      actionCode: queued.actionCode,
+      actionTarget: targetId,
+      allAgents,
+      skills,
+      inventory,
+      economyDeltas: economyDeltasByAction?.[index],
+      isSabotaged,
+      isSuppressed,
+    });
+
+    wealthDelta += effect.wealthDelta;
+    healthDelta += effect.healthDelta;
+    happinessDelta += effect.happinessDelta;
+    cortisolDelta += effect.cortisolDelta;
+    dopamineDelta += effect.dopamineDelta;
+
+    runningStats.wealth = Math.max(0, runningStats.wealth + effect.wealthDelta);
+    runningStats.health = Math.max(0, Math.min(100, runningStats.health + effect.healthDelta));
+    runningStats.happiness = Math.max(0, Math.min(100, runningStats.happiness + effect.happinessDelta));
+    runningStats.cortisol = Math.max(0, Math.min(100, runningStats.cortisol + effect.cortisolDelta));
+    runningStats.dopamine = Math.max(0, Math.min(100, runningStats.dopamine + effect.dopamineDelta));
+
+    executedActions.push(queued);
+
+    if (runningStats.health < 20) {
+      interrupted = true;
+      interruptedReason = 'starvation';
+    } else if (runningStats.cortisol > 90) {
+      interrupted = true;
+      interruptedReason = 'mental_breakdown';
+    }
+
+    if (interrupted) {
+      skippedActions.push(...queue.slice(index + 1));
+      break;
+    }
+  }
+
+  let foodConsumed = 0;
+  const endingFood = inventory?.food?.quantity ?? 0;
+  if (endingFood > 0) {
+    foodConsumed = 1;
+  } else {
+    healthDelta -= PASSIVE_STARVATION_HEALTH_PENALTY;
+  }
+
+  return {
+    wealthDelta: clampDelta(wealthDelta),
+    healthDelta: clampDelta(healthDelta),
+    happinessDelta: clampDelta(happinessDelta),
+    cortisolDelta: clampDelta(cortisolDelta),
+    dopamineDelta: clampDelta(dopamineDelta),
+    actionsAttempted: queue.length,
+    actionsExecuted: executedActions.length,
+    interrupted,
+    interruptedReason,
+    executedActions,
+    skippedActions,
+    foodConsumed,
   };
 }

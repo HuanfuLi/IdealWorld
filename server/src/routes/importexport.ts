@@ -19,6 +19,7 @@ import {
 } from '../db/schema.js';
 import { v4 as uuidv4 } from 'uuid';
 import type { SessionExport } from '@idealworld/shared';
+import { getSessionTelemetry } from '../orchestration/simulationRunner.js';
 
 const router = Router();
 
@@ -97,6 +98,7 @@ router.get('/:id/export', async (req, res) => {
       iterationNumber: rc.iterationNumber,
       timestamp: rc.timestamp,
     })),
+    telemetryLogs: getSessionTelemetry(id),
   };
 
   const safeTitle = session.title.replace(/[^a-z0-9]/gi, '-').toLowerCase().slice(0, 40);

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Play, Pause, Square, X, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle, ArrowRight, GitFork, Zap, ChevronDown, ChevronRight } from 'lucide-react';
+import { Play, Pause, Square, X, Activity, Heart, CircleDollarSign, Users, Loader2, AlertCircle, ArrowRight, GitFork, Zap, ChevronDown, ChevronRight, ShieldAlert } from 'lucide-react';
 import { useSimulationStore, type AgentIntentRecord } from '../stores/simulationStore';
 import { useShallow } from 'zustand/react/shallow';
 import MarkdownText from '../components/MarkdownText';
@@ -42,6 +42,9 @@ const Simulation = () => {
   const [confirmDialog, setConfirmDialog] = useState<'end' | 'abort' | null>(null);
   const [autoProceed, setAutoProceed] = useState(() => localStorage.getItem('sim-auto-proceed') === 'true');
   const autoProceedRef = useRef(autoProceed);
+  const [earlyStoppingEnabled, setEarlyStoppingEnabled] = useState(
+    () => localStorage.getItem('sim-early-stopping') !== 'false'
+  );
   const sseCleanupRef = useRef<(() => void) | null>(null);
   const hasAutoProceeded = useRef(false);
 
@@ -50,6 +53,17 @@ const Simulation = () => {
     autoProceedRef.current = autoProceed;
     localStorage.setItem('sim-auto-proceed', autoProceed ? 'true' : 'false');
   }, [autoProceed]);
+
+  // Persist early stopping preference and sync to server mid-run
+  useEffect(() => {
+    localStorage.setItem('sim-early-stopping', earlyStoppingEnabled ? 'true' : 'false');
+    if (!id || (!isRunning && !isPaused)) return;
+    fetch(`/api/sessions/${id}/simulate/early-stopping`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: earlyStoppingEnabled }),
+    }).catch(() => null);
+  }, [earlyStoppingEnabled, id, isRunning, isPaused]);
 
   useEffect(() => {
     if (!id) return;
@@ -68,7 +82,8 @@ const Simulation = () => {
         const targetIters = s.config?.totalIterations ?? 0;
 
         if (s.stage === 'simulating') {
-          // Simulation is actively running; restore the running state immediately
+          // Simulation is actively running; restore the running state immediately.
+          // currentIteration is left as-is (set by loadHistory or incoming iteration-start SSE).
           useSimulationStore.setState(prev => ({
             isRunning: true,
             isPaused: false,
@@ -83,7 +98,12 @@ const Simulation = () => {
             totalIterations: targetIters > 0 ? targetIters : prev.totalIterations,
           }));
         } else if (s.stage === 'simulation-complete' || s.stage === 'reflecting' || s.stage === 'reflection-complete' || s.stage === 'reviewing' || s.stage === 'completed') {
-          // Simulation already finished — mark as complete regardless of feed
+          // Simulation already finished — mark as complete regardless of feed.
+          // Mark hasAutoProceeded so the auto-proceed effect does NOT fire on load.
+          // Auto-proceed is only valid when a simulation *just finished* via SSE;
+          // for pre-completed sessions (e.g. forked sessions, page refresh after
+          // completion) the user must choose manually.
+          hasAutoProceeded.current = true;
           const state = useSimulationStore.getState();
           useSimulationStore.setState({
             isRunning: false,
@@ -249,6 +269,41 @@ const Simulation = () => {
             </span>
           </div>
 
+          {/* Early Stopping Toggle */}
+          <div
+            onClick={() => setEarlyStoppingEnabled(p => !p)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '0.5rem',
+              cursor: 'pointer', userSelect: 'none',
+              padding: '0.75rem 0.75rem', borderRadius: '8px',
+              background: earlyStoppingEnabled ? 'rgba(245, 158, 11, 0.15)' : 'var(--panel-alpha-05)',
+              border: `1px solid ${earlyStoppingEnabled ? 'rgba(245, 158, 11, 0.4)' : 'var(--glass-border)'}`,
+              transition: 'all 0.2s ease',
+            }}
+            title={earlyStoppingEnabled
+              ? 'Early stopping ON — simulation halts if avg happiness < 5 or avg cortisol > 95'
+              : 'Early stopping OFF — simulation runs all planned iterations regardless of collapse'}
+          >
+            <div style={{
+              width: '32px', height: '18px', borderRadius: '9px',
+              background: earlyStoppingEnabled ? 'var(--warning)' : 'var(--panel-alpha-10)',
+              position: 'relative', transition: 'background 0.2s',
+              border: `1px solid ${earlyStoppingEnabled ? 'rgba(245, 158, 11, 0.5)' : 'var(--glass-border)'}`,
+            }}>
+              <div style={{
+                width: '14px', height: '14px', borderRadius: '50%',
+                background: earlyStoppingEnabled ? '#fff' : 'var(--text-dim)',
+                position: 'absolute', top: '1px',
+                left: earlyStoppingEnabled ? '16px' : '1px',
+                transition: 'left 0.2s ease, background 0.2s',
+              }} />
+            </div>
+            <ShieldAlert size={14} color={earlyStoppingEnabled ? 'var(--warning)' : 'var(--text-dim)'} />
+            <span style={{ fontSize: '0.8rem', color: earlyStoppingEnabled ? 'var(--warning)' : 'var(--text-dim)', whiteSpace: 'nowrap' }}>
+              Early Stop
+            </span>
+          </div>
+
           {(isRunning || isPaused) && !isComplete && (
             <button className="btn-secondary" onClick={handlePauseResume} style={{ width: '120px', justifyContent: 'center' }}>
               {isPaused ? <><Play size={18} /> Resume</> : <><Pause size={18} /> Pause</>}
@@ -312,7 +367,7 @@ const Simulation = () => {
             {isRunning && feed.length > 0 && (
               <div style={{ paddingLeft: '1rem', borderLeft: '2px solid var(--primary)', opacity: 0.6, marginBottom: '1rem' }}>
                 <h4 style={{ fontSize: '0.9rem', color: 'var(--primary)' }}>
-                  Iteration {currentIteration + 1} <Loader2 size={12} style={{ display: 'inline', animation: 'spin 1s linear infinite' }} />
+                  Iteration {currentIteration} <Loader2 size={12} style={{ display: 'inline', animation: 'spin 1s linear infinite' }} />
                 </h4>
                 <p style={{ fontSize: '0.85rem', color: 'var(--text-dim)' }}>Collecting agent intentions…</p>
               </div>
@@ -534,7 +589,7 @@ const Simulation = () => {
                 onClick={async () => {
                   if (!id) return;
                   sseCleanupRef.current?.();
-                  sseCleanupRef.current = await continueSimulation(id, extraIterations);
+                  sseCleanupRef.current = await continueSimulation(id, extraIterations, earlyStoppingEnabled);
                   setSessionStage('simulating');
                 }}
                 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
@@ -612,7 +667,7 @@ function ConfirmDialog({ variant, onConfirm, onCancel }: ConfirmDialogProps) {
       <div
         onClick={e => e.stopPropagation()}
         className="glass-panel"
-        style={{ width: '420px', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}
+        style={{ width: '420px', padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', background: 'var(--bg-color)' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           {isAbort
@@ -649,10 +704,11 @@ function ConfirmDialog({ variant, onConfirm, onCancel }: ConfirmDialogProps) {
 // ── Action Code Styling ───────────────────────────────────────────────────────
 
 const ACTION_COLORS: Record<string, string> = {
-  WORK: '#10b981', PRODUCE: '#059669', EAT: '#84cc16',
-  TRADE: '#f59e0b', POST_BUY_ORDER: '#d97706', POST_SELL_ORDER: '#b45309', SET_WAGE: '#92400e',
+  WORK: '#10b981', WORK_AT_ENTERPRISE: '#059669', PRODUCE_AND_SELL: '#84cc16',
+  POST_BUY_ORDER: '#d97706', POST_SELL_ORDER: '#b45309', POST_JOB_OFFER: '#92400e',
+  FOUND_ENTERPRISE: '#7c3aed', APPLY_FOR_JOB: '#2563eb', HIRE_EMPLOYEE: '#0f766e', FIRE_EMPLOYEE: '#b91c1c', QUIT_JOB: '#9f1239',
   REST: '#60a5fa', INVEST: '#818cf8',
-  STRIKE: '#f97316', CONSUME: '#a78bfa',
+  STRIKE: '#f97316',
   STEAL: '#ef4444', SABOTAGE: '#dc2626',
   HELP: '#ec4899',
   // Phase 3: elite privileged actions
@@ -676,12 +732,35 @@ function actionBadge(actionCode: string, actionTarget: string | null) {
   );
 }
 
+function actionQueueBadges(actions: Array<{ actionCode: string; parameters: Record<string, unknown> }>, fallbackActionCode: string | null, fallbackActionTarget: string | null) {
+  const queue = actions.length > 0
+    ? actions
+    : (fallbackActionCode ? [{ actionCode: fallbackActionCode, parameters: fallbackActionTarget ? { target: fallbackActionTarget } : {} }] : []);
+
+  if (queue.length === 0) {
+    return <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>No action yet</span>;
+  }
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+      {queue.map((action, index) => {
+        const target = action.parameters.target ?? action.parameters.agent_id ?? action.parameters.enterprise_id ?? null;
+        return (
+          <span key={`${action.actionCode}-${index}`} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+            {actionBadge(action.actionCode, typeof target === 'string' ? target : null)}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── AgentIntentPanel ──────────────────────────────────────────────────────────
 
 interface AgentIntentPanelProps {
   agents: Array<{ id: string; name: string; role: string; isAlive: boolean }>;
   agentIntentHistory: Record<string, AgentIntentRecord[]>;
-  pendingActionCodes: Record<string, { actionCode: string; actionTarget: string | null }>;
+  pendingActionCodes: Record<string, { actionCode: string; actionTarget: string | null; actions: Array<{ actionCode: string; parameters: Record<string, unknown> }> }>;
   currentIteration: number;
 }
 
@@ -717,7 +796,7 @@ function AgentIntentPanel({ agents, agentIntentHistory, pendingActionCodes, curr
 interface AgentIntentCardProps {
   agent: { id: string; name: string; role: string; isAlive: boolean };
   history: AgentIntentRecord[];
-  pending: { actionCode: string; actionTarget: string | null } | null;
+  pending: { actionCode: string; actionTarget: string | null; actions: Array<{ actionCode: string; parameters: Record<string, unknown> }> } | null;
   currentIteration: number;
 }
 
@@ -729,6 +808,7 @@ function AgentIntentCard({ agent, history, pending, currentIteration }: AgentInt
   const latestRecord = history[history.length - 1] ?? null;
   const currentActionCode = pending?.actionCode ?? latestRecord?.actionCode ?? null;
   const currentActionTarget = pending !== null ? pending.actionTarget : latestRecord?.actionTarget ?? null;
+  const currentActions = pending?.actions ?? latestRecord?.actions ?? [];
 
   const toggleIntent = (iterNum: number) => {
     setExpandedIntents(prev => {
@@ -759,11 +839,7 @@ function AgentIntentCard({ agent, history, pending, currentIteration }: AgentInt
             </span>
             {!agent.isAlive && <span style={{ fontSize: '0.68rem', color: 'var(--danger)' }}>†</span>}
           </div>
-          {currentActionCode ? (
-            actionBadge(currentActionCode, currentActionTarget)
-          ) : (
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>No action yet</span>
-          )}
+          {actionQueueBadges(currentActions, currentActionCode, currentActionTarget)}
         </div>
         {history.length > 0 && (
           <button
@@ -803,7 +879,7 @@ function AgentIntentCard({ agent, history, pending, currentIteration }: AgentInt
                   <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', minWidth: '3.5rem' }}>
                     Iter {record.iterationNumber}
                   </span>
-                  {actionBadge(record.actionCode, record.actionTarget)}
+                  {actionQueueBadges(record.actions, record.actionCode, record.actionTarget)}
                 </div>
                 {isOpen && record.narrative && (
                   <div style={{
