@@ -17,6 +17,7 @@ import {
   buildProposalPrompt,
   buildBallotPrompt,
   buildVotePrompt,
+  buildFranchiseSizePrompt,
 } from '../llm/prompts.js';
 import type { GovernancePolicyProposal, GovernanceBallotItem } from '../llm/prompts.js';
 import { sessionRepo } from '../db/repos/sessionRepo.js';
@@ -54,37 +55,60 @@ function clampPolicyValue(field: GovernancePolicyProposal['field'], value: numbe
 }
 
 /**
- * Select politician agents for the governance cycle.
- * - Dictatorship: 1 agent (highest-ranked role or first alive)
- * - Otherwise: up to 3 agents chosen for economic diversity (poorest, richest, middle)
+ * Select politician agents for the governance cycle using emergent AI reasoning.
+ *
+ * Phase C: Instead of a hardcoded dictatorship/democracy regex, the Central
+ * Agent reads the society's constitution and determines the "franchise size"
+ * (how many citizens can vote). A direct democracy → everyone votes; a
+ * monarchy → 1 most-powerful agent. Form of government is emergent, not flagged.
+ *
+ * Non-fatal: on any LLM failure falls back to selecting 1 agent (safe minimum).
  */
-function selectPoliticians(agents: Agent[], societyOverview: string | null): Agent[] {
+async function selectPoliticians(
+  agents: Agent[],
+  societyContext: string,
+  provider: LLMProvider,
+  model: string,
+): Promise<Agent[]> {
   if (agents.length === 0) return [];
 
-  const overviewUpper = (societyOverview ?? '').toUpperCase();
-  const isDictatorship = /DICTATOR|MONARCH|AUTOCRA|TOTALITAR|ABSOLUTE RULER|SUPREME LEADER/.test(overviewUpper);
-
-  if (isDictatorship) {
-    // Single decision-maker — prefer leader/governor role
-    const leader = agents.find(a =>
-      /LEADER|GOVERNOR|KING|QUEEN|EMPEROR|DICTATOR|SUPREME|CHIEF/.test(a.role.toUpperCase())
-    ) ?? agents[0];
-    return [leader];
+  // Determine franchise size via Central Agent reasoning
+  let franchiseSize = 1;
+  try {
+    const messages = buildFranchiseSizePrompt(agents.length, societyContext);
+    const raw = await provider.chat(messages, { model });
+    const clean = raw.replace(/^```json?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+    const parsed = JSON.parse(clean) as { franchiseSize?: number };
+    if (typeof parsed?.franchiseSize === 'number' && isFinite(parsed.franchiseSize)) {
+      franchiseSize = Math.min(agents.length, Math.max(1, Math.round(parsed.franchiseSize)));
+    }
+  } catch {
+    // Non-fatal: fall back to 1 (safe minimum — avoids over-selecting)
   }
 
-  // Democracy: pick up to 3 agents with economic diversity
-  if (agents.length <= 3) return [...agents];
+  if (franchiseSize >= agents.length) return [...agents];
 
   const sorted = [...agents].sort((a, b) => a.currentStats.wealth - b.currentStats.wealth);
-  const poorest = sorted[0];
-  const richest = sorted[sorted.length - 1];
-  const middle = sorted[Math.floor(sorted.length / 2)];
 
-  // Deduplicate (in case population is tiny)
-  const picked = [poorest, middle, richest].filter(
-    (a, i, arr) => arr.findIndex(b => b.id === a.id) === i
-  );
-  return picked;
+  if (franchiseSize === 1) {
+    // Single decision-maker: pick the most wealthy/powerful agent
+    return [sorted[sorted.length - 1]];
+  }
+
+  // Select a diverse sample evenly distributed across the wealth spectrum
+  const result: Agent[] = [];
+  const step = sorted.length / franchiseSize;
+  for (let i = 0; i < franchiseSize; i++) {
+    const idx = Math.min(sorted.length - 1, Math.round(i * step));
+    const candidate = sorted[idx];
+    if (!result.find(a => a.id === candidate.id)) result.push(candidate);
+  }
+  // Fill any dedup gaps with unused agents
+  for (const agent of sorted) {
+    if (result.length >= franchiseSize) break;
+    if (!result.find(a => a.id === agent.id)) result.push(agent);
+  }
+  return result;
 }
 
 /** Safe JSON parse — returns null on failure. */
@@ -113,8 +137,8 @@ export async function runGovernanceCycle(params: {
     session.law ? `Founding law excerpt: ${session.law.slice(0, 300)}` : '',
   ].filter(Boolean).join('\n\n');
 
-  // ── Step 1: Select politicians ───────────────────────────────────────────
-  const politicians = selectPoliticians(agents, session.societyOverview ?? null);
+  // ── Step 1: Select politicians (emergent — LLM reads constitution) ───────
+  const politicians = await selectPoliticians(agents, societyContext, provider, model);
   if (politicians.length === 0) {
     return {
       policyChanged: false,

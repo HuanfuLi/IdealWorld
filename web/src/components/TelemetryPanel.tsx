@@ -224,6 +224,9 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
   const [logs, setLogs] = useState<TelemetryLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const refresh = () => setRefreshKey(k => k + 1);
 
   useEffect(() => {
     setLoading(true);
@@ -241,7 +244,7 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
         setError(err.message);
         setLoading(false);
       });
-  }, [sessionId]);
+  }, [sessionId, refreshKey]);
 
   // Map logs to chart data
   const toXY = (key: keyof TelemetryLog) =>
@@ -383,7 +386,16 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
         {/* Header */}
         <div style={headerStyle}>
           <h2 style={titleStyle}>📊 Economy Telemetry Terminal</h2>
-          <button style={closeBtnStyle} onClick={onClose} aria-label="Close">×</button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button
+              onClick={refresh}
+              disabled={loading}
+              style={{ background: 'rgba(99,102,241,0.2)', border: '1px solid rgba(99,102,241,0.4)', color: 'rgba(255,255,255,0.8)', borderRadius: 6, padding: '4px 12px', fontSize: '0.8rem', cursor: loading ? 'not-allowed' : 'pointer' }}
+            >
+              {loading ? '...' : 'Refresh'}
+            </button>
+            <button style={closeBtnStyle} onClick={onClose} aria-label="Close">×</button>
+          </div>
         </div>
 
         {/* Body */}

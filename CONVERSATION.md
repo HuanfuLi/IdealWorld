@@ -1,47 +1,49 @@
-# Enhancement Plan: Neuro-Symbolic Governance & Political Cycles
+# Final Implementation Plan: Physics Fidelity & Emergent Governance
 
 ## 1. Objective
-Introduce a formal "Governance Phase" every 5 iterations to allow agents to dynamically alter the laws, taxes, and redistribution models of their society. This transforms the simulation from a static economy into a dynamic political evolution testbed.
+Finalise the architectural integrity of the simulation by addressing floating-point drift, synchronising the Sandbox with live UI tweaks, implementing "Emergent Politician Selection," and scaling the Law Enforcement system for high-population sessions.
 
 ## 2. Architectural Changes
 
-### Phase A: Policy Persistence (The "Live Law")
-**Goal:** Move economic constants from code into a mutable database state.
-- **Action:** Utilize the `law` and `config` fields in the `sessions` table.
-- **Initial Policies:**
-    - `tax_rate`: (Default 0.02) The wealth tax/demurrage.
-    - `ubi_allocation`: (Default 1.0) Percentage of tax revenue redistributed as UBI.
-    - `enforcement_level`: (Default 1.0) Multiplier for theft penalties and security.
-- **Physics Integration:** Update `simulationRunner.ts` to read these values from the session state during the tax and UBI calculation steps.
+### Phase A: Floating-Point Precision & SFC-Safety (Issue 1)
+**Goal:** Prevent "Sum of Fiat Consistency" (SFC) leaks caused by IEEE-754 rounding errors.
+- **Action:** Update the physics engine in `physicsEngine.ts` and `simulationRunner.ts`.
+- **Change:**
+    - Perform all calculations with high-precision floats.
+    - **Final Rounding:** Before a `wealthDelta` or `ubiDelta` is added to an agent's wealth, round it to exactly **4 decimal places** (e.g., `Math.round(v * 10000) / 10000`).
+    - **SFC Tolerance:** Update the SFC check in `simulationRunner.ts` to allow a tolerance of ±0.01 per iteration to account for minimal cumulative errors.
 
-### Phase B: The Governance Orchestrator (`governanceManager.ts`)
-**Goal:** Implement the 3-step political process in a new orchestration layer.
-- **Action:** Create `server/src/orchestration/governanceManager.ts`.
-- **Step 1: Selection:** Central Agent selects "Decision Makers" (Politicians) based on the `society_overview` (Democracy vs. Dictatorship).
-- **Step 2: Proposals:** Each Politician reflects on their `MemoryStream` and proposes ONE change (e.g., "Lower tax because I am a merchant" or "Raise UBI because I am starving").
-- **Step 3: Synthesis:** Central Agent de-duplicates proposals into a "Legislative Ballot."
-- **Step 4: Voting:** Decision Makers vote `YES/NO` on each ballot item.
-- **Step 5: Ratification:** If passed (majority or autocratic decree), the `session.law` is updated.
+### Phase B: Sandbox Configuration Sync (Issue 2)
+**Goal:** Ensure the Sandbox child process uses the "Tweaked" constants from the UI Laboratory.
+- **Action:** Update `server/src/routes/settings.ts` and `physics_sandbox.ts`.
+- **Change:**
+    - The `sandbox-json` route will fetch the current **In-Memory** `physicsConfig` from the server process.
+    - Pass this config as an Environment Variable (`PHYSICS_CONFIG_JSON`) to the `tsx` child process.
+    - The `physics_sandbox.ts` script must check for this environment variable and initialize its constants from it if present.
 
-### Phase C: Political Prompts (`prompts.ts`)
-**Goal:** Give agents the "voice" to act as political entities.
-- **`buildProposalPrompt`:** Asks an agent to act as a legislator, considering their personal wealth, role, and memories of hardship.
-- **`buildBallotPrompt`:** Asks the Central Agent to act as a "Speaker of the House," synthesizing raw complaints into formal policy changes (e.g., `tax_rate: 0.05`).
-- **`buildVotePrompt`:** Asks agents to vote based on self-interest vs. social stability.
+### Phase C: Emergent Politician Selection (Issue 3)
+**Goal:** Replace hardcoded "Dictatorship/Democracy" regex with Central Agent social reasoning.
+- **Action:** Update `governanceManager.ts`.
+- **Change:** 
+    - Instead of regex, ask the Central Agent: *"Based on the current society overview and law, how many agents should have the right to make political decisions? Output an integer (1 to populationCount)."*
+    - **Logic:** If the Central Agent says "1", pick the most wealthy/powerful agent. If it says "10", pick a diverse sample. If it says "All", pick everyone.
+    - **Result:** The form of government is no longer a database flag; it is an **emergent interpretation** of the written law by the AI.
 
-### Phase D: Simulation Loop Integration
-**Goal:** Trigger the political cycle without breaking the iteration flow.
-- **Action:** Update `simulationRunner.ts`.
-- **Logic:** `if (iteration % 5 === 0) { await runGovernanceCycle(sessionId) }`.
-- **Broadcast:** Use `simulationManager.broadcast` to inform the frontend of "New Laws Passed" so the user sees the political change in real-time.
+### Phase D: Scalable Legality Checks (Issue 4)
+**Goal:** Prevent context-window overflows in the "Sheriff" system for large societies.
+- **Action:** Move the legality check from the global loop into the Map-Reduce `GroupResolution` path in `simulationRunner.ts`.
+- **Change:**
+    - Each "Group Coordinator" (which handles 10-20 agents) will now also perform the legality check for its specific sub-group.
+    - **Result:** The legality check scales horizontally with the population, avoiding the bottleneck of checking 150 agents in a single prompt.
 
 ## 3. Implementation Steps for Next Agent
-1. **Infrastructure:** Create the `governanceManager.ts` and wire it into the `simulationRunner` loop.
-2. **Prompts:** Implement the three new political prompts in `prompts.ts`.
-3. **Selection Logic:** Ensure the "Politician Selection" logic respects the `societyOverview` (e.g., if "Dictatorship" is mentioned, only 1 agent is picked).
-4. **Physics Hook:** Ensure the `resolveActionQueue` uses `session.law.tax_rate` instead of the hardcoded `0.02`.
+1. **Precision:** Update the wealth delta logic to use 4-decimal rounding and adjust the SFC tolerance in `simulationRunner.ts`.
+2. **Sync:** Implement the `PHYSICS_CONFIG_JSON` environment pass-through in the `settings.ts` route and the `physics_sandbox.ts` script.
+3. **Emergence:** Update `selectPoliticians` in `governanceManager.ts` to use a Central Agent prompt to determine the "Franchise Size" (number of voters).
+4. **Scaling:** Relocate the `buildLegalityCheckPrompt` logic into the `runWithConcurrency` loop for group resolution.
 
 ## 4. Success Criteria
-- **Emergent Politics:** Agents in a famine (low health) should successfully vote to increase UBI or lower food taxes.
-- **Ideological Alignment:** A "Socialist" design results in higher taxes and UBI; a "Laissez-faire" design results in the committee voting to abolish them.
-- **Transparency:** Users can see the current "Active Laws" in the UI and observe how they change over time.
+- **Fidelity:** The SFC check remains stable (0.00 drift) even after 50 iterations of high-precision float math.
+- **Sync:** Tweaking a constant in the Laboratory UI and running the Sandbox instantly shows the results of that tweak.
+- **Emergence:** A society with a "Sun King" law correctly results in a 1-person voting committee, while a "Direct Democracy" results in everyone voting.
+- **Performance:** A 150-agent simulation resolves legality checks without context overflow or prompt timeouts.

@@ -25,8 +25,21 @@ import { AutomatedMarketMaker } from '../automatedMarketMaker.js';
 import { resolveAction } from '../physicsEngine.js';
 import { AllostaticEngine, computeMetSatietyCost, getMetCategory } from '../allostaticEngine.js';
 import type { AllostaticState } from '../allostaticEngine.js';
-import { physicsConfig } from '../physicsConfig.js';
+import { physicsConfig, updatePhysicsConfig } from '../physicsConfig.js';
 import { DEFAULT_INVENTORY } from '@idealworld/shared';
+
+// ── Config sync: inherit tweaked constants from server process (Phase B) ──────
+// When invoked via the sandbox-json route, the server passes the current
+// in-memory physicsConfig as PHYSICS_CONFIG_JSON so sandbox results reflect
+// any constants tweaked in the Physics Laboratory UI.
+if (process.env.PHYSICS_CONFIG_JSON) {
+  try {
+    const tweaked = JSON.parse(process.env.PHYSICS_CONFIG_JSON) as Record<string, number>;
+    updatePhysicsConfig(tweaked);
+  } catch {
+    // Non-fatal: fall back to default constants
+  }
+}
 import type { Inventory } from '@idealworld/shared';
 import type { Agent } from '@idealworld/shared';
 import type { ActionCode } from '../actionCodes.js';

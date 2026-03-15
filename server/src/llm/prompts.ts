@@ -555,6 +555,12 @@ export function buildNaturalIntentPrompt(
    * rather than hallucinating successes that never happened.
    */
   lastActionResults?: string,
+  /**
+   * Sheriff Phase B: current enforcement level from SessionPolicy.
+   * When provided, injects a Legal Risk Assessment block so rational actors
+   * can weigh the cost of illegal actions before choosing.
+   */
+  enforcementLevel?: number,
 ): LLMMessage[] {
   // Static prefix: identical across all agent calls in an iteration → cacheable
   const staticPrefix = `You are a citizen living in a simulated society based on: "${session.idea}"
@@ -706,6 +712,14 @@ Next step: ${cognitiveContext.currentPlanStep}`;
     ? `\n\n[Previous Action Results]\n${lastActionResults}\n⚠️ Do NOT narrate successes that did not happen. Base your next decisions strictly on these results.`
     : '';
 
+  // Sheriff Phase B: Legal Risk Assessment — injected when enforcement is active
+  const legalRiskBlock = (enforcementLevel !== undefined && enforcementLevel > 0)
+    ? (() => {
+        const detectionPct = Math.round(Math.min(0.9, 0.2 * enforcementLevel) * 100);
+        return `\n\n[LEGAL RISK ASSESSMENT]\nCurrent enforcement level: ${enforcementLevel.toFixed(1)}/3.0\nDetection probability if you perform an illegal action: ${detectionPct}%\nIf caught: your wealth is seized (-25% of current wealth), your stress surges (+30 cortisol), and the illegal action earns you nothing.\nReview the Laws (excerpt) in the system prompt before choosing STEAL, SABOTAGE, EMBEZZLE, or actions restricted by this society's constitution. Rational actors should weigh profit vs. risk.`;
+      })()
+    : '';
+
   // Build role-specific action dictionary (Task 1: full parameter schemas injected)
   const actionDictionary = buildActionDictionary(allowedActions);
 
@@ -725,7 +739,7 @@ ${marketBoardBlock}
 
 ${employmentBoardBlock}
 
-${personalStatusBlock}
+${personalStatusBlock}${legalRiskBlock}
 
 ${actionDictionary}`;
 
@@ -1495,4 +1509,97 @@ RESPOND WITH ONLY VALID JSON (no markdown):
 {"vote": "YES", "reason": "one sentence explaining your vote"}`;
 
   return [{ role: 'system', content: systemPrompt }];
+}
+
+// ── Governance: Franchise Size Prompt ────────────────────────────────────────
+
+/**
+ * Asks the Central Agent to determine how many citizens should have the right
+ * to vote in a Legislative Session, based on the society's constitution and
+ * power structure — replacing the hardcoded dictatorship/democracy regex.
+ *
+ * Phase C of the Physics Fidelity & Emergent Governance plan.
+ *
+ * Returns: { franchiseSize: number, reasoning: string }
+ */
+export function buildFranchiseSizePrompt(
+  populationCount: number,
+  societyContext: string,
+): LLMMessage[] {
+  const systemPrompt = `You are a constitutional scholar analysing a simulated society.
+Based on the society's structure and laws, determine how many citizens should have the right to vote in a Legislative Session this iteration.
+
+${societyContext}
+
+Total living citizens: ${populationCount}
+
+FRANCHISE SIZE GUIDE:
+- 1       → Absolute monarchy / dictatorship: a single ruler decrees all policy.
+- 2–3     → Oligarchy / junta: a small council controls the state.
+- ~10–30% → Representative democracy: elected officials vote on behalf of the people.
+- 50–75%  → Broad participatory democracy: most adults have a voice.
+- 100%    → Direct democracy / consensus: every citizen votes.
+
+Read the society overview and founding law excerpt carefully.
+If the law mentions a specific governance structure (Sun King, Soviet Council, People's Assembly, etc.), let that guide your answer.
+
+RESPOND WITH ONLY VALID JSON (no markdown, no preamble):
+{"franchiseSize": <integer between 1 and ${populationCount}>, "reasoning": "one sentence"}`;
+
+  return [{ role: 'system', content: systemPrompt }];
+}
+
+// ── Sheriff: Legality Check Prompt ───────────────────────────────────────────
+
+/**
+ * Asks the Central Agent (Law Enforcement AI) to identify which agents'
+ * actions violate the active laws this iteration.
+ *
+ * Phase A of the Neuro-Symbolic Sheriff system.
+ * Non-fatal: on parse failure, caller defaults to an empty illegal set.
+ *
+ * Returns: { illegalAgents: [{ agentId, actionCode, reason }] }
+ */
+export function buildLegalityCheckPrompt(
+  agentIntents: Array<{ agentId: string; agentName: string; actionCodes: string[]; intent: string }>,
+  law: string | null,
+  societyOverview: string | null,
+): LLMMessage[] {
+  const agentList = agentIntents
+    .map(a =>
+      `- ${a.agentName} [id:${a.agentId.slice(0, 8)}]: actions=[${a.actionCodes.join(', ')}] intent="${a.intent.slice(0, 120)}"`
+    )
+    .join('\n');
+
+  const systemPrompt = `You are the Law Enforcement AI for a society simulation.
+Your only job is to identify which agents' chosen actions violate the society's active laws this iteration.
+
+Society overview (excerpt):
+${(societyOverview ?? '(none)').slice(0, 300)}
+
+Active laws:
+${(law ?? '(no laws defined)').slice(0, 600)}
+
+Agent actions this iteration:
+${agentList}
+
+RULES FOR FLAGGING ILLEGALITY — be conservative, not aggressive:
+- Only flag actions that CLEARLY violate a specific law article.
+- STEAL is illegal in almost all societies unless a law article explicitly permits it.
+- SABOTAGE and EMBEZZLE are typically illegal unless the law permits them.
+- PRODUCE_AND_SELL is illegal in a fully collectivised society that forbids private commerce.
+- FOUND_ENTERPRISE is illegal if the law explicitly bans private enterprise.
+- Standard actions (WORK_AT_ENTERPRISE, REST, INVEST, HELP, POST_BUY_ORDER, POST_SELL_ORDER, APPLY_FOR_JOB) are almost never illegal.
+- If a law is vague or absent, do NOT flag an action as illegal.
+- Each agent can have at most ONE action flagged per iteration.
+
+RESPOND WITH ONLY VALID JSON (no markdown, no preamble):
+{"illegalAgents": [{"agentId": "full-uuid-string", "actionCode": "STEAL", "reason": "Violates Article 3: private theft of another citizen's property is prohibited."}]}
+
+If no actions are clearly illegal, respond: {"illegalAgents": []}`;
+
+  return [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: 'Identify illegal actions this iteration.' },
+  ];
 }

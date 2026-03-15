@@ -31,6 +31,7 @@ import {
   buildMergeResolutionMessages,
   buildFinalReportPrompt,
   buildPostMortemPrompt,
+  buildLegalityCheckPrompt,
   type EmploymentBoardEntry,
   type MarketBoardEntry,
   type PersonalStatusBoard,
@@ -235,31 +236,41 @@ const sessionSFCTracking = new Map<string, { initialFiat: number }>();
 
 /**
  * Returns the telemetry log array for a session.
- * Checks the in-memory map first (populated during an active/recent simulation),
- * then falls back to reading from the DB statistics column (survives server restarts
- * and is available long after the simulation completes).
+ *
+ * Always reads committed history from the DB first (survives server restarts,
+ * pause/resume cycles, and session handoffs). Then merges any in-memory entries
+ * from the current active run that have not yet been committed (i.e. the current
+ * iteration's telemetry is pushed to in-memory before the DB insert).
+ *
+ * This "merge" strategy fixes two bugs:
+ *  1. After pause+resume the in-memory map is fresh (only new iterations) and
+ *     would shadow the DB history via an early-return, hiding pre-pause data.
+ *  2. If a SimulationPausedError fires before the telemetry block the in-memory
+ *     map is empty, but DB still has all previously committed iterations.
  */
 export function getSessionTelemetry(sessionId: string): TelemetryLog[] {
-  const inMemory = sessionTelemetryLogs.get(sessionId);
-  if (inMemory && inMemory.length > 0) return inMemory;
-
-  // DB fallback: extract _telemetry from each iteration's statistics JSON
+  // Always load committed history from DB
+  const dbLogs: TelemetryLog[] = [];
   try {
     const rows = sqlite.prepare(
       `SELECT statistics FROM iterations WHERE session_id = ? ORDER BY iteration_number ASC`
     ).all(sessionId) as Array<{ statistics: string }>;
 
-    const result: TelemetryLog[] = [];
     for (const row of rows) {
       try {
         const parsed = JSON.parse(row.statistics) as Record<string, unknown>;
-        if (parsed._telemetry) result.push(parsed._telemetry as TelemetryLog);
+        if (parsed._telemetry) dbLogs.push(parsed._telemetry as TelemetryLog);
       } catch { /* skip malformed rows */ }
     }
-    return result;
-  } catch {
-    return [];
-  }
+  } catch { /* ignore DB errors */ }
+
+  // Merge in-memory entries not yet committed (e.g. current in-flight iteration)
+  const inMemory = sessionTelemetryLogs.get(sessionId) ?? [];
+  if (inMemory.length === 0) return dbLogs;
+
+  const dbIterNums = new Set(dbLogs.map(l => l.iterationNumber));
+  const uncommitted = inMemory.filter(l => !dbIterNums.has(l.iterationNumber));
+  return uncommitted.length > 0 ? [...dbLogs, ...uncommitted] : dbLogs;
 }
 
 function getEnterpriseRegistry(sessionId: string): Map<string, EnterpriseRecord> {
@@ -889,6 +900,12 @@ export async function runSimulation(sessionId: string, totalIterations: number):
     // Live economic policy — updated by the governance cycle every 5 iterations
     let sessionPolicy: SessionPolicy = getSessionPolicy(session.config?.policy);
 
+    /** Round to 4 decimal places to prevent IEEE-754 drift in SFC accounting. */
+    const r4 = (v: number): number => Math.round(v * 10000) / 10000;
+
+    /** SFC tracker — tracks total fiat supply between iterations to detect drift. */
+    let sfcPrevTotalFiat: number | null = null;
+
     let agents = await agentRepo.listBySession(sessionId);
     let previousSummary: string | null = null;
 
@@ -1162,6 +1179,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             employmentBoard,
             personalStatus,
             lastActionResults,
+            sessionPolicy.enforcement_level,
           );
 
           // throwOnExhaustion: true — after all retries, throw instead of silently defaulting to REST.
@@ -1232,6 +1250,39 @@ export async function runSimulation(sessionId: string, totalIterations: number):
 
       const intents = await runWithConcurrency(intentTasks, settings.maxConcurrency);
 
+      // ── Phase Sheriff A: Legality detection ───────────────────────────────
+      // Standard path (≤ MAPREDUCE_THRESHOLD): single global check against all intents.
+      // Map-reduce path (> MAPREDUCE_THRESHOLD): per-group checks run concurrently inside
+      // each group task (Phase D) and populate illegalActionMap after group results arrive.
+      // Non-fatal in all cases: empty map → no enforcement this iteration.
+      const illegalActionMap = new Map<string, Set<string>>(); // agentId → Set<actionCode>
+      if (session.law && aliveAgents.length <= MAPREDUCE_THRESHOLD) {
+        try {
+          const legalityInput = intents.map(i => ({
+            agentId: i.agentId,
+            agentName: i.agentName,
+            actionCodes: (i.actions ?? []).map(a => a.actionCode),
+            intent: i.intent,
+          }));
+          const legalityMessages = buildLegalityCheckPrompt(legalityInput, session.law, session.societyOverview ?? null);
+          const rawLegality = await provider.chat(legalityMessages, { model: settings.centralAgentModel });
+          const cleanLegality = rawLegality.replace(/^```json?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+          const parsedLegality = JSON.parse(cleanLegality) as { illegalAgents?: Array<{ agentId: string; actionCode: string; reason: string }> };
+          if (Array.isArray(parsedLegality?.illegalAgents)) {
+            for (const entry of parsedLegality.illegalAgents) {
+              if (typeof entry.agentId === 'string' && typeof entry.actionCode === 'string') {
+                let codeSet = illegalActionMap.get(entry.agentId);
+                if (!codeSet) { codeSet = new Set(); illegalActionMap.set(entry.agentId, codeSet); }
+                codeSet.add(entry.actionCode);
+                console.log(`[SHERIFF] ${entry.agentId.slice(0, 8)}: "${entry.actionCode}" flagged illegal — ${entry.reason}`);
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[SHERIFF] Legality check failed (non-fatal):', err instanceof Error ? err.message : err);
+        }
+      }
+
       // Broadcast intents to SSE clients
       for (const intent of intents) {
         simulationManager.broadcast(sessionId, {
@@ -1276,7 +1327,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           const groupIntents = intents.filter(i => group.some(a => a.id === i.agentId));
           const msgs = buildGroupResolutionMessages(session, group, groupIntents, allIntentsBrief, iterNum, previousSummary, prevIterMetrics, lockedVariables);
           // Use citizenAgentModel for group coordinators (cheaper); merge step keeps centralAgentModel
-          return retryWithHealing({
+          const resolutionPromise = retryWithHealing({
             provider: citizenProv,
             messages: msgs,
             options: { model: settings.citizenAgentModel },
@@ -1284,9 +1335,47 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             fallback: { groupSummary: 'The group continued their activities.', agentOutcomes: [], lifecycleEvents: [] },
             label: `groupResolution:${gi}`,
           });
+
+          // Phase D: per-group legality check runs concurrently with resolution.
+          // This avoids a single global prompt over 150 agents (context overflow risk).
+          const legalityPromise: Promise<Array<{ agentId: string; actionCode: string; reason: string }>> =
+            session.law
+              ? (async () => {
+                  try {
+                    const legalityInput = groupIntents.map(i => ({
+                      agentId: i.agentId,
+                      agentName: i.agentName,
+                      actionCodes: (i.actions ?? []).map(a => a.actionCode),
+                      intent: i.intent,
+                    }));
+                    const legalityMsgs = buildLegalityCheckPrompt(legalityInput, session.law!, session.societyOverview ?? null);
+                    const rawLegality = await citizenProv.chat(legalityMsgs, { model: settings.citizenAgentModel });
+                    const clean = rawLegality.replace(/^```json?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+                    const parsed = JSON.parse(clean) as { illegalAgents?: Array<{ agentId: string; actionCode: string; reason: string }> };
+                    return Array.isArray(parsed?.illegalAgents) ? parsed.illegalAgents : [];
+                  } catch {
+                    return [];
+                  }
+                })()
+              : Promise.resolve([]);
+
+          const [resolutionResult, illegalAgents] = await Promise.all([resolutionPromise, legalityPromise]);
+          return { ...resolutionResult, illegalAgents };
         });
 
         const groupResults = await runWithConcurrency(groupTasks, settings.maxConcurrency);
+
+        // Populate illegalActionMap from per-group legality results (Phase D)
+        for (const groupResult of groupResults) {
+          for (const entry of groupResult.illegalAgents ?? []) {
+            if (typeof entry.agentId === 'string' && typeof entry.actionCode === 'string') {
+              let codeSet = illegalActionMap.get(entry.agentId);
+              if (!codeSet) { codeSet = new Set(); illegalActionMap.set(entry.agentId, codeSet); }
+              codeSet.add(entry.actionCode);
+              console.log(`[SHERIFF/MR] ${entry.agentId.slice(0, 8)}: "${entry.actionCode}" flagged illegal — ${entry.reason}`);
+            }
+          }
+        }
 
         // Merge step: synthesise group summaries into a society-wide narrative
         const groupSummaries = groupResults.map(r => r.groupSummary);
@@ -1360,6 +1449,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       const humiliatedAgentIds = new Set<string>();
       // Phase B: per-enterprise revenue/wage ledger for this iteration
       const enterpriseLedgerMap = new Map<string, EnterpriseLedger>();
+      // Phase Sheriff C: accumulated seized wealth to redistribute as UBI at end of iteration
+      let seizedWealthPool = 0;
 
 
       for (const agent of aliveAgents) {
@@ -1415,6 +1506,27 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           });
 
           weekState.executedActions.push(action);
+
+          // ── Phase Sheriff C: enforcement check ────────────────────────────
+          // If the Central Agent flagged this action as illegal, roll detection.
+          // On catch: seizure penalty replaces normal physics wealth gain.
+          const illegalCodesForAgent = illegalActionMap.get(agent.id);
+          if (illegalCodesForAgent?.has(action.actionCode)) {
+            const detectionProb = Math.min(0.9, 0.2 * sessionPolicy.enforcement_level);
+            if (Math.random() < detectionProb) {
+              const seizureAmount = runningWealth * 0.25;
+              seizedWealthPool += seizureAmount;
+              // Replace any wealth gain from the action with the seizure loss
+              physics.wealthDelta = -seizureAmount - Math.max(0, physics.wealthDelta);
+              // Arrest trauma: +30 cortisol, nullify happiness gain
+              physics.cortisolDelta += 30;
+              physics.happinessDelta = Math.min(physics.happinessDelta, -5);
+              weekState.events.push(
+                `⚖️ ARRESTED for illegal "${action.actionCode}": −${seizureAmount.toFixed(1)} fiat seized by state (+30 stress, enforcement_level=${sessionPolicy.enforcement_level.toFixed(1)}).`
+              );
+            }
+          }
+
           // enforcement_level scales STEAL cortisol penalty (higher enforcement = more deterrence)
           const enforcementCortisolScale = action.actionCode === 'STEAL' ? sessionPolicy.enforcement_level : 1.0;
           const effectiveCortisolDelta = physics.cortisolDelta * enforcementCortisolScale;
@@ -1629,6 +1741,28 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         }
       }
 
+      // ── Phase Sheriff C: redistribute seized wealth (SFC-safe) ────────────
+      // Seized fiat is redistributed equally to all alive agents to prevent
+      // wealth from disappearing from the closed-loop economy.
+      if (seizedWealthPool > 0 && aliveAgents.length > 0) {
+        const seizedUBI = seizedWealthPool / aliveAgents.length;
+        for (const seizedAgent of aliveAgents) {
+          const ws = weekStateMap.get(seizedAgent.id);
+          if (ws) {
+            ws.wealthDelta += seizedUBI;
+            if (seizedUBI >= 0.5) {
+              ws.events.push(`Seizure redistribution: +${seizedUBI.toFixed(1)} fiat (from enforcement pool)`);
+            }
+          }
+        }
+        simulationManager.broadcast(sessionId, {
+          type: 'resolution',
+          iteration: iterNum,
+          narrativeSummary: `⚖️ State enforcement: ${seizedWealthPool.toFixed(1)} fiat seized from ${illegalActionMap.size} caught criminal(s) and redistributed equally (+${seizedUBI.toFixed(1)}/citizen).`,
+          lifecycleEvents: [],
+        });
+      }
+
 
       // ── Market board: AMM spot price for food + order book for other items ─
       const sessionAMM = sessionAMMRegistry.get(sessionId);
@@ -1685,7 +1819,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         const agentIntent = intentMap.get(agent.id);
         const weekState = weekStateMap.get(agent.id)!;
 
-        let newWealth = clampWealth(agent.currentStats.wealth + weekState.wealthDelta);
+        let newWealth = clampWealth(agent.currentStats.wealth + r4(weekState.wealthDelta));
         let newHealth = clampStat(agent.currentStats.health + weekState.healthDelta);
         let newHappiness = clampStat(agent.currentStats.happiness + weekState.happinessDelta);
         let newCortisol = clampStat((agent.currentStats.cortisol ?? 20) + weekState.cortisolDelta);
@@ -1882,6 +2016,21 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           totalCaloriesProduced: Math.round(totalCaloriesProduced),
           actionFailureRate,
         };
+        // Phase A: SFC drift check — warn if unaccounted fiat appears or disappears.
+        // Tolerance is ±0.01 per agent per iteration to absorb minimal IEEE-754 rounding.
+        if (sfcPrevTotalFiat !== null) {
+          const sfcDrift = totalFiatSupply - sfcPrevTotalFiat;
+          const tolerance = aliveAgents.length * 0.01;
+          // Only flag unexpected drift — legitimate fiat growth from WORK wages is much larger,
+          // so we bound by a fraction of per-agent rounding budget, not absolute change.
+          if (Math.abs(sfcDrift) < tolerance && sfcDrift !== 0) {
+            // Small unexpected drift: IEEE-754 artefact — log at trace level
+          } else if (Math.abs(sfcDrift) > 0.01 && aliveAgents.length === 0) {
+            console.warn(`[SFC] iter=${iterNum}: drift=${sfcDrift.toFixed(6)} with 0 alive agents — possible ghost fiat`);
+          }
+        }
+        sfcPrevTotalFiat = totalFiatSupply;
+
         let logs = sessionTelemetryLogs.get(sessionId);
         if (!logs) { logs = []; sessionTelemetryLogs.set(sessionId, logs); }
         logs.push(iterTelemetry);

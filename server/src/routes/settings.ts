@@ -188,9 +188,11 @@ router.post('/sandbox', (_req, res) => {
 router.post('/sandbox-json', (_req, res) => {
   const sandboxPath = path.resolve(__dirname, '../mechanics/__tests__/physics_sandbox.ts');
 
+  // Pass the current in-memory physics config so the sandbox uses tweaked constants.
   const child = spawn('npx', ['tsx', sandboxPath, '--json'], {
     cwd: path.resolve(__dirname, '../../..'),
     shell: process.platform === 'win32',
+    env: { ...process.env, PHYSICS_CONFIG_JSON: JSON.stringify(getPhysicsConfig()) },
   });
 
   let stdout = '';
