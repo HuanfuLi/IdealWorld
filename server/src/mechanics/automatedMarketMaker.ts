@@ -499,10 +499,16 @@ export class AutomatedMarketMaker {
  *
  * PURE FUNCTION — returns deltas, does not mutate agent objects.
  *
- * @param agents   All living agents with their current wealth.
- * @returns        DemurrageResult with per-agent net deltas and macro stats.
+ * @param agents        All living agents with their current wealth.
+ * @param taxRate       Override the demurrage tax rate (default: DEMURRAGE_TAX_RATE = 0.02).
+ * @param ubiAllocation Fraction of collected tax redistributed as UBI (default: 1.0 = 100%).
+ * @returns             DemurrageResult with per-agent net deltas and macro stats.
  */
-export function computeDemurrageCycle(agents: AgentWealth[]): DemurrageResult {
+export function computeDemurrageCycle(
+  agents: AgentWealth[],
+  taxRate = DEMURRAGE_TAX_RATE,
+  ubiAllocation = 1.0,
+): DemurrageResult {
   const livingAgentCount = agents.length;
 
   if (livingAgentCount === 0) {
@@ -520,13 +526,14 @@ export function computeDemurrageCycle(agents: AgentWealth[]): DemurrageResult {
 
   for (const agent of agents) {
     // Tax cannot exceed agent's total wealth (no negative balance from tax)
-    const tax = Math.min(agent.wealth, agent.wealth * DEMURRAGE_TAX_RATE);
+    const tax = Math.min(agent.wealth, agent.wealth * taxRate);
     taxMap.set(agent.agentId, tax);
     taxPoolCollected += tax;
   }
 
-  // Step 2: Compute UBI per agent
-  const ubiPerAgent = taxPoolCollected / livingAgentCount;
+  // Step 2: Compute UBI per agent from the redistributable pool
+  const redistributablePool = taxPoolCollected * Math.min(1, Math.max(0, ubiAllocation));
+  const ubiPerAgent = redistributablePool / livingAgentCount;
 
   // Step 3: Compute net delta per agent (UBI received − tax paid)
   const netDeltas = new Map<string, number>();

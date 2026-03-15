@@ -1,5 +1,5 @@
 import type { LLMMessage, ContentBlock } from './types.js';
-import type { Agent, ChatMessage, Session, ComparisonResult, BrainstormChecklist } from '@idealworld/shared';
+import type { Agent, ChatMessage, Session, ComparisonResult, BrainstormChecklist, SessionPolicy } from '@idealworld/shared';
 import type { ActionCode } from '../mechanics/actionCodes.js';
 import { getSubconsciousDrive } from '../mechanics/historicalRAG.js';
 
@@ -1356,4 +1356,143 @@ RULES FOR AGENT CHANGES:
 
   messages.push({ role: 'user', content: userMessage });
   return messages;
+}
+
+// ── Governance Cycle Prompts ───────────────────────────────────────────────────
+
+export interface GovernancePolicyProposal {
+  field: 'tax_rate' | 'ubi_allocation' | 'enforcement_level';
+  value: number;
+  reasoning: string;
+}
+
+export interface GovernanceBallotItem {
+  field: 'tax_rate' | 'ubi_allocation' | 'enforcement_level';
+  proposedValue: number;
+  description: string;
+}
+
+/**
+ * Asks a citizen agent (politician) to propose ONE economic policy change
+ * based on their personal situation and memories.
+ *
+ * Returns: { proposal: { field, value, reasoning } | null }
+ */
+export function buildProposalPrompt(
+  agent: Agent,
+  currentPolicy: SessionPolicy,
+  societyContext: string,
+  iterationNumber: number,
+): LLMMessage[] {
+  const policyDesc = `Current laws:
+- tax_rate: ${currentPolicy.tax_rate} (wealth demurrage tax per iteration; range 0.0–0.25)
+- ubi_allocation: ${currentPolicy.ubi_allocation} (fraction of tax pool redistributed as UBI; range 0.0–1.0)
+- enforcement_level: ${currentPolicy.enforcement_level} (theft/crime deterrence multiplier; range 0.1–3.0)`;
+
+  const systemPrompt = `You are ${agent.name}, a ${agent.role} in a society.
+
+${societyContext}
+
+It is iteration ${iterationNumber} — a Governance Session is now open.
+
+Your current situation:
+- Wealth: ${agent.currentStats.wealth.toFixed(1)}
+- Health: ${agent.currentStats.health.toFixed(1)}
+- Happiness: ${agent.currentStats.happiness.toFixed(1)}
+- Cortisol (stress): ${(agent.currentStats.cortisol ?? 20).toFixed(1)}
+
+${policyDesc}
+
+You have the right to propose ONE change to these economic laws.
+Consider your personal hardships and the society's needs.
+
+Examples of good proposals:
+- Low wealth / high stress → propose higher ubi_allocation (0.8 → 1.0) or lower tax_rate
+- Crime victim → propose higher enforcement_level (1.0 → 1.5)
+- Wealthy merchant → propose lower tax_rate (0.02 → 0.01)
+- Starving population → propose higher ubi_allocation
+
+RESPOND WITH ONLY VALID JSON (no markdown):
+{"proposal": {"field": "tax_rate", "value": 0.03, "reasoning": "brief reason"}}
+OR if you have no urgent concern: {"proposal": null}`;
+
+  return [{ role: 'system', content: systemPrompt }];
+}
+
+/**
+ * Asks the Central Agent (Speaker of the House) to synthesize raw proposals
+ * into a formal Legislative Ballot with at most 3 deduplicated items.
+ *
+ * Returns: { ballot: [{ field, proposedValue, description }] }
+ */
+export function buildBallotPrompt(
+  proposals: Array<{ name: string; role: string; proposal: GovernancePolicyProposal }>,
+  currentPolicy: SessionPolicy,
+  societyContext: string,
+): LLMMessage[] {
+  const proposalLines = proposals
+    .map(p => `- ${p.name} (${p.role}): change ${p.proposal.field} to ${p.proposal.value} — "${p.proposal.reasoning}"`)
+    .join('\n');
+
+  const systemPrompt = `You are the Speaker of the Legislative Assembly.
+
+${societyContext}
+
+Citizen proposals received this session:
+${proposalLines}
+
+Current policy:
+- tax_rate: ${currentPolicy.tax_rate}
+- ubi_allocation: ${currentPolicy.ubi_allocation}
+- enforcement_level: ${currentPolicy.enforcement_level}
+
+Your task: synthesize these proposals into a formal Legislative Ballot.
+Rules:
+- Deduplicate: if multiple agents propose the same field, average or pick the most common value.
+- Maximum 3 ballot items.
+- Only include changes that are meaningfully different from current policy.
+- Keep proposed values within valid ranges: tax_rate [0.0–0.25], ubi_allocation [0.0–1.0], enforcement_level [0.1–3.0].
+- Write a short neutral description for each item.
+- If all proposals are trivial or contradictory, return an empty ballot.
+
+RESPOND WITH ONLY VALID JSON (no markdown):
+{"ballot": [{"field": "tax_rate", "proposedValue": 0.03, "description": "Raise demurrage tax to fund larger UBI"}]}`;
+
+  return [{ role: 'system', content: systemPrompt }];
+}
+
+/**
+ * Asks a citizen agent (politician) to vote YES or NO on a specific ballot item.
+ *
+ * Returns: { vote: "YES" | "NO", reason: "one sentence" }
+ */
+export function buildVotePrompt(
+  agent: Agent,
+  ballotItem: GovernanceBallotItem,
+  currentPolicy: SessionPolicy,
+): LLMMessage[] {
+  const fieldLabels: Record<string, string> = {
+    tax_rate: 'wealth demurrage tax rate',
+    ubi_allocation: 'fraction of tax redistributed as Universal Basic Income',
+    enforcement_level: 'law enforcement / theft deterrence multiplier',
+  };
+  const label = fieldLabels[ballotItem.field] ?? ballotItem.field;
+  const direction = ballotItem.proposedValue > (currentPolicy[ballotItem.field] ?? 0) ? 'INCREASE' : 'DECREASE';
+
+  const systemPrompt = `You are ${agent.name}, a ${agent.role} voting in a Legislative Session.
+
+Ballot item: "${ballotItem.description}"
+Proposal: ${direction} the ${label} from ${currentPolicy[ballotItem.field]} to ${ballotItem.proposedValue}.
+
+Your current situation:
+- Wealth: ${agent.currentStats.wealth.toFixed(1)}
+- Health: ${agent.currentStats.health.toFixed(1)}
+- Stress (cortisol): ${(agent.currentStats.cortisol ?? 20).toFixed(1)}
+
+Vote based on self-interest AND what you believe is best for the society.
+
+RESPOND WITH ONLY VALID JSON (no markdown):
+{"vote": "YES", "reason": "one sentence explaining your vote"}`;
+
+  return [{ role: 'system', content: systemPrompt }];
 }

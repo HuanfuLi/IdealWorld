@@ -90,6 +90,8 @@ export interface SandboxIterStat {
   avgWealth: number;
   avgHealth: number;
   avgHappiness: number;
+  avgCortisol: number;
+  avgAllostaticLoad: number;
   spotPrice: number;
 }
 

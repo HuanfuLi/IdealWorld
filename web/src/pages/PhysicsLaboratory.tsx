@@ -427,25 +427,40 @@ const PhysicsLaboratory: React.FC = () => {
             }}>
               {sandboxData.allPassed
                 ? <><CheckCircle size={14} /> {sandboxData.passed}/{sandboxData.passed + sandboxData.failed} tests passed — Economy is mathematically sound</>
-                : <><XCircle size={14} /> {sandboxData.failed} test(s) failed — {sandboxData.firstDeathIteration !== null ? `First starvation at iteration ${sandboxData.firstDeathIteration}` : 'Check AMM stability'}</>}
+                : <><XCircle size={14} /> {sandboxData.failed} test(s) failed — {sandboxData.firstDeathIteration !== null ? `First death at iteration ${sandboxData.firstDeathIteration}` : 'Check AMM stability'}</>}
             </div>
 
-            {/* Charts */}
+            {/* Charts — 2×2 grid */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              {/* Row 1, Col 1: Vitals (0-100 stats) */}
               <div>
                 <div style={{ fontSize: '0.71rem', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
-                  Survival Curve
+                  Survival Vitals
                 </div>
                 <LineChart
                   series={[
-                    { label: 'Avg Wealth', color: '#60a5fa', data: sandboxData.iterations.map(d => d.avgWealth) },
                     { label: 'Avg Health', color: '#4ade80', data: sandboxData.iterations.map(d => d.avgHealth) },
                     { label: 'Avg Happiness', color: '#c084fc', data: sandboxData.iterations.map(d => d.avgHappiness) },
+                    { label: 'Avg Cortisol', color: '#f87171', data: sandboxData.iterations.map(d => d.avgCortisol) },
                   ]}
                   height={160}
                   xLabels={sandboxData.iterations.map((_, i) => String(i + 1))}
                 />
               </div>
+              {/* Row 1, Col 2: Economy */}
+              <div>
+                <div style={{ fontSize: '0.71rem', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
+                  Economy (Avg Wealth)
+                </div>
+                <LineChart
+                  series={[
+                    { label: 'Avg Wealth', color: '#60a5fa', data: sandboxData.iterations.map(d => d.avgWealth) },
+                  ]}
+                  height={160}
+                  xLabels={sandboxData.iterations.map((_, i) => String(i + 1))}
+                />
+              </div>
+              {/* Row 2, Col 1: Market */}
               <div>
                 <div style={{ fontSize: '0.71rem', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
                   Market Stability (AMM Spot Price)
@@ -453,6 +468,19 @@ const PhysicsLaboratory: React.FC = () => {
                 <LineChart
                   series={[
                     { label: 'Spot Price', color: '#fb923c', data: sandboxData.iterations.map(d => d.spotPrice) },
+                  ]}
+                  height={160}
+                  xLabels={sandboxData.iterations.map((_, i) => String(i + 1))}
+                />
+              </div>
+              {/* Row 2, Col 2: Allostatic Load (hidden stress signal) */}
+              <div>
+                <div style={{ fontSize: '0.71rem', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
+                  Allostatic Load (Cumulative Stress)
+                </div>
+                <LineChart
+                  series={[
+                    { label: 'Allostatic Load', color: '#fbbf24', data: sandboxData.iterations.map(d => d.avgAllostaticLoad) },
                   ]}
                   height={160}
                   xLabels={sandboxData.iterations.map((_, i) => String(i + 1))}

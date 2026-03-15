@@ -22,6 +22,8 @@ import { agentRepo } from '../db/repos/agentRepo.js';
 import { sessionRepo } from '../db/repos/sessionRepo.js';
 import { getProvider, getCitizenProvider } from '../llm/gateway.js';
 import { readSettings } from '../settings.js';
+import { runGovernanceCycle, getSessionPolicy } from './governanceManager.js';
+import type { SessionPolicy } from '@idealworld/shared';
 import {
   buildNaturalIntentPrompt,
   buildResolutionPrompt,
@@ -884,6 +886,9 @@ export async function runSimulation(sessionId: string, totalIterations: number):
 
     const lockedVariables: string[] = (session.config?.lockedVariables as string[] | undefined) ?? [];
 
+    // Live economic policy — updated by the governance cycle every 5 iterations
+    let sessionPolicy: SessionPolicy = getSessionPolicy(session.config?.policy);
+
     let agents = await agentRepo.listBySession(sessionId);
     let previousSummary: string | null = null;
 
@@ -1410,16 +1415,20 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           });
 
           weekState.executedActions.push(action);
+          // enforcement_level scales STEAL cortisol penalty (higher enforcement = more deterrence)
+          const enforcementCortisolScale = action.actionCode === 'STEAL' ? sessionPolicy.enforcement_level : 1.0;
+          const effectiveCortisolDelta = physics.cortisolDelta * enforcementCortisolScale;
+
           weekState.wealthDelta += physics.wealthDelta;
           weekState.healthDelta += physics.healthDelta;
           weekState.happinessDelta += physics.happinessDelta;
-          weekState.cortisolDelta += physics.cortisolDelta;
+          weekState.cortisolDelta += effectiveCortisolDelta;
           weekState.dopamineDelta += physics.dopamineDelta;
 
           runningWealth = clampWealth(runningWealth + physics.wealthDelta);
           runningHealth = clampStat(runningHealth + physics.healthDelta);
           runningHappiness = clampStat(runningHappiness + physics.happinessDelta);
-          runningCortisol = clampStat(runningCortisol + physics.cortisolDelta);
+          runningCortisol = clampStat(runningCortisol + effectiveCortisolDelta);
           runningDopamine = clampStat(runningDopamine + physics.dopamineDelta);
 
           weekState.skills = processSkills(weekState.skills, action.actionCode);
@@ -1607,15 +1616,15 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           agentId: agent.id,
           wealth: clampWealth(agent.currentStats.wealth + (weekStateMap.get(agent.id)?.wealthDelta ?? 0)),
         }));
-        const demurrage = computeDemurrageCycle(agentWealthList);
+        const demurrage = computeDemurrageCycle(agentWealthList, sessionPolicy.tax_rate, sessionPolicy.ubi_allocation);
         for (const [agentId, netDelta] of demurrage.netDeltas) {
           const weekState = weekStateMap.get(agentId);
           if (!weekState) continue;
           weekState.wealthDelta += netDelta;
           if (netDelta > 0.5) {
-            weekState.events.push(`UBI received: +${netDelta.toFixed(1)} fiat (demurrage redistribution)`);
+            weekState.events.push(`UBI received: +${netDelta.toFixed(1)} fiat (demurrage redistribution @ ${(sessionPolicy.ubi_allocation * 100).toFixed(0)}% UBI allocation)`);
           } else if (netDelta < -0.5) {
-            weekState.events.push(`Demurrage tax: ${netDelta.toFixed(1)} fiat (2% wealth decay)`);
+            weekState.events.push(`Demurrage tax: ${netDelta.toFixed(1)} fiat (${(sessionPolicy.tax_rate * 100).toFixed(1)}% wealth decay)`);
           }
         }
       }
@@ -2030,6 +2039,37 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         iteration: iterNum,
         stats: stats as unknown as Record<string, unknown>,
       });
+
+      // ── Governance Phase (every 5th iteration) ───────────────────────────
+      if (iterNum % 5 === 0 && aliveAgents.length >= 2) {
+        try {
+          const govResult = await runGovernanceCycle({
+            sessionId,
+            agents: aliveAgents,
+            session,
+            currentPolicy: sessionPolicy,
+            iterNum,
+            provider,
+            citizenProv,
+            model: settings.centralAgentModel,
+            citizenModel: settings.citizenAgentModel,
+          });
+          if (govResult.policyChanged) {
+            sessionPolicy = govResult.newPolicy;
+          }
+          if (govResult.summary) {
+            simulationManager.broadcast(sessionId, {
+              type: 'resolution',
+              iteration: iterNum,
+              narrativeSummary: govResult.summary,
+              lifecycleEvents: [],
+            });
+          }
+        } catch (err) {
+          // Non-fatal: log and continue — governance failure never stops the simulation
+          console.error(`[GOVERNANCE] Cycle failed at iteration ${iterNum}:`, err);
+        }
+      }
 
       // ── Phase 3: Regime Collapse check ───────────────────────────────────
       // If society reaches critical misery thresholds, the tested structure has

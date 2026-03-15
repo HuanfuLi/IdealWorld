@@ -327,6 +327,19 @@ export interface SessionConfig {
   lockedVariables?: string[];
 }
 
+/**
+ * Live economic policy constants — mutable via the governance cycle.
+ * Stored in session.config.policy and re-read each iteration.
+ */
+export interface SessionPolicy {
+  /** Demurrage wealth tax rate per iteration cycle. Default: 0.02 (2%). */
+  tax_rate: number;
+  /** Fraction of collected tax redistributed as UBI. Default: 1.0 (100%). */
+  ubi_allocation: number;
+  /** Multiplier applied to theft cortisol penalties (higher = more deterrence). Default: 1.0. */
+  enforcement_level: number;
+}
+
 export type DesignProgressEvent =
   | { type: 'step_start'; step: 'overview' | 'law' | 'agents'; stepIndex: number; totalSteps: 3 }
   | { type: 'step_done'; step: 'overview' | 'law' | 'agents'; stepIndex: number }

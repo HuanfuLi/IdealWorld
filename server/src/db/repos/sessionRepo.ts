@@ -95,6 +95,13 @@ export const sessionRepo = {
     return session;
   },
 
+  async updateConfig(id: string, config: Record<string, unknown>): Promise<void> {
+    await db
+      .update(sessions)
+      .set({ config: JSON.stringify(config), updatedAt: now() })
+      .where(eq(sessions.id, id));
+  },
+
   async delete(id: string): Promise<void> {
     await db.delete(sessions).where(eq(sessions.id, id));
   },
