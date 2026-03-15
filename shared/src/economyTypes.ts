@@ -22,7 +22,8 @@ export type SkillCategory =
     | 'healing'
     | 'leadership'
     | 'combat'
-    | 'scholarship';
+    | 'scholarship'
+    | 'management';
 
 /**
  * A single skill entry with current level and metadata.
@@ -51,11 +52,12 @@ export const DEFAULT_SKILL_MATRIX: SkillMatrix = {
     leadership: { level: 10, experience: 0 },
     combat: { level: 10, experience: 0 },
     scholarship: { level: 10, experience: 0 },
+    management: { level: 10, experience: 0 },
 };
 
 export const SKILL_CATEGORIES: readonly SkillCategory[] = [
     'farming', 'crafting', 'trading', 'mining',
-    'healing', 'leadership', 'combat', 'scholarship',
+    'healing', 'leadership', 'combat', 'scholarship', 'management',
 ] as const;
 
 // ── 1B: Physical Asset Inventory ──────────────────────────────────────────────

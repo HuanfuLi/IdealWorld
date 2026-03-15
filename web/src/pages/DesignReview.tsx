@@ -1,8 +1,19 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Send, FileText, Users, Scale, Play, Loader2, AlertCircle, Bot, GitFork, RefreshCw } from 'lucide-react';
+import { Send, FileText, Users, Scale, Play, Loader2, AlertCircle, Bot, GitFork, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import { useSessionDetailStore } from '../stores/sessionDetailStore';
 import MarkdownText from '../components/MarkdownText';
+
+const LOCKABLE_VARIABLES = [
+  { key: 'wealth', label: 'Wealth' },
+  { key: 'health', label: 'Health' },
+  { key: 'happiness', label: 'Happiness' },
+  { key: 'cortisol', label: 'Cortisol' },
+  { key: 'dopamine', label: 'Dopamine' },
+  { key: 'role', label: 'Role' },
+  { key: 'skills', label: 'Skills' },
+  { key: 'inventory', label: 'Inventory' },
+];
 
 const DesignReview = () => {
   const navigate = useNavigate();
@@ -16,6 +27,10 @@ const DesignReview = () => {
   const [input, setInput] = useState('');
   const [agentSearch, setAgentSearch] = useState('');
   const [forking, setForking] = useState(false);
+  const [showAdvancedControl, setShowAdvancedControl] = useState(false);
+  const [lockedVariables, setLockedVariables] = useState<string[]>([]);
+  // agentStatEdits: keyed by agentId, stores overridden stat values while the row is being edited
+  const [agentStatEdits, setAgentStatEdits] = useState<Record<string, Record<string, number>>>({});
 
   const {
     session,
@@ -26,10 +41,12 @@ const DesignReview = () => {
     error,
     failedMessage,
     loadSession,
+    loadAgents,
     sendRefinementMessage,
     retryRefinement,
     startSimulation,
     forkSession,
+    updateLockedVariables,
     reset,
   } = useSessionDetailStore();
 
@@ -48,6 +65,10 @@ const DesignReview = () => {
     // Sync iterations from config
     if (session.config?.totalIterations) {
       setIterations(session.config.totalIterations);
+    }
+    // Sync locked variables from config
+    if (session.config?.lockedVariables) {
+      setLockedVariables(session.config.lockedVariables);
     }
   }, [session?.stage, loading]);
 
@@ -102,6 +123,38 @@ const DesignReview = () => {
     } finally {
       setForking(false);
     }
+  };
+
+  const handleStatSave = async (agentId: string, field: string, value: number) => {
+    if (!id) return;
+    try {
+      await fetch(`/api/sessions/${id}/agents/${agentId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: value }),
+      });
+      await loadAgents(id);
+    } catch (err) {
+      console.error('Failed to save agent stat:', err);
+    }
+    // Clear the edit state for this cell
+    setAgentStatEdits(prev => {
+      const next = { ...prev };
+      if (next[agentId]) {
+        const fields = { ...next[agentId] };
+        delete fields[field];
+        if (Object.keys(fields).length === 0) delete next[agentId];
+        else next[agentId] = fields;
+      }
+      return next;
+    });
+  };
+
+  const handleToggleLock = async (key: string, checked: boolean) => {
+    if (!id) return;
+    const updated = checked ? [...lockedVariables, key] : lockedVariables.filter(v => v !== key);
+    setLockedVariables(updated);
+    await updateLockedVariables(id, updated);
   };
 
   const filteredAgents = agents.filter(a =>
@@ -202,15 +255,71 @@ const DesignReview = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredAgents.map(a => (
-                      <tr key={a.id} style={{ borderBottom: '1px solid var(--glass-border)' }}>
-                        <td style={{ padding: '0.75rem' }}>{a.name}</td>
-                        <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>{a.role}</td>
-                        <td style={{ padding: '0.75rem', color: 'var(--warning)' }}>{a.initialStats.wealth}</td>
-                        <td style={{ padding: '0.75rem', color: 'var(--success)' }}>{a.initialStats.health}</td>
-                        <td style={{ padding: '0.75rem', color: 'var(--primary)' }}>{a.initialStats.happiness}</td>
-                      </tr>
-                    ))}
+                    {filteredAgents.map(a => {
+                      const edits = agentStatEdits[a.id] ?? {};
+                      const mkStatCell = (field: 'wealth' | 'health' | 'happiness', baseColor: string, max = 100) => {
+                        const persisted = a.initialStats[field] ?? 0;
+                        const editVal = edits[field] ?? persisted;
+                        return (
+                          <td style={{ padding: '0.4rem 0.75rem' }}>
+                            <input
+                              type="number"
+                              value={editVal}
+                              min={0}
+                              max={max}
+                              onChange={e => {
+                                const v = Number(e.target.value);
+                                setAgentStatEdits(prev => ({
+                                  ...prev,
+                                  [a.id]: { ...(prev[a.id] ?? {}), [field]: v },
+                                }));
+                              }}
+                              onBlur={e => {
+                                const v = Math.min(max, Math.max(0, Number(e.target.value)));
+                                if (v !== persisted) handleStatSave(a.id, field, v);
+                                else setAgentStatEdits(prev => {
+                                  const next = { ...prev };
+                                  if (next[a.id]) {
+                                    const f = { ...next[a.id] };
+                                    delete f[field];
+                                    if (Object.keys(f).length === 0) delete next[a.id];
+                                    else next[a.id] = f;
+                                  }
+                                  return next;
+                                });
+                              }}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                              }}
+                              style={{
+                                width: '70px',
+                                padding: '0.25rem 0.4rem',
+                                background: 'transparent',
+                                border: '1px solid transparent',
+                                borderRadius: '4px',
+                                color: baseColor,
+                                fontSize: 'inherit',
+                                fontFamily: 'inherit',
+                                cursor: 'text',
+                                outline: 'none',
+                                transition: 'border-color 0.15s',
+                              }}
+                              onFocus={e => { e.currentTarget.style.borderColor = baseColor; e.currentTarget.style.background = 'var(--panel-alpha-05)'; }}
+                              onBlurCapture={e => { e.currentTarget.style.borderColor = 'transparent'; e.currentTarget.style.background = 'transparent'; }}
+                            />
+                          </td>
+                        );
+                      };
+                      return (
+                        <tr key={a.id} style={{ borderBottom: '1px solid var(--glass-border)' }}>
+                          <td style={{ padding: '0.75rem' }}>{a.name}</td>
+                          <td style={{ padding: '0.75rem', color: 'var(--text-muted)' }}>{a.role}</td>
+                          {mkStatCell('wealth', 'var(--warning)', 9999)}
+                          {mkStatCell('health', 'var(--success)')}
+                          {mkStatCell('happiness', 'var(--primary)')}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
 
@@ -364,6 +473,55 @@ const DesignReview = () => {
               min={1}
               max={100}
             />
+          </div>
+          <div style={{ position: 'relative' }}>
+            <button
+              className="btn-secondary"
+              onClick={() => setShowAdvancedControl(v => !v)}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', position: 'relative' }}
+            >
+              <SlidersHorizontal size={16} />
+              Advanced Control
+              {lockedVariables.length > 0 && (
+                <span style={{ background: 'var(--primary)', color: '#fff', borderRadius: '999px', fontSize: '0.7rem', padding: '0 6px', lineHeight: '18px', minWidth: '18px', textAlign: 'center' }}>
+                  {lockedVariables.length}
+                </span>
+              )}
+            </button>
+            {showAdvancedControl && (
+              <div style={{
+                position: 'absolute',
+                bottom: 'calc(100% + 8px)',
+                right: 0,
+                background: 'var(--panel-bg, #1a1a2e)',
+                border: '1px solid var(--glass-border)',
+                borderRadius: '10px',
+                padding: '1rem',
+                minWidth: '220px',
+                zIndex: 100,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+              }}>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                  Lock Variables
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {LOCKABLE_VARIABLES.map(({ key, label }) => (
+                    <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', color: lockedVariables.includes(key) ? 'var(--primary)' : 'var(--text-muted)', fontSize: '0.9rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={lockedVariables.includes(key)}
+                        onChange={e => handleToggleLock(key, e.target.checked)}
+                        style={{ accentColor: 'var(--primary)', width: '15px', height: '15px' }}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+                <div style={{ marginTop: '0.75rem', fontSize: '0.75rem', color: 'var(--text-dim)', lineHeight: 1.4 }}>
+                  Locked variables stay fixed at initial values throughout the simulation.
+                </div>
+              </div>
+            )}
           </div>
 
           {isPastDesign ? (

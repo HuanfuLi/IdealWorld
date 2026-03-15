@@ -55,7 +55,7 @@ import { getOrderBook } from '../mechanics/orderBook.js';
 import { economyRepo, type AgentEconomyState } from '../db/repos/economyRepo.js';
 import type { Inventory, ItemType, MarketState, PriceIndex, SkillMatrix, TelemetryLog } from '@idealworld/shared';
 import { DEFAULT_SKILL_MATRIX, DEFAULT_INVENTORY } from '@idealworld/shared';
-import { getActionMultiplier, processSkills } from '../mechanics/skillSystem.js';
+import { getActionMultiplier, getSkillMultiplier, processSkills } from '../mechanics/skillSystem.js';
 // Phase 3 Cognitive Engine imports
 import {
   runCognitivePreProcessing,
@@ -179,6 +179,13 @@ interface EmploymentRecord {
   wage: number;
   minSkill: number;
   startedAt: number;
+}
+
+/** Per-enterprise ledger: tracks revenue from labor sales vs. wage obligations this iteration. */
+interface EnterpriseLedger {
+  totalRevenue: number;
+  totalWages: number;
+  workerCount: number;
 }
 
 interface AgentWeekState {
@@ -352,7 +359,7 @@ function createAgentWeekState(econState?: AgentEconomyState): AgentWeekState {
 }
 
 function clampStat(value: number): number {
-  return Math.max(0, Math.min(100, Math.round(value)));
+  return Math.max(0, Math.min(100, value));
 }
 
 // Wealth has no upper bound — only floored at 0. No rounding: rounding destroys fractional fiat.
@@ -415,8 +422,8 @@ function applyMETMetabolism(
     const available = state.inventory.food.quantity;
     state.inventory.food.quantity = 0;
     const deficitRatio = (satietyCost - available) / satietyCost;
-    state.healthDelta -= Math.round(5 * deficitRatio);
-    state.cortisolDelta += Math.round(8 * deficitRatio);
+    state.healthDelta -= 5 * deficitRatio;
+    state.cortisolDelta += 8 * deficitRatio;
     state.events.push(`Partial nutrition: ${available}/${satietyCost} food (hungry)`);
   } else {
     // Full starvation
@@ -474,6 +481,8 @@ function applyEnterpriseAction(params: {
   amm?: AutomatedMarketMaker;
   /** Multi-commodity AMM pools for non-food items. */
   multiAMMs?: Map<MultiAMMItemType, AutomatedMarketMaker>;
+  /** Per-enterprise ledger for this iteration — updated by WORK_AT_ENTERPRISE. */
+  enterpriseLedger?: Map<string, EnterpriseLedger>;
 }): { wealthDelta: number; healthDelta: number; happinessDelta: number; cortisolDelta: number; dopamineDelta: number } {
   const {
     iterationNumber,
@@ -486,6 +495,7 @@ function applyEnterpriseAction(params: {
     orderBook,
     amm,
     multiAMMs,
+    enterpriseLedger,
   } = params;
   const economyDelta = { wealthDelta: 0, healthDelta: 0, happinessDelta: 0, cortisolDelta: 0, dopamineDelta: 0 };
   const getNumber = (value: unknown, fallback: number): number => {
@@ -612,13 +622,61 @@ function applyEnterpriseAction(params: {
         if (enterprise) {
           const ownerState = allWeekStates.get(enterprise.ownerId);
           const itemType = industryToItemType(enterprise.industry);
-          const producedQty = Math.max(1, Math.round(getActionMultiplier(state.skills, 'WORK_AT_ENTERPRISE')));
-          if (ownerState) {
-            ownerState.inventory[itemType].quantity += producedQty;
-            ownerState.events.push(`Enterprise ${enterpriseId} received ${producedQty} ${itemType} from employee labor`);
+          // Phase D: owner management skill provides an organizational efficiency multiplier
+          const ownerManagementLevel = ownerState?.skills['management']?.level ?? 10;
+          const ownerManagementBonus = getSkillMultiplier(ownerManagementLevel);
+          const baseQty = getActionMultiplier(state.skills, 'WORK_AT_ENTERPRISE');
+          const producedQty = Math.max(1, Math.round(baseQty * ownerManagementBonus));
+
+          // Phase A: sell produced goods directly to AMM for instant fiat liquidity
+          // instead of adding to owner inventory (eliminates Inventory-Cash Gap)
+          let fiatRevenue = 0;
+          if (itemType === 'food' && amm) {
+            const receipt = amm.executeSell(producedQty, iterationNumber);
+            if (receipt.success) {
+              fiatRevenue = Math.floor('fiatOut' in receipt.quote ? receipt.quote.fiatOut : 0);
+              const effectivePrice = 'effectivePrice' in receipt.quote ? receipt.quote.effectivePrice.toFixed(2) : '?';
+              if (ownerState) {
+                ownerState.wealthDelta += fiatRevenue;
+                ownerState.events.push(`Enterprise ${enterpriseId}: ${producedQty} food sold to AMM at ${effectivePrice}/unit (+${fiatRevenue} fiat)`);
+              }
+            } else {
+              // AMM saturated — fall back to inventory so production isn't lost
+              if (ownerState) {
+                ownerState.inventory[itemType].quantity += producedQty;
+                ownerState.events.push(`Enterprise ${enterpriseId}: ${producedQty} food kept in inventory (AMM saturated)`);
+              }
+            }
+          } else {
+            const commodityAMM = multiAMMs?.get(itemType as MultiAMMItemType);
+            if (commodityAMM) {
+              const receipt = commodityAMM.executeSell(producedQty, iterationNumber);
+              if (receipt.success) {
+                fiatRevenue = Math.floor('fiatOut' in receipt.quote ? receipt.quote.fiatOut : 0);
+                const effectivePrice = 'effectivePrice' in receipt.quote ? receipt.quote.effectivePrice.toFixed(2) : '?';
+                if (ownerState) {
+                  ownerState.wealthDelta += fiatRevenue;
+                  ownerState.events.push(`Enterprise ${enterpriseId}: ${producedQty} ${itemType} sold to AMM at ${effectivePrice}/unit (+${fiatRevenue} fiat)`);
+                }
+              } else if (ownerState) {
+                ownerState.inventory[itemType].quantity += producedQty;
+                ownerState.events.push(`Enterprise ${enterpriseId}: ${producedQty} ${itemType} kept in inventory (AMM saturated)`);
+              }
+            } else if (ownerState) {
+              ownerState.inventory[itemType].quantity += producedQty;
+              ownerState.events.push(`Enterprise ${enterpriseId}: ${producedQty} ${itemType} added to inventory`);
+            }
           }
-          // System enterprise: production goes to state commons (no ownerState — that's fine)
-          state.events.push(`Worked at ${enterpriseId}`);
+
+          // Phase B: record revenue in enterprise ledger for owner feedback injection
+          if (enterpriseLedger) {
+            const ledger = enterpriseLedger.get(enterpriseId) ?? { totalRevenue: 0, totalWages: 0, workerCount: 0 };
+            ledger.totalRevenue += fiatRevenue;
+            ledger.workerCount += 1;
+            enterpriseLedger.set(enterpriseId, ledger);
+          }
+
+          state.events.push(`Worked at ${enterpriseId} (produced ${producedQty} ${itemType}, owner mgmt bonus: ×${ownerManagementBonus.toFixed(2)})`);
         }
       }
       break;
@@ -824,6 +882,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
     const session = await sessionRepo.getById(sessionId);
     if (!session) throw new Error(`Session ${sessionId} not found`);
 
+    const lockedVariables: string[] = (session.config?.lockedVariables as string[] | undefined) ?? [];
+
     let agents = await agentRepo.listBySession(sessionId);
     let previousSummary: string | null = null;
 
@@ -947,6 +1007,9 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         previousSummary = prevIters[prevIters.length - 1].stateSummary;
       }
     }
+
+    // Snapshot economy state for controlled variable locking (skills/inventory)
+    const lockedEconomySnapshot = new Map(agentEconomyMap);
 
     for (let iterNum = startIter; iterNum <= endIter; iterNum++) {
       // ── Abort check ──────────────────────────────────────────────────────
@@ -1206,7 +1269,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         const groups = clusterByRole(aliveAgents, BATCH_SIZE);
         const groupTasks = groups.map((group, gi) => async () => {
           const groupIntents = intents.filter(i => group.some(a => a.id === i.agentId));
-          const msgs = buildGroupResolutionMessages(session, group, groupIntents, allIntentsBrief, iterNum, previousSummary, prevIterMetrics);
+          const msgs = buildGroupResolutionMessages(session, group, groupIntents, allIntentsBrief, iterNum, previousSummary, prevIterMetrics, lockedVariables);
           // Use citizenAgentModel for group coordinators (cheaper); merge step keeps centralAgentModel
           return retryWithHealing({
             provider: citizenProv,
@@ -1222,7 +1285,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
 
         // Merge step: synthesise group summaries into a society-wide narrative
         const groupSummaries = groupResults.map(r => r.groupSummary);
-        const mergeMessages = buildMergeResolutionMessages(session, groupSummaries, iterNum, previousSummary, prevIterMetrics);
+        const mergeMessages = buildMergeResolutionMessages(session, groupSummaries, iterNum, previousSummary, prevIterMetrics, lockedVariables);
         const mergeResult = await retryWithHealing({
           provider,
           messages: mergeMessages,
@@ -1244,7 +1307,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       } else {
         // ── Standard path ────────────────────────────────────────────────
         // Bug #1 fix: pass aliveAgents only — dead agents must never appear in resolution
-        const resolutionMessages = buildResolutionPrompt(session, aliveAgents, intents, iterNum, previousSummary, prevIterMetrics);
+        const resolutionMessages = buildResolutionPrompt(session, aliveAgents, intents, iterNum, previousSummary, prevIterMetrics, lockedVariables);
         resolution = await retryWithHealing({
           provider,
           messages: resolutionMessages,
@@ -1253,6 +1316,16 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           fallback: { narrativeSummary: 'The iteration passed without major events.', agentOutcomes: [], lifecycleEvents: [] },
           label: 'resolution',
         });
+      }
+
+      // Controlled Variable Method: suppress role_change lifecycle events when role is locked
+      if (lockedVariables.includes('role')) {
+        resolution = {
+          ...resolution,
+          lifecycleEvents: resolution.lifecycleEvents?.filter(
+            (e: { type: string }) => e.type !== 'role_change'
+          ) ?? [],
+        };
       }
 
       simulationManager.broadcast(sessionId, {
@@ -1280,6 +1353,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       const actionRows: Array<typeof resolvedActions.$inferInsert> = [];
       const economyUpdates: Array<{ agentId: string; sessionId: string; skills: SkillMatrix; inventory: Inventory; lastUpdated: number }> = [];
       const humiliatedAgentIds = new Set<string>();
+      // Phase B: per-enterprise revenue/wage ledger for this iteration
+      const enterpriseLedgerMap = new Map<string, EnterpriseLedger>();
 
 
       for (const agent of aliveAgents) {
@@ -1309,6 +1384,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             orderBook,
             amm: sessionAMMRegistry.get(sessionId),
             multiAMMs: sessionMultiAMMRegistry.get(sessionId),
+            enterpriseLedger: enterpriseLedgerMap,
           });
 
           const physics = resolveAction({
@@ -1422,8 +1498,20 @@ export async function runSimulation(sessionId: string, totalIterations: number):
               employeeState.wealthDelta += employment.wage;
               employeeState.events.push(`Received wage ${employment.wage} from ${enterpriseId}`);
             }
+            // Phase B: record total wages in ledger
+            {
+              const ledger = enterpriseLedgerMap.get(enterpriseId) ?? { totalRevenue: 0, totalWages: 0, workerCount: 0 };
+              ledger.totalWages += totalWageObligation;
+              enterpriseLedgerMap.set(enterpriseId, ledger);
+            }
           } else {
             // ── Insolvent: proportional liquidation then bankruptcy ──
+            // Phase B: record wages owed (even if unpaid) so owner sees the deficit
+            {
+              const ledger = enterpriseLedgerMap.get(enterpriseId) ?? { totalRevenue: 0, totalWages: 0, workerCount: 0 };
+              ledger.totalWages += totalWageObligation;
+              enterpriseLedgerMap.set(enterpriseId, ledger);
+            }
             bankruptciesThisIter++;
             const liquidatable = Math.max(0, ownerAvailableWealth);
             const payRatio = totalWageObligation > 0 ? liquidatable / totalWageObligation : 0;
@@ -1615,6 +1703,13 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           newCortisol = 100;
         }
 
+        // Controlled Variable Method: absolute locks restore initial stat values
+        if (lockedVariables.includes('wealth')) newWealth = agent.initialStats.wealth;
+        if (lockedVariables.includes('health')) newHealth = agent.initialStats.health;
+        if (lockedVariables.includes('happiness')) newHappiness = agent.initialStats.happiness;
+        if (lockedVariables.includes('cortisol')) newCortisol = agent.initialStats.cortisol ?? 20;
+        if (lockedVariables.includes('dopamine')) newDopamine = agent.initialStats.dopamine ?? 50;
+
         statUpdates.push({
           id: agent.id,
           wealth: newWealth,
@@ -1641,6 +1736,19 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           if (weekState.interrupted) {
             lines.push(`⚠️ Action queue interrupted: ${weekState.interruptedReason}`);
           }
+          // Phase B: inject enterprise ledger summary for owners
+          const ownedEnterprise = [...enterpriseRegistry.values()].find(e => e.ownerId === agent.id);
+          if (ownedEnterprise) {
+            const ledger = enterpriseLedgerMap.get(ownedEnterprise.id);
+            if (ledger) {
+              const netProfit = ledger.totalRevenue - ledger.totalWages;
+              const profitLabel = netProfit >= 0 ? `+${netProfit.toFixed(1)}` : netProfit.toFixed(1);
+              lines.push(
+                `[Enterprise ${ownedEnterprise.id} Summary]: Total Revenue from Labor (+${ledger.totalRevenue.toFixed(1)}), Total Wages Paid (-${ledger.totalWages.toFixed(1)}). **Net Weekly Profit: ${profitLabel}.**` +
+                (netProfit < 0 ? ' ⚠️ Your enterprise is LOSING money. Consider FIRE_EMPLOYEE or adjusting your business model.' : '')
+              );
+            }
+          }
           const resultText = `[Week ${iterNum} Results]\n${lines.join('\n')}`;
           let agentResults = sessionLastActionResults.get(sessionId);
           if (!agentResults) { agentResults = new Map(); sessionLastActionResults.set(sessionId, agentResults); }
@@ -1664,11 +1772,12 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           }
         }
 
+        const lockedSnap = lockedEconomySnapshot.get(agent.id);
         economyUpdates.push({
           agentId: agent.id,
           sessionId,
-          skills: weekState.skills,
-          inventory: weekState.inventory,
+          skills: lockedVariables.includes('skills') && lockedSnap ? lockedSnap.skills : weekState.skills,
+          inventory: lockedVariables.includes('inventory') && lockedSnap ? lockedSnap.inventory : weekState.inventory,
           lastUpdated: iterNum,
         });
 

@@ -324,6 +324,7 @@ export interface SessionConfig {
   totalIterations: number;
   checklist: BrainstormChecklist;
   readyForDesign: boolean;
+  lockedVariables?: string[];
 }
 
 export type DesignProgressEvent =

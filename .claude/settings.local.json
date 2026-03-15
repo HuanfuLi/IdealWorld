@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npx tsc:*)",
       "Bash(node:*)",
-      "Bash(npx:*)"
+      "Bash(npx:*)",
+      "Bash(npm run:*)"
     ]
   }
 }

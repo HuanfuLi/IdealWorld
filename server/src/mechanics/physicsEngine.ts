@@ -1,20 +1,22 @@
 /**
  * Deterministic physics engine for the neuro-symbolic simulation.
  * Given an agent and their chosen action code, compute exact stat deltas.
- * All values clamped to [-30, +30] for deltas, [0, 100] for final stats.
+ * All values clamped to [-clampDeltaMax, +clampDeltaMax] for deltas, [0, 100] for final stats.
  *
  * Phase 1 Enhancement: Now integrate with the economy engine for
  * skill multipliers, inventory effects, and production bonuses.
  *
  * Phase 3 Enhancement: Asymmetric class actions (EMBEZZLE, ADJUST_TAX, SUPPRESS)
  * and buffed WORK income to break poverty traps.
+ *
+ * Physics Lab: resolveAction now returns a `trace: string[]` field that
+ * explains each calculation step for developer debugging and the Laboratory UI.
  */
 import type { Agent, SkillMatrix, Inventory } from '@idealworld/shared';
 import type { ActionCode } from './actionCodes.js';
 import { getActionMultiplier } from './skillSystem.js';
 import { getToolMultiplier } from './inventorySystem.js';
-
-const PASSIVE_STARVATION_HEALTH_PENALTY = 10;
+import { physicsConfig } from './physicsConfig.js';
 
 export interface PhysicsQueuedAction {
   actionCode: ActionCode;
@@ -60,6 +62,12 @@ export interface PhysicsOutput {
   happinessDelta: number;
   cortisolDelta: number;
   dopamineDelta: number;
+  /**
+   * Step-by-step math explanation for every calculation in this result.
+   * Populated by resolveAction — always present, may be empty for queue outputs.
+   * Use the /api/settings/trace-physics endpoint to retrieve this for the Lab UI.
+   */
+  trace: string[];
 }
 
 export interface PhysicsQueueOutput extends PhysicsOutput {
@@ -75,40 +83,38 @@ export interface PhysicsQueueOutput extends PhysicsOutput {
 /**
  * Role-based income for WORK action.
  * Buffed so a single WORK generates enough surplus to cover ~3-4 iterations of food costs.
- * At system ceiling price (15/unit) and 2 units/iteration consumption, an agent needs
- * ~30 wealth per 2 iterations of food. Lowest earner (6) × 4-5 iterations bridges this gap.
  */
 function roleIncome(role: string): number {
   const upper = role.toUpperCase();
-  if (/LEADER|GOVERNOR|MERCHANT|CHIEF|KING|QUEEN|MAYOR|MINISTER|COMMISSIONER|DIRECTOR/.test(upper)) return 14;
-  if (/ARTISAN|WORKER|FARMER|BUILDER|MINER|SMITH|CARPENTER/.test(upper)) return 10;
-  if (/SCHOLAR|HEALER|PRIEST|TEACHER|MONK|DOCTOR|SAGE|ENGINEER/.test(upper)) return 8;
-  return 6;
+  if (/LEADER|GOVERNOR|MERCHANT|CHIEF|KING|QUEEN|MAYOR|MINISTER|COMMISSIONER|DIRECTOR/.test(upper)) return physicsConfig.roleIncomeElite;
+  if (/ARTISAN|WORKER|FARMER|BUILDER|MINER|SMITH|CARPENTER/.test(upper)) return physicsConfig.roleIncomeArtisan;
+  if (/SCHOLAR|HEALER|PRIEST|TEACHER|MONK|DOCTOR|SAGE|ENGINEER/.test(upper)) return physicsConfig.roleIncomeScholar;
+  return physicsConfig.roleIncomeDefault;
+}
+
+function roleTierLabel(role: string): string {
+  const upper = role.toUpperCase();
+  if (/LEADER|GOVERNOR|MERCHANT|CHIEF|KING|QUEEN|MAYOR|MINISTER|COMMISSIONER|DIRECTOR/.test(upper)) return 'elite';
+  if (/ARTISAN|WORKER|FARMER|BUILDER|MINER|SMITH|CARPENTER/.test(upper)) return 'artisan';
+  if (/SCHOLAR|HEALER|PRIEST|TEACHER|MONK|DOCTOR|SAGE|ENGINEER/.test(upper)) return 'scholar';
+  return 'default';
 }
 
 /** Calculate steal wealth gain */
 function stealCalc(agent: Agent, allAgents: Agent[], targetId?: string): number {
   const target = targetId ? allAgents.find(a => a.id === targetId) : undefined;
-  if (!target || !target.isAlive) return 3;
-  return Math.min(15, Math.round(target.currentStats.wealth * 0.15));
+  if (!target || !target.isAlive) return physicsConfig.stealFallback;
+  return Math.min(physicsConfig.stealMax, target.currentStats.wealth * physicsConfig.stealRatio);
 }
 
-const clampDelta = (v: number): number => Math.max(-30, Math.min(30, Math.round(v)));
+const clampDelta = (v: number): number =>
+  Math.max(-physicsConfig.clampDeltaMax, Math.min(physicsConfig.clampDeltaMax, v));
 
 /**
  * Psychological clamping — prevents LLM hallucinations of high Happiness
  * during extreme physiological distress.
  *
- * Formula:  maxAllowedHappiness = 100 - (cortisol × 0.5) - (100 - health)
- *                               = health - cortisol × 0.5
- *
- * Examples:
- *   Health=30, Cortisol=90 → max = 30 - 45 = -15 → floor 0
- *   Health=60, Cortisol=20 → max = 60 - 10 = 50
- *   Health=100, Cortisol=0 → max = 100  (no cap under normal conditions)
- *
- * Called by the Symbolic Engine AFTER all stat deltas have been applied,
- * so it always operates on the final values for the iteration.
+ * Formula:  maxAllowedHappiness = health − cortisol × 0.5
  */
 export function clampHappinessByPhysiology(
   happiness: number,
@@ -116,44 +122,54 @@ export function clampHappinessByPhysiology(
   cortisol: number,
 ): number {
   const maxAllowed = Math.max(0, health - cortisol * 0.5);
-  return Math.min(happiness, Math.round(maxAllowed));
+  return Math.min(happiness, maxAllowed);
 }
 
 /**
  * Resolve an agent's action into deterministic stat deltas.
- *
- * Phase 1 Enhancement: When skills/inventory are provided, the engine
- * uses skill multipliers for production and layers economy deltas on top.
- *
- * Phase 3 Enhancement: Privileged elite actions (EMBEZZLE, ADJUST_TAX, SUPPRESS)
- * and suppression penalty for targets of SUPPRESS.
+ * Returns a full math trace in result.trace for debugging and the Physics Laboratory UI.
  */
 export function resolveAction(input: PhysicsInput): PhysicsOutput {
   const { agent, actionCode, actionTarget, allAgents, skills, inventory, economyDeltas, isSabotaged, isSuppressed } = input;
   let w = 0, h = 0, hap = 0, cor = 0, dop = 0;
+  const trace: string[] = [];
 
   // Compute skill and tool multipliers if available
   const skillMult = skills ? getActionMultiplier(skills, actionCode) : 1.0;
   const toolMult = inventory ? getToolMultiplier(inventory) : 1.0;
-  // Phase 2: Active sabotage reduces this agent's productivity by 50%
   const sabotageMult = isSabotaged ? 0.5 : 1.0;
   const productionMult = skillMult * toolMult * sabotageMult;
 
+  trace.push(`Action: ${actionCode}`);
+  if (skills) trace.push(`  Multipliers: skill=${skillMult.toFixed(2)}, tool=${toolMult.toFixed(2)}, sabotage=${sabotageMult}`);
+  trace.push(`  productionMult = ${productionMult.toFixed(3)}`);
+
   switch (actionCode) {
     case 'WORK':
-    case 'WORK_AT_ENTERPRISE':
-      w = Math.round(roleIncome(agent.role) * productionMult);
+    case 'WORK_AT_ENTERPRISE': {
+      const base = roleIncome(agent.role);
+      w = base * productionMult;
       h = -2;
       hap = -1;
       cor = -3;
       dop = 2;
+      trace.push(`  Δwealth: roleIncome(${agent.role} = ${roleTierLabel(agent.role)}) = ${base} × productionMult(${productionMult.toFixed(3)}) = ${w.toFixed(3)}`);
+      trace.push(`  Δhealth: -2 (labor cost)`);
+      trace.push(`  Δhappiness: -1 (moderate work satisfaction)`);
+      trace.push(`  Δcortisol: -3 (productive relief)`);
+      trace.push(`  Δdopamine: +2 (effort reward)`);
       break;
+    }
     case 'REST':
       w = 0;
       h = 5;
       hap = 2;
       cor = -5;
       dop = 1;
+      trace.push(`  Δhealth: +5 (physical recovery)`);
+      trace.push(`  Δhappiness: +2 (rest satisfaction)`);
+      trace.push(`  Δcortisol: -5 (decompression)`);
+      trace.push(`  Δdopamine: +1 (calm reward)`);
       break;
     case 'STRIKE':
       w = 0;
@@ -161,20 +177,39 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
       hap = 5;
       cor = 5;
       dop = 4;
+      trace.push(`  Δhappiness: +5 (collective solidarity)`);
+      trace.push(`  Δcortisol: +5 (tension from confrontation)`);
+      trace.push(`  Δdopamine: +4 (ideological energy)`);
       break;
-    case 'STEAL':
-      w = stealCalc(agent, allAgents, actionTarget);
+    case 'STEAL': {
+      const stolen = stealCalc(agent, allAgents, actionTarget);
+      const target = actionTarget ? allAgents.find(a => a.id === actionTarget) : undefined;
+      w = stolen;
       h = -5;
       hap = -3;
       cor = 10;
       dop = 5;
+      if (target) {
+        trace.push(`  Δwealth: min(stealMax=${physicsConfig.stealMax}, ${target.currentStats.wealth} × ratio=${physicsConfig.stealRatio}) = ${stolen.toFixed(3)}`);
+      } else {
+        trace.push(`  Δwealth: no target → fallback=${physicsConfig.stealFallback}`);
+      }
+      trace.push(`  Δhealth: -5 (physical risk)`);
+      trace.push(`  Δhappiness: -3 (moral cost)`);
+      trace.push(`  Δcortisol: +10 (legal anxiety)`);
+      trace.push(`  Δdopamine: +5 (adrenaline)`);
       break;
+    }
     case 'HELP':
       w = -5;
       h = 0;
       hap = 5;
       cor = -5;
       dop = 5;
+      trace.push(`  Δwealth: -5 (resources given)`);
+      trace.push(`  Δhappiness: +5 (altruistic satisfaction)`);
+      trace.push(`  Δcortisol: -5 (social bonding relief)`);
+      trace.push(`  Δdopamine: +5 (prosocial reward)`);
       break;
     case 'INVEST':
       w = -10;
@@ -182,23 +217,34 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
       hap = -2;
       cor = 3;
       dop = 2;
+      trace.push(`  Δwealth: -10 (capital deployed)`);
+      trace.push(`  Δhappiness: -2 (deferred gratification)`);
+      trace.push(`  Δcortisol: +3 (investment risk anxiety)`);
+      trace.push(`  Δdopamine: +2 (future-oriented reward)`);
       break;
     case 'PRODUCE_AND_SELL':
-      // Independent production is priced and matched elsewhere; physics models labor cost.
       w = 0;
-      h = -3;    // Physical labor
-      hap = 1;   // Satisfaction from self-sufficiency
+      h = -3;
+      hap = 1;
       cor = -2;
       dop = 2;
+      trace.push(`  Δwealth: 0 (real revenue flows through economy engine / AMM)`);
+      trace.push(`  Δhealth: -3 (physical labor cost)`);
+      trace.push(`  Δhappiness: +1 (self-sufficiency satisfaction)`);
+      trace.push(`  Δcortisol: -2 (productive activity)`);
+      trace.push(`  Δdopamine: +2 (creative effort reward)`);
       break;
     case 'POST_BUY_ORDER':
     case 'POST_SELL_ORDER':
-      // Market participation: minimal stat changes, real impact through economy engine
       w = 0;
       h = 0;
       hap = 1;
       cor = -1;
       dop = 1;
+      trace.push(`  Δwealth: 0 (real flows through AMM / order book)`);
+      trace.push(`  Δhappiness: +1 (market participation)`);
+      trace.push(`  Δcortisol: -1 (economic agency)`);
+      trace.push(`  Δdopamine: +1 (market interaction)`);
       break;
     case 'FOUND_ENTERPRISE':
       w = -8;
@@ -206,16 +252,22 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
       hap = 3;
       cor = 5;
       dop = 4;
+      trace.push(`  Δwealth: -8 (setup costs — main founding cost via economy engine)`);
+      trace.push(`  Δhappiness: +3 (entrepreneurial ambition)`);
+      trace.push(`  Δcortisol: +5 (business risk)`);
+      trace.push(`  Δdopamine: +4 (ownership excitement)`);
       break;
     case 'POST_JOB_OFFER':
     case 'HIRE_EMPLOYEE':
     case 'FIRE_EMPLOYEE':
-      // Management action: small stress, leadership satisfaction
       w = 0;
       h = 0;
       hap = 2;
       cor = 2;
       dop = 2;
+      trace.push(`  Δhappiness: +2 (management action satisfaction)`);
+      trace.push(`  Δcortisol: +2 (decision-making stress)`);
+      trace.push(`  Δdopamine: +2 (control reward)`);
       break;
     case 'APPLY_FOR_JOB':
       w = 0;
@@ -223,6 +275,9 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
       hap = 1;
       cor = 1;
       dop = 1;
+      trace.push(`  Δhappiness: +1 (hopeful)`);
+      trace.push(`  Δcortisol: +1 (application anxiety)`);
+      trace.push(`  Δdopamine: +1 (anticipation)`);
       break;
     case 'QUIT_JOB':
       w = 0;
@@ -230,45 +285,53 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
       hap = -1;
       cor = 4;
       dop = 0;
+      trace.push(`  Δhappiness: -1 (loss of security)`);
+      trace.push(`  Δcortisol: +4 (uncertainty of unemployment)`);
       break;
-    // ── Phase 2 new action codes ──────────────────────────────────────
     case 'SABOTAGE':
-      // Expected-value outcome: physical danger, ideological satisfaction, high anxiety.
-      // Target's -50% productivity is tracked externally via sabotageRegistry.
       w = 0;
-      h = -8;    // Physical risk (injuries, hiding, confrontation)
-      hap = 5;   // Ideological satisfaction from resistance
-      cor = 18;  // High anxiety from danger and legal risk
-      dop = 7;   // Adrenaline rush
+      h = -8;
+      hap = 5;
+      cor = 18;
+      dop = 7;
+      trace.push(`  Δhealth: -8 (physical risk — injuries, confrontation)`);
+      trace.push(`  Δhappiness: +5 (ideological satisfaction)`);
+      trace.push(`  Δcortisol: +18 (high danger and legal anxiety)`);
+      trace.push(`  Δdopamine: +7 (adrenaline rush)`);
       break;
-    // ── Phase 3: Privileged elite/governing actions ───────────────────
     case 'EMBEZZLE':
-      // Skim funds from communal treasury — large wealth gain, high legal risk.
-      // Redistribution cost is borne by the whole society implicitly.
       w = 20;
       h = 0;
-      hap = 2;   // Fleeting satisfaction from power
-      cor = 20;  // Extreme legal anxiety
-      dop = 8;   // Adrenaline of corruption
+      hap = 2;
+      cor = 20;
+      dop = 8;
+      trace.push(`  Δwealth: +20 (skimmed from communal treasury)`);
+      trace.push(`  Δhappiness: +2 (fleeting power satisfaction)`);
+      trace.push(`  Δcortisol: +20 (extreme legal anxiety)`);
+      trace.push(`  Δdopamine: +8 (adrenaline of corruption)`);
       break;
     case 'ADJUST_TAX':
-      // Forcibly extract wealth from lower classes via tax policy.
-      // Direct per-agent redistribution is applied in simulationRunner (post-loop).
-      // Physics captures the political/psychological cost for the executor.
-      w = 15;    // Immediate revenue cut for the policy-maker
+      w = 15;
       h = 0;
-      hap = 3;   // Satisfaction from exercising control
-      cor = 5;   // Guilt / fear of backlash
+      hap = 3;
+      cor = 5;
       dop = 4;
+      trace.push(`  Δwealth: +15 (immediate policy-maker revenue cut)`);
+      trace.push(`  Note: per-agent tax deductions applied separately in runner`);
+      trace.push(`  Δhappiness: +3 (satisfaction from exercising control)`);
+      trace.push(`  Δcortisol: +5 (fear of backlash)`);
+      trace.push(`  Δdopamine: +4 (political power reward)`);
       break;
     case 'SUPPRESS':
-      // Deploy enforcement against a target citizen.
-      // Target's immediate penalty (+cortisol, -happiness) is applied in simulationRunner.
       w = 0;
       h = 0;
-      hap = 4;   // Satisfaction from domination
-      cor = 8;   // Stress from wielding coercive power
+      hap = 4;
+      cor = 8;
       dop = 6;
+      trace.push(`  Note: target's penalty (+cortisol, -happiness) applied separately in runner`);
+      trace.push(`  Δhappiness: +4 (satisfaction from domination)`);
+      trace.push(`  Δcortisol: +8 (stress from wielding coercive power)`);
+      trace.push(`  Δdopamine: +6 (domination reward)`);
       break;
     case 'NONE':
     default:
@@ -277,37 +340,72 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
       hap = -1;
       cor = 2;
       dop = -2;
+      trace.push(`  Δhealth: -1 (idle deterioration)`);
+      trace.push(`  Δhappiness: -1 (purposelessness)`);
+      trace.push(`  Δcortisol: +2 (unfulfilled potential anxiety)`);
+      trace.push(`  Δdopamine: -2 (lack of stimulation)`);
       break;
   }
 
-  // ── Layer economy deltas on top (from inventory/market) ──────────────
+  // ── Layer economy deltas on top ──────────────────────────────────────
   if (economyDeltas) {
+    const prev = { w, h, hap, cor };
     w += economyDeltas.wealthDelta;
     h += economyDeltas.healthDelta;
     cor += economyDeltas.cortisolDelta;
     hap += economyDeltas.happinessDelta;
+    if (economyDeltas.wealthDelta !== 0 || economyDeltas.healthDelta !== 0) {
+      trace.push(`Economy deltas layered: Δwealth ${prev.w.toFixed(3)}→${w.toFixed(3)}, Δhealth ${prev.h.toFixed(3)}→${h.toFixed(3)}, Δcortisol ${prev.cor.toFixed(3)}→${cor.toFixed(3)}, Δhappiness ${prev.hap.toFixed(3)}→${hap.toFixed(3)}`);
+    }
   }
 
-  // Cortisol auto-escalation for low resources
+  // ── Cortisol auto-escalation for low resources ────────────────────────
   const stats = agent.currentStats;
-  if (stats.wealth < 20) cor += 10;
-  if (stats.health < 30) cor += 8;
-
-  // Phase 3: SUPPRESS victim — enforcement causes persistent psychological pressure
-  if (isSuppressed) {
-    cor += 15;
-    hap -= 8;
+  if (stats.wealth < physicsConfig.lowWealthThreshold) {
+    cor += physicsConfig.lowWealthCortisolPenalty;
+    trace.push(`⚠ Low wealth (${stats.wealth} < ${physicsConfig.lowWealthThreshold}): Δcortisol +${physicsConfig.lowWealthCortisolPenalty} (survival anxiety)`);
+  }
+  if (stats.health < physicsConfig.lowHealthThreshold) {
+    cor += physicsConfig.lowHealthCortisolPenalty;
+    trace.push(`⚠ Low health (${stats.health} < ${physicsConfig.lowHealthThreshold}): Δcortisol +${physicsConfig.lowHealthCortisolPenalty} (pain response)`);
   }
 
-  // Dopamine decay: hedonic adaptation
-  dop -= 3;
+  // ── Suppression victim ────────────────────────────────────────────────
+  if (isSuppressed) {
+    cor += physicsConfig.suppressionCortisolPenalty;
+    hap += physicsConfig.suppressionHappinessPenalty;
+    trace.push(`⚠ Suppression active: Δcortisol +${physicsConfig.suppressionCortisolPenalty}, Δhappiness ${physicsConfig.suppressionHappinessPenalty}`);
+  }
+
+  // ── Dopamine decay (hedonic adaptation) ──────────────────────────────
+  dop += physicsConfig.dopamineDecay;
+  trace.push(`Hedonic adaptation: Δdopamine ${physicsConfig.dopamineDecay} (decay)`);
+
+  // ── Pre-clamp summary ────────────────────────────────────────────────
+  trace.push(`Pre-clamp: Δwealth=${w.toFixed(3)}, Δhealth=${h.toFixed(3)}, Δhappiness=${hap.toFixed(3)}, Δcortisol=${cor.toFixed(3)}, Δdopamine=${dop.toFixed(3)}`);
+
+  // ── Clamp and report ─────────────────────────────────────────────────
+  const cw = clampDelta(w);
+  const ch = clampDelta(h);
+  const chap = clampDelta(hap);
+  const ccor = clampDelta(cor);
+  const cdop = clampDelta(dop);
+  const max = physicsConfig.clampDeltaMax;
+  if (cw !== w)   trace.push(`⚠ Δwealth clamped: ${w.toFixed(3)} → ${cw.toFixed(3)} (limit ±${max})`);
+  if (ch !== h)   trace.push(`⚠ Δhealth clamped: ${h.toFixed(3)} → ${ch.toFixed(3)} (limit ±${max})`);
+  if (chap !== hap) trace.push(`⚠ Δhappiness clamped: ${hap.toFixed(3)} → ${chap.toFixed(3)} (limit ±${max})`);
+  if (ccor !== cor) trace.push(`⚠ Δcortisol clamped: ${cor.toFixed(3)} → ${ccor.toFixed(3)} (limit ±${max})`);
+  if (cdop !== dop) trace.push(`⚠ Δdopamine clamped: ${dop.toFixed(3)} → ${cdop.toFixed(3)} (limit ±${max})`);
+
+  trace.push(`→ Final: Δwealth=${cw.toFixed(3)}, Δhealth=${ch.toFixed(3)}, Δhappiness=${chap.toFixed(3)}, Δcortisol=${ccor.toFixed(3)}, Δdopamine=${cdop.toFixed(3)}`);
 
   return {
-    wealthDelta: clampDelta(w),
-    healthDelta: clampDelta(h),
-    happinessDelta: clampDelta(hap),
-    cortisolDelta: clampDelta(cor),
-    dopamineDelta: clampDelta(dop),
+    wealthDelta: cw,
+    healthDelta: ch,
+    happinessDelta: chap,
+    cortisolDelta: ccor,
+    dopamineDelta: cdop,
+    trace,
   };
 }
 
@@ -384,10 +482,10 @@ export function resolveActionQueue(input: PhysicsQueueInput): PhysicsQueueOutput
 
     executedActions.push(queued);
 
-    if (runningStats.health < 20) {
+    if (runningStats.health < physicsConfig.starvationHealthInterrupt) {
       interrupted = true;
       interruptedReason = 'starvation';
-    } else if (runningStats.cortisol > 90) {
+    } else if (runningStats.cortisol > physicsConfig.mentalBreakdownCortisolInterrupt) {
       interrupted = true;
       interruptedReason = 'mental_breakdown';
     }
@@ -403,7 +501,7 @@ export function resolveActionQueue(input: PhysicsQueueInput): PhysicsQueueOutput
   if (endingFood > 0) {
     foodConsumed = 1;
   } else {
-    healthDelta -= PASSIVE_STARVATION_HEALTH_PENALTY;
+    healthDelta -= physicsConfig.passiveStarvationHealthPenalty;
   }
 
   return {
@@ -419,5 +517,6 @@ export function resolveActionQueue(input: PhysicsQueueInput): PhysicsQueueOutput
     executedActions,
     skippedActions,
     foodConsumed,
+    trace: [], // queue-level aggregation: see individual resolveAction calls for per-action traces
   };
 }

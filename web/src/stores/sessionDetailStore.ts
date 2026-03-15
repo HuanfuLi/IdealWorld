@@ -28,6 +28,7 @@ interface SessionDetailStore {
   retryRefinement: (id: string) => Promise<void>;
   startSimulation: (id: string, totalIterations: number) => Promise<void>;
   forkSession: (id: string, iterations: number) => Promise<string>;
+  updateLockedVariables: (id: string, lockedVars: string[]) => Promise<void>;
   reset: () => void;
 }
 
@@ -333,6 +334,15 @@ export const useSessionDetailStore = create<SessionDetailStore>((set, get) => ({
       }));
     }
     await get().sendRefinementMessage(id, failedMessage);
+  },
+
+  updateLockedVariables: async (id: string, lockedVars: string[]) => {
+    await brainstormApi.patchConfig(id, { lockedVariables: lockedVars });
+    set(state => ({
+      session: state.session && state.session.config
+        ? { ...state.session, config: { ...state.session.config, lockedVariables: lockedVars } }
+        : state.session,
+    }));
   },
 
   forkSession: async (id: string, iterations: number): Promise<string> => {

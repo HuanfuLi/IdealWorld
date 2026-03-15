@@ -4,7 +4,11 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { readSettings, writeSettings } from '../settings.js';
 import { getProvider, invalidateProvider, createProviderFromSettings } from '../llm/gateway.js';
-import type { AppSettings } from '@idealworld/shared';
+import type { AppSettings, Agent } from '@idealworld/shared';
+import type { SkillMatrix, Inventory } from '@idealworld/shared';
+import { resolveAction, clampHappinessByPhysiology } from '../mechanics/physicsEngine.js';
+import { getPhysicsConfig, updatePhysicsConfig, resetPhysicsConfig } from '../mechanics/physicsConfig.js';
+import { normalizeActionCode } from '../mechanics/actionCodes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -178,6 +182,121 @@ router.post('/sandbox', (_req, res) => {
   child.on('error', (err) => {
     res.json({ output: `Failed to start sandbox: ${err.message}`, exitCode: 1 });
   });
+});
+
+// POST /api/settings/sandbox-json — run sandbox in --json mode; returns structured telemetry
+router.post('/sandbox-json', (_req, res) => {
+  const sandboxPath = path.resolve(__dirname, '../mechanics/__tests__/physics_sandbox.ts');
+
+  const child = spawn('npx', ['tsx', sandboxPath, '--json'], {
+    cwd: path.resolve(__dirname, '../../..'),
+    shell: process.platform === 'win32',
+  });
+
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+  child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+
+  child.on('close', (code) => {
+    try {
+      const data = JSON.parse(stdout);
+      res.json({ ...data, exitCode: code ?? 1 });
+    } catch {
+      res.json({ error: 'Failed to parse sandbox output', raw: stdout + stderr, exitCode: code ?? 1 });
+    }
+  });
+
+  child.on('error', (err) => {
+    res.json({ error: `Failed to start sandbox: ${err.message}`, exitCode: 1 });
+  });
+});
+
+// ── Physics Lab: GET /api/settings/physics-config ────────────────────────────
+// Returns the live physics configuration (all numerical constants).
+router.get('/physics-config', (_req, res) => {
+  res.json(getPhysicsConfig());
+});
+
+// ── Physics Lab: PUT /api/settings/physics-config ────────────────────────────
+// Hot-swaps one or more physics constants at runtime. Changes take effect
+// immediately on the next resolveAction / allostatic tick call.
+router.put('/physics-config', (req, res) => {
+  try {
+    const updated = updatePhysicsConfig(req.body ?? {});
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ── Physics Lab: POST /api/settings/physics-config/reset ─────────────────────
+// Resets all physics constants to factory defaults.
+router.post('/physics-config/reset', (_req, res) => {
+  res.json(resetPhysicsConfig());
+});
+
+// ── Physics Lab: POST /api/settings/trace-physics ────────────────────────────
+// Stateless "What-If" endpoint — runs resolveAction on a mock agent and returns
+// the full math trace. Does NOT touch the database; safe to call any time.
+router.post('/trace-physics', (req, res) => {
+  try {
+    const body = req.body as {
+      role?: string;
+      stats?: { wealth: number; health: number; happiness: number; cortisol: number; dopamine: number };
+      skills?: SkillMatrix;
+      inventory?: Inventory;
+      actionCode?: string;
+      isSabotaged?: boolean;
+      isSuppressed?: boolean;
+    };
+
+    const stats = body.stats ?? { wealth: 50, health: 70, happiness: 60, cortisol: 20, dopamine: 50 };
+    const role = (body.role ?? 'WORKER').toUpperCase();
+    const actionCode = normalizeActionCode(body.actionCode ?? 'WORK');
+
+    // Construct a minimal mock agent satisfying the Agent interface
+    const mockAgent: Agent = {
+      id: 'trace-mock',
+      sessionId: 'trace',
+      name: 'Mock Agent',
+      role,
+      background: '',
+      initialStats: { ...stats },
+      currentStats: { ...stats },
+      isAlive: true,
+      isCentralAgent: false,
+      status: 'alive',
+      type: 'citizen',
+      bornAtIteration: null,
+      diedAtIteration: null,
+    };
+
+    const result = resolveAction({
+      agent: mockAgent,
+      actionCode,
+      allAgents: [mockAgent],
+      skills: body.skills,
+      inventory: body.inventory,
+      isSabotaged: body.isSabotaged ?? false,
+      isSuppressed: body.isSuppressed ?? false,
+    });
+
+    // Compute final stats and check happiness physiological clamping
+    const finalHealth = Math.max(0, Math.min(100, stats.health + result.healthDelta));
+    const finalCortisol = Math.max(0, Math.min(100, stats.cortisol + result.cortisolDelta));
+    const finalHappiness = Math.max(0, Math.min(100, stats.happiness + result.happinessDelta));
+    const clampedHappiness = clampHappinessByPhysiology(finalHappiness, finalHealth, finalCortisol);
+
+    res.json({
+      ...result,
+      finalHappiness,
+      happinessClamped: clampedHappiness < finalHappiness,
+      clampedHappiness,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 export default router;

@@ -25,6 +25,14 @@ import type { Inventory } from '@idealworld/shared';
 import type { Agent } from '@idealworld/shared';
 import type { ActionCode } from '../actionCodes.js';
 
+// ── JSON mode ─────────────────────────────────────────────────────────────────
+// Pass --json to suppress human-readable output and emit a structured JSON
+// object with per-iteration time-series data for the Physics Laboratory charts.
+
+const isJsonMode = process.argv.includes('--json');
+const _log = isJsonMode ? (..._args: unknown[]) => {} : (...args: unknown[]) => console.log(...args);
+const _err = isJsonMode ? (..._args: unknown[]) => {} : (...args: unknown[]) => console.error(...args);
+
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
 let passed = 0;
@@ -33,15 +41,15 @@ let failed = 0;
 function assert(condition: boolean, message: string): void {
   if (condition) {
     passed++;
-    console.log(`  ✓ ${message}`);
+    _log(`  ✓ ${message}`);
   } else {
     failed++;
-    console.error(`  ✗ FAIL: ${message}`);
+    _err(`  ✗ FAIL: ${message}`);
   }
 }
 
 function section(name: string): void {
-  console.log(`\n═══ ${name} ═══`);
+  _log(`\n═══ ${name} ═══`);
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -129,6 +137,14 @@ const amm = new AutomatedMarketMaker(AMM_FIAT_INIT, AMM_FOOD_INIT, 0);
 let firstDeathIteration: number | null = null;
 let surplusViolationIteration: number | null = null;
 
+interface IterStat {
+  avgWealth: number;
+  avgHealth: number;
+  avgHappiness: number;
+  spotPrice: number;
+}
+const iterStats: IterStat[] = [];
+
 // ── Main simulation loop ──────────────────────────────────────────────────────
 
 section('Running 100 Deterministic Iterations');
@@ -203,39 +219,47 @@ for (let iter = 1; iter <= TOTAL_ITERATIONS; iter++) {
     const starved = s.inventory.food.quantity <= 0 && s.agent.currentStats.wealth <= 0;
     if (starved && firstDeathIteration === null) {
       firstDeathIteration = iter;
-      console.error(`  ✗ Agent ${s.agent.id} (${s.agent.role}) starved at iteration ${iter} (food=0, wealth=0)`);
+      _err(`  ✗ Agent ${s.agent.id} (${s.agent.role}) starved at iteration ${iter} (food=0, wealth=0)`);
     }
   }
 
   // Spot price sanity check — AMM should not collapse to zero or go negative
   if (!(amm.spotPrice > 0) && surplusViolationIteration === null) {
     surplusViolationIteration = iter;
-    console.error(`  ✗ AMM spot price collapsed at iteration ${iter}: ${amm.spotPrice}`);
+    _err(`  ✗ AMM spot price collapsed at iteration ${iter}: ${amm.spotPrice}`);
   }
+
+  // ── 5. Collect per-iteration telemetry for JSON mode ──────────────────
+  iterStats.push({
+    avgWealth: agentStates.reduce((s, a) => s + a.agent.currentStats.wealth, 0) / agentStates.length,
+    avgHealth: agentStates.reduce((s, a) => s + a.agent.currentStats.health, 0) / agentStates.length,
+    avgHappiness: agentStates.reduce((s, a) => s + a.agent.currentStats.happiness, 0) / agentStates.length,
+    spotPrice: amm.spotPrice,
+  });
 }
 
 // ── Results ───────────────────────────────────────────────────────────────────
 
 section('Final Agent Wealth & Health');
 for (const { agent } of agentStates) {
-  console.log(`  ${agent.id} (${agent.role}): wealth=${Math.round(agent.currentStats.wealth)}, health=${agent.currentStats.health}, food=${agentStates.find(s => s.agent.id === agent.id)!.inventory.food.quantity}`);
+  _log(`  ${agent.id} (${agent.role}): wealth=${Math.round(agent.currentStats.wealth)}, health=${agent.currentStats.health}, food=${agentStates.find(s => s.agent.id === agent.id)!.inventory.food.quantity}`);
 }
 
 const finalSpot = amm.spotPrice;
-console.log(`\n  AMM final state: spot=${finalSpot.toFixed(2)}, fiat=${amm.currentFiatReserve.toFixed(0)}, food=${amm.currentFoodReserve.toFixed(1)}`);
+_log(`\n  AMM final state: spot=${finalSpot.toFixed(2)}, fiat=${amm.currentFiatReserve.toFixed(0)}, food=${amm.currentFoodReserve.toFixed(1)}`);
 
 section('Pass / Fail');
 
 // Test 1: No starvation (no agent ended up with food=0 AND wealth=0 in the same iteration)
 assert(firstDeathIteration === null, `No agent starved in ${TOTAL_ITERATIONS} iterations`);
 if (firstDeathIteration !== null) {
-  console.error(`    → First starvation at iteration ${firstDeathIteration}`);
+  _err(`    → First starvation at iteration ${firstDeathIteration}`);
 }
 
 // Test 2: AMM spot price never collapsed
 assert(surplusViolationIteration === null, 'AMM spot price remained positive throughout');
 if (surplusViolationIteration !== null) {
-  console.error(`    → AMM price collapsed at iteration ${surplusViolationIteration}`);
+  _err(`    → AMM price collapsed at iteration ${surplusViolationIteration}`);
 }
 
 // Test 3: Golden Rule — producers have increasing wealth (food revenue > caloric food cost)
@@ -261,11 +285,24 @@ assert(solventCount === AGENT_COUNT, `All ${AGENT_COUNT} agents solvent at end (
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 
-console.log(`\n${'─'.repeat(50)}`);
-console.log(`Results: ${passed} passed, ${failed} failed`);
+if (isJsonMode) {
+  // Emit structured JSON for the Physics Laboratory charts
+  process.stdout.write(JSON.stringify({
+    iterations: iterStats,
+    passed,
+    failed,
+    allPassed: failed === 0,
+    firstDeathIteration,
+    surplusViolationIteration,
+  }));
+  process.exit(failed === 0 ? 0 : 1);
+}
+
+_log(`\n${'─'.repeat(50)}`);
+_log(`Results: ${passed} passed, ${failed} failed`);
 if (failed === 0) {
-  console.log('✅ ALL PHYSICS SANDBOX TESTS PASSED — Economy is mathematically sound.');
+  _log('✅ ALL PHYSICS SANDBOX TESTS PASSED — Economy is mathematically sound.');
 } else {
-  console.log('❌ PHYSICS SANDBOX FAILURES DETECTED — Fix the economy before running LLM calls.');
+  _log('❌ PHYSICS SANDBOX FAILURES DETECTED — Fix the economy before running LLM calls.');
   process.exit(1);
 }

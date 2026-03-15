@@ -486,6 +486,40 @@ router.post('/:id/fork-simulation', async (req, res) => {
   }
 });
 
+// PATCH /api/sessions/:id/agents/:agentId — update agent initial stats (design stage)
+router.patch('/:id/agents/:agentId', async (req, res) => {
+  const { id, agentId } = req.params;
+  const body = req.body as { wealth?: number; health?: number; happiness?: number; cortisol?: number; dopamine?: number };
+
+  const clamp = (v: number, min = 0, max = 100) => Math.min(max, Math.max(min, Math.round(v)));
+
+  try {
+    const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
+    if (!agent || agent.sessionId !== id) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+
+    let current: Record<string, unknown> = {};
+    try { current = JSON.parse(agent.initialStats); } catch { /* use defaults */ }
+
+    if (body.wealth !== undefined) current.wealth = clamp(body.wealth, 0, 9999);
+    if (body.health !== undefined) current.health = clamp(body.health);
+    if (body.happiness !== undefined) current.happiness = clamp(body.happiness);
+    if (body.cortisol !== undefined) current.cortisol = clamp(body.cortisol);
+    if (body.dopamine !== undefined) current.dopamine = clamp(body.dopamine);
+
+    const statsJson = JSON.stringify(current);
+    await db.update(agents)
+      .set({ initialStats: statsJson, currentStats: statsJson })
+      .where(eq(agents.id, agentId));
+
+    res.json({ ok: true, initialStats: current });
+  } catch (err) {
+    console.error('PATCH /sessions/:id/agents/:agentId error:', err);
+    res.status(500).json({ error: 'Failed to update agent stats' });
+  }
+});
+
 // DELETE /api/sessions/:id
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;

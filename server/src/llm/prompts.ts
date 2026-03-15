@@ -579,6 +579,8 @@ CRITICAL VOICE RULES — you MUST follow these exactly:
 
 🚨 CRITICAL SURVIVAL & ECONOMIC LAW: You are a rational economic actor above all else. You must NOT starve just to maintain your initial 'role' or 'background'. If you are hungry, have low health, or if a PROFIT ALERT appears on the Market Board for a specific commodity (like Food), you MUST ruthlessly abandon your current profession and switch to using the PRODUCE_AND_SELL action for that highly profitable commodity. No roleplay identity, artistic calling, or social status is worth your life. Adapt to market demands to accumulate wealth and survive.
 
+⚖️ SURVIVAL OVER IDENTITY — ABSOLUTE RULE: Your physical survival and financial solvency take absolute precedence over your initial background, occupation, or social role. You are PERMITTED — and EXPECTED — to be ruthlessly pragmatic. If your current employment or enterprise is costing you more than it earns, you MUST act to fix it: quit an unprofitable job, fire employees you cannot afford, or abandon a failing business model. Loyalty to a role that is killing you is not noble — it is irrational. Review your [Previous Action Results] every week. If the numbers show you are losing fiat, change your strategy immediately.
+
 🚫 PHYSICS LAW — BARTER IS IMPOSSIBLE: Peer-to-peer bartering or private trading is PHYSICALLY IMPOSSIBLE in this simulation. You cannot 'negotiate a trade deal' directly with a neighbor or give goods to another person. The ONLY way to acquire goods is via POST_BUY_ORDER on the Global Market. The ONLY way to sell or convert goods into Wealth is via PRODUCE_AND_SELL. Do not narrate or plan private exchanges — they will not execute.
 
 You are a rational economic actor. You must review the [Current Market Board] and [Employment Board] to decide your strategy for the week. You can execute up to 3 actions. 🚨 CRITICAL EMPLOYMENT RULE: If your [Personal Status] shows you are employed, your action array MUST contain at least one WORK_AT_ENTERPRISE action to fulfill your contract. If you no longer wish to work there (e.g., the wage is too low), you MUST include a QUIT_JOB action instead. You cannot ignore your employment status.
@@ -759,6 +761,7 @@ export function buildResolutionPrompt(
   iterationNumber: number,
   previousSummary: string | null,
   iterationMetrics?: string | null,
+  lockedVariables?: string[],
 ): LLMMessage[] {
   const agentList = intents.map(ai => {
     const agent = agents.find(a => a.id === ai.agentId);
@@ -771,11 +774,15 @@ export function buildResolutionPrompt(
     ? `\n\n[OBJECTIVE SYSTEM METRICS — last iteration]\n${iterationMetrics}\n⚠️ You MUST reflect these statistics in your narrative. Do NOT ignore the unemployed or failed agents. If many agents failed to find work, narrate a society gripped by unemployment crisis, desperation, and inequality.`
     : '';
 
+  const lockedNote = lockedVariables && lockedVariables.length > 0
+    ? `\n\nCONTROLLED VARIABLE METHOD: The following variables are ABSOLUTELY LOCKED and will not change, regardless of any agent actions or events: ${lockedVariables.join(', ')}. Consider this when evaluating consequences or resolving conflicts, and do not narrate changes to these variables.`
+    : '';
+
   const systemPrompt = `You are the Central Agent (omniscient narrator) resolving iteration ${iterationNumber} of a society simulation.
 
 Society: "${session.idea}"
 Time scale: ${session.timeScale ?? '1 iteration = 1 week'}
-${previousSummary ? `\nPrevious iteration summary:\n${previousSummary.slice(0, 600)}` : ''}${metricsBlock}
+${previousSummary ? `\nPrevious iteration summary:\n${previousSummary.slice(0, 600)}` : ''}${metricsBlock}${lockedNote}
 
 Agent intentions this iteration:
 ${agentList}
@@ -1168,6 +1175,7 @@ export function buildGroupResolutionMessages(
   iterationNumber: number,
   previousSummary: string | null,
   iterationMetrics?: string | null,
+  lockedVariables?: string[],
 ): LLMMessage[] {
   const groupList = groupIntents.map(ai => {
     const agent = groupAgents.find(a => a.id === ai.agentId);
@@ -1176,12 +1184,16 @@ export function buildGroupResolutionMessages(
   Stats: W=${stats.wealth} H=${stats.health} Hap=${stats.happiness}`;
   }).join('\n');
 
+  const groupLockedNote = lockedVariables && lockedVariables.length > 0
+    ? `\n\nCONTROLLED VARIABLE METHOD: The following variables are ABSOLUTELY LOCKED and will not change, regardless of any agent actions or events: ${lockedVariables.join(', ')}. Do not narrate changes to these variables.`
+    : '';
+
   // Static prefix: identical across all group resolution calls → cacheable
   const staticPrefix = `You are a coordinator resolving a sub-group of agents in a society simulation.
 
 Society: "${session.idea}"
 Time scale: ${session.timeScale ?? '1 iteration = 1 week'}
-Laws (excerpt): ${session.law?.slice(0, 400) ?? '(no laws)'}
+Laws (excerpt): ${session.law?.slice(0, 400) ?? '(no laws)'}${groupLockedNote}
 
 NOTE: Stat deltas are computed by a deterministic physics engine. You only provide narrative outcomes.
 
@@ -1236,10 +1248,15 @@ export function buildMergeResolutionMessages(
   iterationNumber: number,
   previousSummary: string | null,
   iterationMetrics?: string | null,
+  lockedVariables?: string[],
 ): LLMMessage[] {
   const summaryList = groupSummaries.map((s, i) => `Group ${i + 1}: ${s}`).join('\n');
   const metricsBlock = iterationMetrics
     ? `\n[OBJECTIVE SYSTEM METRICS — last iteration]\n${iterationMetrics}\n⚠️ Weave these facts into your narrative. If unemployment is high, the story must reflect crisis, desperation, and inequality — not a utopia.`
+    : '';
+
+  const mergeLockedNote = lockedVariables && lockedVariables.length > 0
+    ? `\n\nCONTROLLED VARIABLE METHOD: The following variables are ABSOLUTELY LOCKED and will not change, regardless of any agent actions or events: ${lockedVariables.join(', ')}. Do not narrate changes to these variables.`
     : '';
 
   const systemPrompt = `You are the Central Agent synthesising iteration ${iterationNumber} of a society simulation.
@@ -1247,7 +1264,7 @@ You have received summaries from ${groupSummaries.length} sub-groups.
 
 Society: "${session.idea}"
 Time scale: ${session.timeScale ?? '1 iteration = 1 week'}
-${previousSummary ? `\nPrevious iteration:\n${previousSummary.slice(0, 400)}` : ''}${metricsBlock}
+${previousSummary ? `\nPrevious iteration:\n${previousSummary.slice(0, 400)}` : ''}${metricsBlock}${mergeLockedNote}
 
 Sub-group summaries:
 ${summaryList}

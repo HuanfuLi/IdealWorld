@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Server, CheckCircle2, AlertTriangle, Key, XCircle, ToggleLeft, ToggleRight, FlaskConical } from 'lucide-react';
 import { useSettingsStore } from '../stores/settingsStore';
 import type { AppSettings } from '@idealworld/shared';
+import PhysicsLaboratory from './PhysicsLaboratory';
 
 type Provider = AppSettings['provider'];
 
@@ -587,6 +588,7 @@ const SettingsPage = () => {
               fontSize: '0.78rem',
               lineHeight: 1.65,
               color: '#e2e8f0',
+
               fontFamily: 'monospace',
               overflowX: 'auto',
               whiteSpace: 'pre-wrap',
@@ -599,6 +601,9 @@ const SettingsPage = () => {
           </pre>
         )}
       </div>
+
+      {/* Physics Laboratory — interactive debugging & transparency tool */}
+      <PhysicsLaboratory />
     </div>
   );
 };

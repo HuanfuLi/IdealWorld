@@ -42,33 +42,7 @@
  */
 
 import type { ActionCode } from './actionCodes.js';
-
-// ── Constants ──────────────────────────────────────────────────────────────────
-
-/**
- * Reference kcal burned per satiety point.
- * Derived from: 70 kg agent × REST MET (1.0) × 1 hr = 70 kcal → 1.0 satiety pt.
- * Therefore 1 satiety point ≡ 70 kcal.
- */
-const SATIETY_KCAL_PER_POINT = 70;
-
-/** Tick duration in hours. 1 tick = 1 in-game hour. */
-const TICK_DURATION_HRS = 1;
-
-/** Allostatic elasticity limit (Strain threshold for irreversible load). */
-const STRAIN_ELASTICITY_LIMIT = 80.0;
-
-/** Allostatic disease threshold (Load threshold for health decay). */
-const LOAD_DISEASE_THRESHOLD = 500.0;
-
-/** Strain decay coefficient (leaky-integrator feedback). */
-const STRAIN_DECAY = 0.15;
-
-/** Rate at which surplus Strain above elasticity converts to irreversible Load. */
-const LOAD_ACCUMULATION_RATE = 0.05;
-
-/** Rate at which surplus Load above disease threshold decays Health per tick. */
-const HEALTH_DECAY_RATE = 0.02;
+import { physicsConfig } from './physicsConfig.js';
 
 // ── MET Category & Mapping ────────────────────────────────────────────────────
 
@@ -238,13 +212,13 @@ export function computeMetSatietyCost(input: MetInput): MetOutput {
   }
 
   // BMR per tick: weightKg × 1.0 kcal/hr × TICK_DURATION_HRS
-  const bmrKcal = weightKg * 1.0 * TICK_DURATION_HRS;
+  const bmrKcal = weightKg * 1.0 * physicsConfig.tickDurationHrs;
 
   // Total kcal burned this tick
   const kcalBurned = bmrKcal * metMultiplier * ageModifier;
 
   // Convert kcal to satiety points
-  const satietyCost = kcalBurned / SATIETY_KCAL_PER_POINT;
+  const satietyCost = kcalBurned / physicsConfig.satietyKcalPerPoint;
 
   return {
     satietyCost,
@@ -339,20 +313,20 @@ export class AllostaticEngine {
     // Leaky integrator: Cortisol is the forcing signal, 0.15 is the decay rate.
     // Equilibrium reached when dS/dt = 0: S_eq = Cortisol / 0.15 = 6.67 × Cortisol
     // At Cortisol = 15 → S_eq = 100 (cap). At Cortisol = 12 → S_eq = 80 (elasticity limit).
-    this.strain = this.strain + cortisol - (STRAIN_DECAY * this.strain);
+    this.strain = this.strain + cortisol - (physicsConfig.strainDecay * this.strain);
     this.strain = Math.max(0, Math.min(100, this.strain));
 
-    const strainOverElasticityLimit = this.strain > STRAIN_ELASTICITY_LIMIT;
+    const strainOverElasticityLimit = this.strain > physicsConfig.strainElasticityLimit;
 
     // ── Step 2: Irreversible Load ──────────────────────────────────────────
     // Load only accumulates when Strain exceeds the elasticity limit.
     // This is the body's "allostatic overload" — resources are depleted faster
     // than they can be restored, leaving permanent structural damage.
     if (strainOverElasticityLimit) {
-      this.load += (this.strain - STRAIN_ELASTICITY_LIMIT) * LOAD_ACCUMULATION_RATE;
+      this.load += (this.strain - physicsConfig.strainElasticityLimit) * physicsConfig.loadAccumulationRate;
     }
 
-    const loadOverDiseaseThreshold = this.load > LOAD_DISEASE_THRESHOLD;
+    const loadOverDiseaseThreshold = this.load > physicsConfig.loadDiseaseThreshold;
 
     // ── Step 3: Structural Health Decay ───────────────────────────────────
     // Health decay only begins after the disease threshold is breached.
@@ -360,7 +334,7 @@ export class AllostaticEngine {
     // damage (organ stress, immune dysfunction) is irreversible.
     let healthDelta = 0;
     if (loadOverDiseaseThreshold) {
-      healthDelta = -((this.load - LOAD_DISEASE_THRESHOLD) * HEALTH_DECAY_RATE);
+      healthDelta = -((this.load - physicsConfig.loadDiseaseThreshold) * physicsConfig.healthDecayRate);
       // Floor at -2 per tick to prevent single-tick death from extreme load
       healthDelta = Math.max(-2, healthDelta);
     }
@@ -394,20 +368,20 @@ export class AllostaticEngine {
 
   /** Estimated ticks until Load crosses the disease threshold at current Strain. */
   ticksUntilDisease(): number | null {
-    if (this.load >= LOAD_DISEASE_THRESHOLD) return 0;
-    if (!this.strain || this.strain <= STRAIN_ELASTICITY_LIMIT) return null;
-    const loadRatePerTick = (this.strain - STRAIN_ELASTICITY_LIMIT) * LOAD_ACCUMULATION_RATE;
+    if (this.load >= physicsConfig.loadDiseaseThreshold) return 0;
+    if (!this.strain || this.strain <= physicsConfig.strainElasticityLimit) return null;
+    const loadRatePerTick = (this.strain - physicsConfig.strainElasticityLimit) * physicsConfig.loadAccumulationRate;
     if (loadRatePerTick <= 0) return null;
-    return Math.ceil((LOAD_DISEASE_THRESHOLD - this.load) / loadRatePerTick);
+    return Math.ceil((physicsConfig.loadDiseaseThreshold - this.load) / loadRatePerTick);
   }
 
   /**
-   * Cortisol level required to hold Strain at the elasticity limit (80).
+   * Cortisol level required to hold Strain at the elasticity limit.
    * If current Cortisol is above this value, Load is accumulating.
-   *   S_eq = Cortisol / 0.15 = 80  →  Cortisol = 80 × 0.15 = 12
+   *   S_eq = Cortisol / strainDecay = strainElasticityLimit  →  Cortisol = 80 × 0.15 = 12
    */
   static get CORTISOL_ELASTICITY_THRESHOLD(): number {
-    return STRAIN_ELASTICITY_LIMIT * STRAIN_DECAY; // = 12.0
+    return physicsConfig.strainElasticityLimit * physicsConfig.strainDecay;
   }
 }
 

@@ -125,12 +125,12 @@ function SessionNav({ sessionId }: { sessionId: string }) {
       {progressIdx >= artifactsMinIdx ? (
         <Link to={`/session/${sessionId}/artifacts`} className={`nav-item${isOnArtifacts ? ' active' : ''}`}>
           <FileText size={20} />
-          <span>📄 Artifacts</span>
+          <span>⑦ Artifacts</span>
         </Link>
       ) : (
         <div className="nav-item" style={{ opacity: 0.35, cursor: 'not-allowed', pointerEvents: 'none' }}>
           <FileText size={20} />
-          <span>📄 Artifacts</span>
+          <span>⑦ Artifacts</span>
         </div>
       )}
     </div>
@@ -195,7 +195,7 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
               ))}
               <div className="nav-item" style={{ opacity: 0.35, cursor: 'not-allowed', pointerEvents: 'none' }}>
                 <FileText size={20} />
-                <span>📄 Artifacts</span>
+                <span>⑦ Artifacts</span>
               </div>
             </div>
           )}
@@ -209,7 +209,7 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
               style={{ width: '100%', background: 'transparent', border: 'none', cursor: 'pointer', justifyContent: 'flex-start' }}
             >
               <BarChart2 size={22} />
-              <span>📊 Telemetry</span>
+              <span>Telemetry</span>
             </button>
           )}
           <button
