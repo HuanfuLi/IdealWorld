@@ -1,31 +1,33 @@
 # Ideal World
 
-**Ideal World** is a local-first, LLM-powered multi-agent society simulation platform. It models micro-societies by having dozens of distinct LLM-driven "Citizen Agents" interact in turn-based iterations, guided by an omniscient "Central Agent" and a deterministic **Neuro-Symbolic Engine**.
+**Ideal World** is a local-first, LLM-powered multi-agent society simulation platform. It models micro-societies by having dozens of distinct LLM-driven "Citizen Agents" interact in high-resolution turn-based iterations, guided by an omniscient "Central Agent" and a deterministic **Neuro-Symbolic Engine**.
 
 ## Key Features
 
-- **Hybrid Micro-Turn System**: Replaced abstract "years" with "1 Iteration = 1 Week" ticks. Agents now utilize a **Multi-Action Queue** (up to 3 actions per turn) allowing for complex behaviors like "Work, then Buy Food, then Rest."
-- **Neuro-Symbolic Engine**: Combines strict deterministic physics/economic algorithms with emergent LLM psychology. High-level intent is parsed into `ActionCodes`, while material outcomes are calculated by a hard-coded engine.
-- **Empirical Metabolism (MET)**: Replaced flat survival costs with a **Metabolic Equivalent of Task** system. High-intensity labor (e.g., `WORK_HEAVY_MANUAL`) depletes satiety up to 7x faster than `REST`.
-- **Allostatic Load Pipeline**: Replaced simple stress stats with a psychosomatic decay model. Cortisol mathematically converts into reversible **Strain**, which calcifies into irreversible **Allostatic Load** (chronic health damage).
-- **Constant Product AMM**: Eradicated fragile peer-to-peer bartering in favor of a **Constant Product Automated Market Maker ($x \cdot y = k$)** for essential commodities like Food, ensuring constant liquidity and algorithmic pricing.
-- **Stock-Flow Consistent UBI**: Implemented a **2% Demurrage Tax** on wealth that is redistributed as **Universal Basic Income (UBI)** every macro-cycle to prevent extreme wealth stagnation.
-- **Darwinian Humiliation Fallback**: Agents failing to meet basic survival thresholds are "humiliated" by the state—stripped of wealth and force-fed "synthetic slop"—rather than immediately killed, creating a persistent underclass.
-- **Provider-Agnostic LLM Gateway**: Supports Anthropic (Claude), OpenAI, Google (Vertex/Gemini), and local models (via LM Studio/Ollama).
+- **Hybrid Micro-Turn System**: "1 Iteration = 1 Week" ticks. Agents utilize a **Multi-Action Queue** (up to 3 actions per turn) allowing for complex behaviors like "Work, then Buy Food, then Rest."
+- **Neuro-Symbolic Engine**: Combines deterministic physics/economic algorithms with emergent LLM psychology. High-level intent is parsed into `ActionCodes`, while material outcomes are calculated by a hard-coded engine.
+- **HMAS Map-Reduce Architecture**: Optimized for high agent counts (20-150+), utilizing a clustering strategy to process agent intents and group resolutions efficiently.
+- **Empirical Metabolism (MET)**: Caloric burn system where task intensity (`WORK_HEAVY_MANUAL` vs `REST`) and agent characteristics (weight, age) dictate satiety depletion.
+- **Allostatic Load Pipeline**: Psychosomatic decay model where chronic stress (Cortisol) converts into reversible **Strain** and eventually irreversible **Allostatic Load** (chronic health damage).
+- **Constant Product AMM**: Always-liquid algorithmic market maker ($x \cdot y = k$) for commodities like Food, Raw Materials, and Luxury Goods.
+- **Stock-Flow Consistent UBI**: A **2% Demurrage Tax** on wealth redistributed as **Universal Basic Income (UBI)** every macro-cycle to ensure money velocity.
+- **Darwinian Humiliation Fallback**: A survival safety net where destitute agents are "humiliated" (wealth reset, stress spike) rather than immediately removed, maintaining societal pressure.
+- **Provider-Agnostic LLM Gateway**: Supports Anthropic (Claude), OpenAI, Google (Vertex/Gemini), and local models (via Ollama).
 
 ## Project Architecture
 
-### The Three-Stage Iteration Loop
-1. **Cognitive Phase (Pre-Processing)**: Agents retrieve **Subjective Memories** (3D retrieval), run **Directional Economic Reflections**, and update their **Recursive Plans** based on material reality.
-2. **Intent Phase (Parallel)**: Citizen Agents declare their intentions in natural language, which is parsed into an Action Queue.
-3. **Resolution Phase (Serial/Map-Reduce)**: The Central Agent narrates the social outcomes, while the **Physics Engine** calculates deterministic stat deltas, MET metabolism, and AMM market clearing.
+### The Three-Phase Iteration Loop
+1. **Cognitive Phase**: Agents retrieve memories, run directional economic reflections, and update recursive plans.
+2. **Intent Phase (Parallel)**: Citizen Agents declare intentions, parsed into a structured Multi-Action Queue.
+3. **Resolution Phase (Map-Reduce)**: The Central Agent narrates social outcomes, while the **Physics Engine** calculates deterministic deltas (MET, Allostatic Load, AMM clearing).
 
 ## Technical Notes
 
 - **Local-First**: All data is stored in a local SQLite database (`~/.idealworld/idealworld.db`).
+- **Persistence**: AMM reserves and market states are persisted across sessions.
 - **Current Limitations**: 
-  - Allostatic load and AMM reserves are currently stored in volatile memory (reset on server restart).
-  - Agent age and weight are currently hardcoded (database schema updates pending).
+  - Allostatic load values (Strain/Load) are currently stored in volatile memory (reset on server restart).
+  - Agent age and weight are currently using defaults as they are missing from the core database schema.
 
 ## Quick Start
 

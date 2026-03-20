@@ -2,8 +2,10 @@
 
 ## 1. Core Simulation Architecture & Engine Updates
 
+* **HMAS Map-Reduce (Clustering) Architecture:** Implemented a three-stage simulation pipeline (Map, Reduce, Merge) to support up to 150+ agents. This bypasses LLM context limits by clustering agents by role and generating group-level narratives before final synthesis.
 * **Transition to Hybrid Micro-Turn System:** Scaled the simulation time down from "1 Iteration = 1 Year" to "1 Iteration = 1 Week" to allow for higher-resolution decision making.
 * **Action Queue (Multi-Action Turns):** Removed the "1 Action per Iteration" bottleneck. Agents can now generate an array of up to 3 sequential actions per iteration (e.g., `["WORK_AT_ENTERPRISE", "POST_BUY_ORDER", "REST"]`).
+* **AMM Persistence & SFC Resilience:** Implemented `amm_snapshots` in SQLite to ensure Automated Market Maker reserves survive server restarts. Added Stock-Flow Consistent (SFC) drift detection to catch fiat leaks in the circular economy.
 * **Sequential Resolution & Interrupts:** The Symbolic engine now processes actions in an agent's queue sequentially. If physiological thresholds are breached mid-queue (e.g., Health drops below 20 after Action 1), subsequent actions are immediately aborted.
 * **Single-Pass Structured Output:** Deprecated the standalone "Parser Agent" to prevent API/Socket concurrency crashes. LLMs now output `internal_monologue`, `public_narrative`, and `ActionCodes` (as a JSON array) in a single generation tick.
 * **Regime Collapse Fail-State (Early Termination):** Introduced a global circuit breaker. If societal average `Cortisol >= 100` or `Happiness <= 0`, the simulation automatically aborts the main loop, declares the society a failure, and skips directly to the Post-Mortem review.

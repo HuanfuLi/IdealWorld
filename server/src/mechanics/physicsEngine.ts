@@ -43,6 +43,8 @@ export interface PhysicsInput {
   isSabotaged?: boolean;
   /** Phase 3: Whether this agent is under active SUPPRESS enforcement (+cortisol, -happiness). */
   isSuppressed?: boolean;
+  /** True only for the first action in the queue — dopamine decay fires once per week, not per action. */
+  isFirstAction?: boolean;
 }
 
 export interface PhysicsQueueInput {
@@ -88,7 +90,7 @@ function roleIncome(role: string): number {
   const upper = role.toUpperCase();
   if (/LEADER|GOVERNOR|MERCHANT|CHIEF|KING|QUEEN|MAYOR|MINISTER|COMMISSIONER|DIRECTOR/.test(upper)) return physicsConfig.roleIncomeElite;
   if (/ARTISAN|WORKER|FARMER|BUILDER|MINER|SMITH|CARPENTER/.test(upper)) return physicsConfig.roleIncomeArtisan;
-  if (/SCHOLAR|HEALER|PRIEST|TEACHER|MONK|DOCTOR|SAGE|ENGINEER/.test(upper)) return physicsConfig.roleIncomeScholar;
+  if (/SCHOLAR|HEALER|PRIEST|TEACHER|MONK|DOCTOR|SAGE|ENGINEER|SCIENTIST|RESEARCHER|PROFESSOR/.test(upper)) return physicsConfig.roleIncomeScholar;
   return physicsConfig.roleIncomeDefault;
 }
 
@@ -96,7 +98,7 @@ function roleTierLabel(role: string): string {
   const upper = role.toUpperCase();
   if (/LEADER|GOVERNOR|MERCHANT|CHIEF|KING|QUEEN|MAYOR|MINISTER|COMMISSIONER|DIRECTOR/.test(upper)) return 'elite';
   if (/ARTISAN|WORKER|FARMER|BUILDER|MINER|SMITH|CARPENTER/.test(upper)) return 'artisan';
-  if (/SCHOLAR|HEALER|PRIEST|TEACHER|MONK|DOCTOR|SAGE|ENGINEER/.test(upper)) return 'scholar';
+  if (/SCHOLAR|HEALER|PRIEST|TEACHER|MONK|DOCTOR|SAGE|ENGINEER|SCIENTIST|RESEARCHER|PROFESSOR/.test(upper)) return 'scholar';
   return 'default';
 }
 
@@ -130,7 +132,7 @@ export function clampHappinessByPhysiology(
  * Returns a full math trace in result.trace for debugging and the Physics Laboratory UI.
  */
 export function resolveAction(input: PhysicsInput): PhysicsOutput {
-  const { agent, actionCode, actionTarget, allAgents, skills, inventory, economyDeltas, isSabotaged, isSuppressed } = input;
+  const { agent, actionCode, actionTarget, allAgents, skills, inventory, economyDeltas, isSabotaged, isSuppressed, isFirstAction } = input;
   let w = 0, h = 0, hap = 0, cor = 0, dop = 0;
   const trace: string[] = [];
 
@@ -300,24 +302,23 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
       trace.push(`  Δdopamine: +7 (adrenaline rush)`);
       break;
     case 'EMBEZZLE':
-      w = 20;
+      w = 0; // SFC fix: no phantom fiat — wealth gain handled by runner from communal treasury pool
       h = 0;
       hap = 2;
       cor = 20;
       dop = 8;
-      trace.push(`  Δwealth: +20 (skimmed from communal treasury)`);
+      trace.push(`  Δwealth: 0 (treasury deduction applied separately in runner)`);
       trace.push(`  Δhappiness: +2 (fleeting power satisfaction)`);
       trace.push(`  Δcortisol: +20 (extreme legal anxiety)`);
       trace.push(`  Δdopamine: +8 (adrenaline of corruption)`);
       break;
     case 'ADJUST_TAX':
-      w = 15;
+      w = 0; // SFC fix: no phantom fiat — wealth comes only from actual tax collected in runner
       h = 0;
       hap = 3;
       cor = 5;
       dop = 4;
-      trace.push(`  Δwealth: +15 (immediate policy-maker revenue cut)`);
-      trace.push(`  Note: per-agent tax deductions applied separately in runner`);
+      trace.push(`  Δwealth: 0 (actual tax collected applied separately in runner)`);
       trace.push(`  Δhappiness: +3 (satisfaction from exercising control)`);
       trace.push(`  Δcortisol: +5 (fear of backlash)`);
       trace.push(`  Δdopamine: +4 (political power reward)`);
@@ -377,9 +378,12 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
     trace.push(`⚠ Suppression active: Δcortisol +${physicsConfig.suppressionCortisolPenalty}, Δhappiness ${physicsConfig.suppressionHappinessPenalty}`);
   }
 
-  // ── Dopamine decay (hedonic adaptation) ──────────────────────────────
-  dop += physicsConfig.dopamineDecay;
-  trace.push(`Hedonic adaptation: Δdopamine ${physicsConfig.dopamineDecay} (decay)`);
+  // ── Dopamine decay (hedonic adaptation) — once per week, not per action ─
+  // isFirstAction guards this so multi-action queues don't multiply the decay.
+  if (isFirstAction !== false) {
+    dop += physicsConfig.dopamineDecay;
+    trace.push(`Hedonic adaptation: Δdopamine ${physicsConfig.dopamineDecay} (decay)`);
+  }
 
   // ── Pre-clamp summary ────────────────────────────────────────────────
   trace.push(`Pre-clamp: Δwealth=${w.toFixed(3)}, Δhealth=${h.toFixed(3)}, Δhappiness=${hap.toFixed(3)}, Δcortisol=${cor.toFixed(3)}, Δdopamine=${dop.toFixed(3)}`);
@@ -496,13 +500,10 @@ export function resolveActionQueue(input: PhysicsQueueInput): PhysicsQueueOutput
     }
   }
 
-  let foodConsumed = 0;
-  const endingFood = inventory?.food?.quantity ?? 0;
-  if (endingFood > 0) {
-    foodConsumed = 1;
-  } else {
-    healthDelta -= physicsConfig.passiveStarvationHealthPenalty;
-  }
+  // NOTE: Food consumption and starvation penalties are handled exclusively by
+  // applyMETMetabolism in simulationRunner.ts (MET-based physiology). This function
+  // must NOT apply its own starvation penalty — that would cause double-counting.
+  const foodConsumed = 0;
 
   return {
     wealthDelta: clampDelta(wealthDelta),

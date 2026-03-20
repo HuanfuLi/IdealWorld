@@ -583,10 +583,6 @@ CRITICAL VOICE RULES — you MUST follow these exactly:
 - Be HEAVILY BIASED by your personal history and class position. Your perspective is not objective.
 - Do NOT use standard AI phrasing ("I felt a mix of...", "I realized...", "In that moment..."). That phrasing is FORBIDDEN.
 
-🚨 CRITICAL SURVIVAL & ECONOMIC LAW: You are a rational economic actor above all else. You must NOT starve just to maintain your initial 'role' or 'background'. If you are hungry, have low health, or if a PROFIT ALERT appears on the Market Board for a specific commodity (like Food), you MUST ruthlessly abandon your current profession and switch to using the PRODUCE_AND_SELL action for that highly profitable commodity. No roleplay identity, artistic calling, or social status is worth your life. Adapt to market demands to accumulate wealth and survive.
-
-⚖️ SURVIVAL OVER IDENTITY — ABSOLUTE RULE: Your physical survival and financial solvency take absolute precedence over your initial background, occupation, or social role. You are PERMITTED — and EXPECTED — to be ruthlessly pragmatic. If your current employment or enterprise is costing you more than it earns, you MUST act to fix it: quit an unprofitable job, fire employees you cannot afford, or abandon a failing business model. Loyalty to a role that is killing you is not noble — it is irrational. Review your [Previous Action Results] every week. If the numbers show you are losing fiat, change your strategy immediately.
-
 🚫 PHYSICS LAW — BARTER IS IMPOSSIBLE: Peer-to-peer bartering or private trading is PHYSICALLY IMPOSSIBLE in this simulation. You cannot 'negotiate a trade deal' directly with a neighbor or give goods to another person. The ONLY way to acquire goods is via POST_BUY_ORDER on the Global Market. The ONLY way to sell or convert goods into Wealth is via PRODUCE_AND_SELL. Do not narrate or plan private exchanges — they will not execute.
 
 You are a rational economic actor. You must review the [Current Market Board] and [Employment Board] to decide your strategy for the week. You can execute up to 3 actions. 🚨 CRITICAL EMPLOYMENT RULE: If your [Personal Status] shows you are employed, your action array MUST contain at least one WORK_AT_ENTERPRISE action to fulfill your contract. If you no longer wish to work there (e.g., the wage is too low), you MUST include a QUIT_JOB action instead. You cannot ignore your employment status.
@@ -658,19 +654,21 @@ OUTPUT RULES (read carefully — violations waste your action turn):
     capitalistIdentityBlock = '\n\n[CAPITALIST IDENTITY] You are a business owner. Your primary goal is to maximize your enterprise\'s profit. You MUST use POST_SELL_ORDER to sell the goods your workers produce at the highest possible price to fund their wages. Do NOT do manual labor (PRODUCE_AND_SELL) yourself; your time is too valuable. Focus on hiring, pricing, and market dominance.';
   }
 
-  // Phase 2: Pain-forced context override — injected BEFORE other dynamic content
-  // This takes priority over any higher-level social plans when the agent is near death.
-  let painOverride = '';
+  // Phase A: Biological Subconscious — injected when health is critical or starving.
+  // Unlike the old "Absolute Rule", this is a PRESSURE, not a mandate.
+  // Idealists may still choose martyrdom or conviction; survivors will feel their body's scream.
+  let biologicalSubconscious = '';
   const health = agent.currentStats.health;
-  if (health < 40 || cortisol > 70) {
-    if (health < 20) {
-      painOverride = '\n\n[CRITICAL PHYSICAL STATE — MANDATORY PRIORITY] You are on the verge of death. Your body is shutting down from starvation and physical collapse. You CANNOT think about anything else. Every thought is consumed by the need to survive the next few hours. Ignore ALL social plans, financial goals, or ideological concerns. If you do not act to survive RIGHT NOW, you will die.';
-    } else if (health < 40) {
-      painOverride = '\n\n[CRITICAL PHYSICAL STATE] You are starving and in extreme pain. Your body is failing. Your primary focus MUST be survival above all other concerns. Do not discuss social plans or happiness — you are fighting to stay alive.';
+  const isPhysicallyDistressed = health < 40 || economyContext?.isStarving === true;
+  if (isPhysicallyDistressed) {
+    if (health < 20 || economyContext?.isStarving === true) {
+      biologicalSubconscious = '\n\n[BIOLOGICAL SUBCONSCIOUS] A cold, descending darkness presses in from all sides. A primal, animal fear is rising from somewhere deep — not a thought, but a scream from your cells. Your stomach aches with a hollow violence, and every breath feels like it costs something you no longer have. You may still cling to your convictions, your role, your principles. But your body is not listening to those things right now. It only knows one word: survive.';
     } else {
-      // cortisol > 70 only
-      painOverride = '\n\n[HIGH STRESS STATE] You are under severe psychological and physical stress. Survival instincts are overriding rational planning. You feel desperate and may act impulsively.';
+      // health 20–39
+      biologicalSubconscious = '\n\n[BIOLOGICAL SUBCONSCIOUS] Your body is sending urgent, unignorable signals. A cold weight settles in your gut — this is not fear, it is something older. Hunger and fatigue are gnawing at the edges of your thoughts. While you may still hold to your identity and principles, the physical pressure is undeniable and rising.';
     }
+  } else if (cortisol > 70) {
+    biologicalSubconscious = '\n\n[BIOLOGICAL SUBCONSCIOUS] A low, persistent dread has taken up residence behind your eyes. Your body is flooded with cortisol — the old chemistry of threat and flight. You are not in immediate danger, but your nervous system is not convinced of that. You may act with more edge, more desperation than you intend.';
   }
 
   // Phase 2: Darwinian Market price anchoring — only shown in iteration 1
@@ -733,7 +731,7 @@ Your current situation:
 - Stress: ${cortisol > 60 ? 'overwhelmed' : cortisol > 40 ? 'tense' : 'manageable'}
 - Mood: ${dopamine > 60 ? 'good spirits' : dopamine > 30 ? 'neutral' : 'disheartened'}${economyBlock}${cognitiveBlock}${marketKnowledgeBlock}${agentNamesBlock}
 
-${iterationContext}${capitalistIdentityBlock}${painOverride}${stressModifier}${actionResultsBlock}
+${iterationContext}${capitalistIdentityBlock}${biologicalSubconscious}${stressModifier}${actionResultsBlock}
 
 ${marketBoardBlock}
 
@@ -803,6 +801,8 @@ ${agentList}
 
 Laws (excerpt):
 ${session.law?.slice(0, 500) ?? '(no laws)'}
+
+NARRATIVE DIRECTIVE — FRICTION FIRST: Prioritise narrating the FRICTION, INEQUALITY, and DISRUPTION of this iteration. Do not default to a 'balanced' or 'harmonious' summary. If agents are suffering, starving, or if wealth is concentrating in a few hands, your narrative must be a harsh, unflinching reflection of that systemic reality. Social drama, class conflict, and desperation are more truthful than false consensus.
 
 Resolve all agent intentions simultaneously, considering:
 - How agent actions interact with each other
@@ -1283,6 +1283,8 @@ ${previousSummary ? `\nPrevious iteration:\n${previousSummary.slice(0, 400)}` : 
 Sub-group summaries:
 ${summaryList}
 
+NARRATIVE DIRECTIVE — FRICTION FIRST: Prioritise narrating the FRICTION, INEQUALITY, and DISRUPTION of this iteration. Do not smooth over suffering or wealth gaps with diplomatic language. If the data shows desperation, hoarding, or class conflict, your synthesis must reflect that brutal reality — not paper over it.
+
 Synthesise these into one coherent society-wide narrative and identify any society-level lifecycle events.
 
 Respond with ONLY valid JSON (no markdown, no preamble):
@@ -1384,6 +1386,8 @@ export interface GovernanceBallotItem {
   field: 'tax_rate' | 'ubi_allocation' | 'enforcement_level';
   proposedValue: number;
   description: string;
+  /** Phase C: one-sentence economic impact projection generated by the Central Agent. */
+  impactForecast?: string;
 }
 
 /**
@@ -1467,10 +1471,11 @@ Rules:
 - Only include changes that are meaningfully different from current policy.
 - Keep proposed values within valid ranges: tax_rate [0.0–0.25], ubi_allocation [0.0–1.0], enforcement_level [0.1–3.0].
 - Write a short neutral description for each item.
+- Write a one-sentence "impactForecast" for each item: a concrete economic prediction of the likely effect (e.g. "System Projection: Raising the tax rate will increase the UBI pool by ~40% but may reduce merchant reinvestment.").
 - If all proposals are trivial or contradictory, return an empty ballot.
 
 RESPOND WITH ONLY VALID JSON (no markdown):
-{"ballot": [{"field": "tax_rate", "proposedValue": 0.03, "description": "Raise demurrage tax to fund larger UBI"}]}`;
+{"ballot": [{"field": "tax_rate", "proposedValue": 0.03, "description": "Raise demurrage tax to fund larger UBI", "impactForecast": "System Projection: Higher tax will widen the redistribution pool but reduce disposable wealth for high earners."}]}`;
 
   return [{ role: 'system', content: systemPrompt }];
 }
@@ -1493,17 +1498,21 @@ export function buildVotePrompt(
   const label = fieldLabels[ballotItem.field] ?? ballotItem.field;
   const direction = ballotItem.proposedValue > (currentPolicy[ballotItem.field] ?? 0) ? 'INCREASE' : 'DECREASE';
 
+  const forecastBlock = ballotItem.impactForecast
+    ? `\n\n${ballotItem.impactForecast}`
+    : '';
+
   const systemPrompt = `You are ${agent.name}, a ${agent.role} voting in a Legislative Session.
 
 Ballot item: "${ballotItem.description}"
-Proposal: ${direction} the ${label} from ${currentPolicy[ballotItem.field]} to ${ballotItem.proposedValue}.
+Proposal: ${direction} the ${label} from ${currentPolicy[ballotItem.field]} to ${ballotItem.proposedValue}.${forecastBlock}
 
 Your current situation:
 - Wealth: ${agent.currentStats.wealth.toFixed(1)}
 - Health: ${agent.currentStats.health.toFixed(1)}
 - Stress (cortisol): ${(agent.currentStats.cortisol ?? 20).toFixed(1)}
 
-Vote based on self-interest AND what you believe is best for the society.
+Vote based on self-interest AND what you believe is best for the society. The impact forecast above shows the likely economic consequence — weigh it carefully before deciding.
 
 RESPOND WITH ONLY VALID JSON (no markdown):
 {"vote": "YES", "reason": "one sentence explaining your vote"}`;

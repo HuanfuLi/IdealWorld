@@ -190,5 +190,13 @@ export function runMigrations() {
     sqlite.exec(`ALTER TABLE agent_intents ADD COLUMN action_queue TEXT;`);
   } catch { /* column already exists */ }
 
+  // Allostatic state persistence: adds physiological strain/load columns to agents
+  try {
+    sqlite.exec(`ALTER TABLE agents ADD COLUMN allostatic_strain REAL NOT NULL DEFAULT 0;`);
+  } catch { /* column already exists */ }
+  try {
+    sqlite.exec(`ALTER TABLE agents ADD COLUMN allostatic_load REAL NOT NULL DEFAULT 0;`);
+  } catch { /* column already exists */ }
+
   console.log('Database migrations applied.');
 }

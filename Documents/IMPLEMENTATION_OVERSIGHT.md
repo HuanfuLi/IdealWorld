@@ -61,15 +61,25 @@ Following a re-examination of the codebase after the "implementation fix" and th
 
 ---
 
+### ✅ Resolved: HMAS Map-Reduce (Clustering) Architecture
+*   **Status:** Fully Implemented in `simulationRunner.ts`.
+*   **Observation:** The simulation now supports 150+ agents by clustering them by role and performing a Map-Reduce narrative synthesis.
+
+---
+
 ## 4. Macroeconomics & Market Mechanics
 
 ### ✅ Resolved: Constant Product Automated Market Maker (AMM)
-*   **Status:** Integrated for Food trades.
-*   **Observation:** `simulationRunner.ts` uses `AutomatedMarketMaker` for food-related actions, providing algorithmic liquidity.
+*   **Status:** Integrated for Food and Commodity trades.
+*   **Observation:** `simulationRunner.ts` uses `AutomatedMarketMaker` for food, raw materials, and luxury goods, providing algorithmic liquidity.
 
-### ⚠️ Partial: Stock-Flow Consistent UBI (Demurrage Tax) & Persistence
-*   **Status:** Integrated but transient.
-*   **Observation:** `computeDemurrageCycle` is called in `simulationRunner.ts`, but AMM reserves are stored in a volatile registry and **NOT persisted to the database**.
+### ✅ Resolved: AMM Persistence & SFC Resilience
+*   **Status:** Implemented via `amm_snapshots` table.
+*   **Observation:** AMM reserves are now persisted to the SQLite database every iteration, with a vacuum process to manage growth. Stock-Flow Consistent (SFC) drift detection is active.
+
+### ⚠️ Partial: Stock-Flow Consistent UBI (Demurrage Tax)
+*   **Status:** Integrated in `simulationRunner.ts`.
+*   **Observation:** `computeDemurrageCycle` is called every macro-cycle (10 iterations) to redistribute wealth via a 2% tax.
 
 ---
 

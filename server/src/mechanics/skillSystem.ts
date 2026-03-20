@@ -153,12 +153,14 @@ export function processSkills(
     for (const category of SKILL_CATEGORIES) {
         const entry = skills[category];
 
-        // XP decay
-        entry.experience = Math.max(0, entry.experience - XP_DECAY_PER_ITERATION);
-
-        // Level decay for unused skills (not the ones just exercised)
+        // XP decay — skip for skills exercised this action (they just gained XP)
         const isExercised =
             mapping?.primary === category || mapping?.secondary === category;
+        if (!isExercised) {
+            entry.experience = Math.max(0, entry.experience - XP_DECAY_PER_ITERATION);
+        }
+
+        // Level decay for unused skills only
         if (!isExercised) {
             entry.level = Math.max(MIN_LEVEL, entry.level - LEVEL_DECAY_RATE);
         }

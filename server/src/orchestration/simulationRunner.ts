@@ -423,52 +423,68 @@ function applyMETMetabolism(
     metCategory,
     allostaticState: { allostaticStrain: 0, allostaticLoad: 0 }, // allostatic handled separately
   });
+  // Use Math.round — ceil would charge agents up to 2× for fractional costs (e.g. 1.05 → 2).
   const satietyCost = Math.max(1, Math.round(metResult.satietyCost));
 
-  // ── Consume food proportional to MET demand ──────────────────────────────
+  // ── Fulfill metabolic demand: inventory first, then AMM auto-buy, then penalties ──
+  // Order matters: attempt auto-buy BEFORE applying starvation penalties so agents
+  // with wealth are never penalised for a gap that the market can immediately cover.
   state.caloriesBurned += satietyCost;
-  if (state.inventory.food.quantity >= satietyCost) {
-    state.inventory.food.quantity -= satietyCost;
-    state.events.push(`Consumed ${satietyCost} food (${metCategory}, ×${metResult.met.metMultiplier.toFixed(2)} MET)`);
-  } else if (state.inventory.food.quantity > 0) {
-    // Partial nutrition — hunger proportional to deficit
-    const available = state.inventory.food.quantity;
-    state.inventory.food.quantity = 0;
-    const deficitRatio = (satietyCost - available) / satietyCost;
-    state.healthDelta -= 5 * deficitRatio;
-    state.cortisolDelta += 8 * deficitRatio;
-    state.events.push(`Partial nutrition: ${available}/${satietyCost} food (hungry)`);
-  } else {
-    // Full starvation
-    state.healthDelta -= 10;
-    state.cortisolDelta += 15;
-    state.events.push('Starvation — no food available');
-  }
 
-  // ── Auto-eat to full: if satiety deficit remains and agent has wealth, auto-buy from AMM ──
-  const ammForAutoEat = sessionAMMRegistry.get(sessionId);
-  if (ammForAutoEat && state.inventory.food.quantity < satietyCost) {
-    const foodsNeeded = Math.max(0, satietyCost - state.inventory.food.quantity);
-    if (foodsNeeded > 0) {
-      const fiatCost = ammForAutoEat.fiatCostForFood(foodsNeeded);
+  let foodToConsume = satietyCost;
+
+  // Step 1: eat from inventory
+  const foodFromInventory = Math.min(state.inventory.food.quantity, foodToConsume);
+  state.inventory.food.quantity -= foodFromInventory;
+  foodToConsume -= foodFromInventory;
+
+  // Step 2: if still hungry, auto-buy the remaining deficit from the AMM.
+  // If the AMM can't fill the full request (low reserves), fall back to buying
+  // the maximum available so agents aren't forced into full starvation when
+  // partial food is on offer.
+  let foodFromAMM = 0;
+  if (foodToConsume > 0) {
+    const ammForAutoEat = sessionAMMRegistry.get(sessionId);
+    if (ammForAutoEat) {
       const availableWealth = agent.currentWealth + state.wealthDelta;
-      if (fiatCost !== null && availableWealth >= fiatCost) {
-        const receipt = ammForAutoEat.executeBuy(fiatCost, iterationNumber);
-        if (receipt.success) {
-          const buyQuote = receipt.quote as import('../mechanics/automatedMarketMaker.js').BuyQuote;
-          const foodReceived = Math.floor(buyQuote.foodOut);
-          state.inventory.food.quantity += foodReceived;
-          state.wealthDelta -= fiatCost;
-          state.events.push(`Auto-bought ${foodReceived} food from AMM for ${fiatCost.toFixed(1)} fiat (metabolic need)`);
-          // Now consume the newly purchased food
-          if (state.inventory.food.quantity >= satietyCost) {
-            state.inventory.food.quantity -= satietyCost;
-          } else {
-            state.inventory.food.quantity = 0;
+      // Attempt full purchase; fall back to maximum buyable if AMM reserves are insufficient.
+      const requestedUnits = foodToConsume;
+      const maxBuyable = ammForAutoEat.maxBuyableFood();
+      const unitsToAttempt = ammForAutoEat.fiatCostForFood(requestedUnits) !== null
+        ? requestedUnits
+        : Math.min(requestedUnits, maxBuyable);
+      if (unitsToAttempt > 0) {
+        const fiatCost = ammForAutoEat.fiatCostForFood(unitsToAttempt);
+        if (fiatCost !== null && availableWealth >= fiatCost) {
+          const receipt = ammForAutoEat.executeBuy(fiatCost, iterationNumber);
+          if (receipt.success) {
+            const buyQuote = receipt.quote as import('../mechanics/automatedMarketMaker.js').BuyQuote;
+            foodFromAMM = buyQuote.foodOut;
+            state.wealthDelta -= fiatCost;
+            foodToConsume = Math.max(0, foodToConsume - foodFromAMM);
+            state.events.push(`Auto-bought ${foodFromAMM.toFixed(1)} food from AMM for ${fiatCost.toFixed(1)} fiat (metabolic need)`);
           }
         }
       }
     }
+  }
+
+  // Step 3: apply penalties only for what remains unfulfilled after auto-buy
+  if (foodToConsume <= 0) {
+    // Fully fed
+    const ammNote = foodFromAMM > 0 ? ', AMM top-up' : '';
+    state.events.push(`Consumed ${satietyCost} food (${metCategory}, ×${metResult.met.metMultiplier.toFixed(2)} MET${ammNote})`);
+  } else if (foodToConsume < satietyCost) {
+    // Partial nutrition — scale penalties to actual deficit fraction
+    const deficitRatio = foodToConsume / satietyCost;
+    state.healthDelta -= 5 * deficitRatio;
+    state.cortisolDelta += 8 * deficitRatio;
+    state.events.push(`Partial nutrition: ${(satietyCost - foodToConsume).toFixed(0)}/${satietyCost} food (hungry)`);
+  } else {
+    // Full starvation — no food from any source
+    state.healthDelta -= 10;
+    state.cortisolDelta += 15;
+    state.events.push('Starvation — no food available');
   }
 }
 
@@ -908,6 +924,19 @@ export async function runSimulation(sessionId: string, totalIterations: number):
 
     let agents = await agentRepo.listBySession(sessionId);
     let previousSummary: string | null = null;
+
+    // Seed allostatic states from DB so pause/resume preserves physiological history.
+    // Without this, any restart or resume would reset strain/load to 0, breaking long-term decay.
+    {
+      const alloMap = new Map<string, AllostaticState>();
+      for (const agent of agents) {
+        alloMap.set(agent.id, {
+          allostaticStrain: agent.allostaticStrain ?? 0,
+          allostaticLoad: agent.allostaticLoad ?? 0,
+        });
+      }
+      sessionAllostaticStates.set(sessionId, alloMap);
+    }
 
     // Phase 2: Track active sabotage effects → targetAgentId → remaining iterations
     const sabotageRegistry = new Map<string, number>();
@@ -1452,6 +1481,30 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       // Phase Sheriff C: accumulated seized wealth to redistribute as UBI at end of iteration
       let seizedWealthPool = 0;
 
+      // ── Ghost Enterprise Cleanup: dissolve enterprises whose owner died in a prior iteration ──
+      // weekStateMap only contains alive agents; if an owner is absent, they are dead.
+      // Without this, dead owners leave their enterprises running forever with no
+      // bankruptcy event, no worker notifications, and no registry cleanup.
+      {
+        const aliveAgentIds = new Set(aliveAgents.map(a => a.id));
+        for (const [enterpriseId, enterprise] of enterpriseRegistry) {
+          if (aliveAgentIds.has(enterprise.ownerId)) continue; // owner alive — normal path
+          // Owner is dead: dissolve enterprise and release all employees
+          for (const [employeeId] of enterprise.employees) {
+            const empRecord = employmentRegistry.get(employeeId);
+            if (!empRecord) continue;
+            const empState = weekStateMap.get(employeeId);
+            if (empState) {
+              empState.cortisolDelta += 20;
+              empState.happinessDelta -= 15;
+              empState.events.push(`Your employer died — enterprise ${enterpriseId} dissolved, you are now unemployed`);
+              empState.employer_id = null;
+            }
+            employmentRegistry.delete(employeeId);
+          }
+          enterpriseRegistry.delete(enterpriseId);
+        }
+      }
 
       for (const agent of aliveAgents) {
         const weekState = weekStateMap.get(agent.id)!;
@@ -1463,7 +1516,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         let runningCortisol = agent.currentStats.cortisol ?? 20;
         let runningDopamine = agent.currentStats.dopamine ?? 50;
 
-        for (const action of queue) {
+        for (const [actionIndex, action] of queue.entries()) {
           const rawTarget = action.parameters?.target ?? action.parameters?.agent_id;
           const targetText = typeof rawTarget === 'string' ? rawTarget.toLowerCase() : '';
           const targetAgent = aliveAgents.find(a => a.id === rawTarget || a.name.toLowerCase() === targetText);
@@ -1503,6 +1556,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             economyDeltas: economyDelta,
             isSabotaged: sabotageRegistry.has(agent.id),
             isSuppressed: suppressRegistry.has(agent.id),
+            isFirstAction: actionIndex === 0,
           });
 
           weekState.executedActions.push(action);
@@ -1561,6 +1615,22 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       // ── Non-food order book matching (raw_materials, tools, luxury_goods) ─
       // Food trades were executed immediately via AMM above; only non-food
       // orders remain in the order book and require peer matching.
+      //
+      // SYSTEM_NPC liquidity: inject a guaranteed floor-price buy for raw_materials
+      // so producers can always liquidate their stock even if no citizen wants to buy.
+      // This prevents the "frozen market" failure mode where all agents overproduce
+      // raw_materials but the order book has no buyers, collapsing revenue to zero.
+      if (aliveAgents.length > 0) {
+        orderBook.submitOrder({
+          sessionId,
+          agentId: 'SYSTEM_NPC',
+          side: 'buy',
+          itemType: 'raw_materials',
+          price: 2,
+          quantity: aliveAgents.length * 10,
+          iterationPlaced: iterNum,
+        });
+      }
       const trades = orderBook.matchOrders();
       for (const trade of trades) {
         const buyerState = weekStateMap.get(trade.buyerId);
@@ -1693,6 +1763,49 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         if (taxerState) taxerState.wealthDelta += actualTaxCollected;
       }
 
+      // ── EMBEZZLE Settlement: skim communal pool pro-rata from all other agents ──
+      // SFC-correct: wealth is redistributed, not created. Each embezzler draws up to
+      // 20 fiat spread evenly across all other alive agents (capped by their available wealth).
+      {
+        for (const intent of intents) {
+          const embezzleActions = intent.actions?.filter(a => a.actionCode === 'EMBEZZLE') ?? [];
+          if (embezzleActions.length === 0) continue;
+          const embezzlerState = weekStateMap.get(intent.agentId);
+          if (!embezzlerState) continue;
+          const EMBEZZLE_TARGET = 20 * embezzleActions.length;
+          const contributors = aliveAgents.filter(a => a.id !== intent.agentId);
+          if (contributors.length === 0) continue;
+          const perContributor = EMBEZZLE_TARGET / contributors.length;
+          let totalEmbezzled = 0;
+          for (const contributor of contributors) {
+            const cState = weekStateMap.get(contributor.id);
+            if (!cState) continue;
+            const available = Math.max(0, contributor.currentStats.wealth + cState.wealthDelta);
+            const deducted = Math.min(perContributor, available);
+            cState.wealthDelta -= deducted;
+            totalEmbezzled += deducted;
+          }
+          embezzlerState.wealthDelta += totalEmbezzled;
+          embezzlerState.events.push(`Embezzled ${totalEmbezzled.toFixed(1)} fiat from communal pool (spread across ${contributors.length} agents)`);
+        }
+      }
+
+      // ── AMM Famine Reserve: ensure minimum food supply before metabolism ───
+      // Equivalent to the "sys_farm" in the physics sandbox: injects a small
+      // background food production into the AMM so the auto-buy in applyMETMetabolism
+      // always finds some supply, preventing complete market deadlock.
+      // Injection = 1 food unit per alive agent (baseline subsistence floor).
+      {
+        const primaryAMM = sessionAMMRegistry.get(sessionId);
+        if (primaryAMM && aliveAgents.length > 0) {
+          const foodReserve = primaryAMM.currentFoodReserve;
+          const minReserve = aliveAgents.length * 2;
+          if (foodReserve < minReserve) {
+            primaryAMM.injectGoodsReserve(minReserve - foodReserve);
+          }
+        }
+      }
+
       // ── MET Metabolism: replace flat -1 food with physiological depletion ─
       for (const agent of aliveAgents) {
         const weekState = weekStateMap.get(agent.id)!;
@@ -1780,7 +1893,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         // Replace or prepend food entry
         const withoutFood = latestMarketBoard.filter(e => e.itemType !== 'food');
         // Compute profit signal for PRODUCE_AND_SELL food
-        const BASE_FOOD_PRODUCTION = 4;
+        const BASE_FOOD_PRODUCTION = 20; // must match BASE_PRODUCE_QUANTITY in the enterprise action block above
         const INITIAL_FOOD_SPOT_PRICE = 6.0;
         const priceRatio = ammFoodPrice / INITIAL_FOOD_SPOT_PRICE;
         let foodProfitAlert: string | undefined;
@@ -1844,6 +1957,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           newHealth = 30;
           newWealth = 0;
           newCortisol = 100;
+          // Re-clamp happiness with the new physiology: health=30, cortisol=100 → maxAllowed=0
+          newHappiness = clampHappinessByPhysiology(newHappiness, newHealth, newCortisol);
         }
 
         // Controlled Variable Method: absolute locks restore initial stat values
@@ -1982,8 +2097,12 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         const bankruptcyNote = bankruptciesThisIter > 0
           ? ` ${bankruptciesThisIter} enterprise${bankruptciesThisIter > 1 ? 's' : ''} went bankrupt this week, causing a spike in unemployment.`
           : '';
+        const ammForMetrics = sessionAMMRegistry.get(sessionId);
+        const ammNote = ammForMetrics
+          ? ` Food market: ${ammForMetrics.currentFoodReserve.toFixed(1)} units in reserve, spot price ${ammForMetrics.spotPrice.toFixed(2)} fiat/food.`
+          : '';
         sessionIterationMetrics.set(sessionId,
-          `System Metrics (iteration ${iterNum}): ${totalWorked}/${aliveAgents.length} agents successfully worked. ${unemployedAgents.length} total unemployed. Average unemployed wealth: ${avgUnemployedWealth}.${bankruptcyNote}`
+          `System Metrics (iteration ${iterNum}): ${totalWorked}/${aliveAgents.length} agents successfully worked. ${unemployedAgents.length} total unemployed. Average unemployed wealth: ${avgUnemployedWealth}.${bankruptcyNote}${ammNote}`
         );
       }
 
@@ -2023,10 +2142,9 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           const tolerance = aliveAgents.length * 0.01;
           // Only flag unexpected drift — legitimate fiat growth from WORK wages is much larger,
           // so we bound by a fraction of per-agent rounding budget, not absolute change.
-          if (Math.abs(sfcDrift) < tolerance && sfcDrift !== 0) {
-            // Small unexpected drift: IEEE-754 artefact — log at trace level
-          } else if (Math.abs(sfcDrift) > 0.01 && aliveAgents.length === 0) {
-            console.warn(`[SFC] iter=${iterNum}: drift=${sfcDrift.toFixed(6)} with 0 alive agents — possible ghost fiat`);
+          if (Math.abs(sfcDrift) > tolerance) {
+            const agentNote = aliveAgents.length === 0 ? 'with 0 alive agents' : `with ${aliveAgents.length} alive agents`;
+            console.warn(`[SFC] iter=${iterNum}: drift=${sfcDrift.toFixed(6)} ${agentNote} — possible unaccounted fiat creation or destruction`);
           }
         }
         sfcPrevTotalFiat = totalFiatSupply;
@@ -2042,6 +2160,18 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         }
         if (deaths.length > 0) {
           agentRepo.bulkMarkDead(deaths);
+        }
+        // Persist allostatic strain/load alongside stats so restarts resume correctly
+        const alloStates = sessionAllostaticStates.get(sessionId);
+        if (alloStates && alloStates.size > 0) {
+          const alloUpdates = aliveAgents
+            .map(agent => {
+              const state = alloStates.get(agent.id);
+              if (!state) return null;
+              return { id: agent.id, allostaticStrain: state.allostaticStrain, allostaticLoad: state.allostaticLoad };
+            })
+            .filter((u): u is { id: string; allostaticStrain: number; allostaticLoad: number } => u !== null);
+          agentRepo.bulkUpdateAllostaticStates(alloUpdates);
         }
       })();
 

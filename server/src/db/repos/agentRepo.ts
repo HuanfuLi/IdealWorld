@@ -37,6 +37,8 @@ function rowToAgent(row: typeof agents.$inferSelect): Agent {
     type: row.type,
     bornAtIteration: row.bornAtIteration ?? null,
     diedAtIteration: row.diedAtIteration ?? null,
+    allostaticStrain: row.allostaticStrain ?? 0,
+    allostaticLoad: row.allostaticLoad ?? 0,
   };
 }
 
@@ -125,6 +127,25 @@ export const agentRepo = {
           dopamine: clamp(u.dopamine ?? 50),
         };
         stmt.run(JSON.stringify(stats), u.id);
+      }
+    });
+    run(updates);
+  },
+
+  /**
+   * Batch-update allostatic strain and load for multiple agents in a single transaction.
+   * Synchronous (uses better-sqlite3 directly) so it can be called inside a sqlite.transaction.
+   */
+  bulkUpdateAllostaticStates(
+    updates: Array<{ id: string; allostaticStrain: number; allostaticLoad: number }>
+  ): void {
+    if (updates.length === 0) return;
+    const stmt = sqlite.prepare(
+      `UPDATE agents SET allostatic_strain = ?, allostatic_load = ? WHERE id = ?`
+    );
+    const run = sqlite.transaction((items: typeof updates) => {
+      for (const u of items) {
+        stmt.run(u.allostaticStrain, u.allostaticLoad, u.id);
       }
     });
     run(updates);

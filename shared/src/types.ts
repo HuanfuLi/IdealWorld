@@ -81,6 +81,10 @@ export interface Agent {
   age?: number;
   /** Agent body weight in kg — used by the MET satiety-cost formula (BMR baseline). */
   weightKg?: number;
+  /** Reversible accumulated physiological stress — persisted to DB for pause/resume continuity. */
+  allostaticStrain?: number;
+  /** Irreversible physiological wear accumulating over long stressful simulations. */
+  allostaticLoad?: number;
 }
 
 /** @alias Agent — kept for backward compat with Phase 1/2 imports */

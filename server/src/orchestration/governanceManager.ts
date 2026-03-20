@@ -192,6 +192,7 @@ export async function runGovernanceCycle(params: {
           field: item.field as GovernanceBallotItem['field'],
           proposedValue: clampPolicyValue(item.field as GovernanceBallotItem['field'], item.proposedValue),
           description: String(item.description ?? '').slice(0, 200),
+          impactForecast: typeof item.impactForecast === 'string' ? item.impactForecast.slice(0, 300) : undefined,
         }))
         .filter(item => isFinite(item.proposedValue));
     }
