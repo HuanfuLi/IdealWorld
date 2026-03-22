@@ -7,7 +7,7 @@
 - **Architecture**: Monorepo using npm workspaces (`web`, `server`, `shared`).
 - **Backend**: Node.js (Express), TypeScript, SQLite (Drizzle ORM), multi-provider LLM gateway (Anthropic, OpenAI, Gemini, Vertex).
 - **Frontend**: React 19, TypeScript, Zustand (State Management), Tailwind CSS, Vite.
-- **Data Storage**: Local SQLite database stored in `~/.idealworld/idealworld.db` with async batch flushing.
+- **Data Storage**: Local SQLite database stored in `~/.idealworld/idealworld.db` with async batch flushing and full physiological/economic persistence.
 - **Communication**: Server-Sent Events (SSE) for real-time simulation updates.
 - **Optimization**: HMAS Map-Reduce architecture for high agent counts, Prompt Caching (Anthropic), and rAF-based UI debouncing.
 
@@ -67,8 +67,9 @@ The simulation follows a structured 7-stage lifecycle:
 - **Resolution Phase**: The **Physics Engine** calculates exact numerical changes. This includes:
   - **MET Metabolism**: Caloric burn based on task intensity and age/weight modifiers.
   - **Allostatic Load**: Psychosomatic decay where chronic stress (Cortisol) leads to permanent health damage.
-  - **Constant Product AMM ($x \cdot y = k$)**: Algorithmic market maker for commodity trading (Food, Raw Materials, Luxury).
-  - **Demurrage & UBI**: 2% wealth tax redistributed to prevent liquidity traps.
+  - **Constant Product AMM ($x \cdot y = k$)**: Algorithmic market maker for commodity trading.
+  - **SFC Compliance**: A zero-sum economy using a **State Treasury** to fund standalone work, ensuring no fiat is created or destroyed without a corresponding pool transfer.
+  - **Narrative Grounding**: Physics engine "traces" are injected back into the LLM context to synchronize the story with the math.
 
 ### Coding Style & Standards
 - **Local-First**: All data stays on the user's machine. Configuration is stored in `~/.idealworld/config.json`.

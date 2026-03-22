@@ -4,7 +4,10 @@
       "Bash(npx tsc:*)",
       "Bash(node:*)",
       "Bash(npx:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(find:*)",
+      "Bash(cmd /c \"npm run build -w server\" 2>&1)",
+      "Bash(cmd /c \"npm run build -w web\" 2>&1)"
     ]
   }
 }
