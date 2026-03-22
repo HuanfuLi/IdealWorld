@@ -49,14 +49,14 @@ import {
 import { runWithConcurrency } from './concurrencyPool.js';
 import { asyncLogFlusher } from '../db/asyncLogFlusher.js';
 import { resolveAction, clampHappinessByPhysiology } from '../mechanics/physicsEngine.js';
+import { physicsConfig } from '../mechanics/physicsConfig.js';
 import { type ActionCode, getAllowedActions, getRoleTier } from '../mechanics/actionCodes.js';
 import { clusterByRole } from './clustering.js';
 import { retryWithHealing } from '../llm/retryWithHealing.js';
 // Phase 1 Economy imports
-import { cleanupSessionEconomy } from '../mechanics/economyEngine.js';
-import { getOrderBook } from '../mechanics/orderBook.js';
+import { getOrderBook, clearOrderBook } from '../mechanics/orderBook.js';
 import { economyRepo, type AgentEconomyState } from '../db/repos/economyRepo.js';
-import type { Inventory, ItemType, MarketState, PriceIndex, SkillMatrix, TelemetryLog } from '@idealworld/shared';
+import type { Agent, IterationStats, Inventory, ItemType, MarketState, PriceIndex, SkillMatrix, TelemetryLog } from '@idealworld/shared';
 import { DEFAULT_SKILL_MATRIX, DEFAULT_INVENTORY } from '@idealworld/shared';
 import { getActionMultiplier, getSkillMultiplier, processSkills } from '../mechanics/skillSystem.js';
 // Phase 3 Cognitive Engine imports
@@ -83,6 +83,7 @@ import {
   type AgentWealth as AMMAgentWealth,
   type MultiAMMItemType,
 } from '../mechanics/automatedMarketMaker.js';
+import { simulationManager } from './simulationManager.js';
 
 /**
  * Thrown when intent parsing is exhausted (all retries used) for a specific agent.
@@ -120,10 +121,8 @@ function gini(values: number[]): number {
       sum += Math.abs(values[i] - values[j]);
     }
   }
-  return Math.round((sum / (2 * n * n * mean)) * 100) / 100;
+  return Math.round((sum / (2 * n * n * mean)) * 1000) / 1000;
 }
-import { simulationManager } from './simulationManager.js';
-import type { Agent, IterationStats } from '@idealworld/shared';
 
 function computeStats(agents: Agent[], iterationNumber: number): IterationStats {
   const alive = agents.filter(a => a.isAlive);
@@ -233,6 +232,11 @@ const sessionTelemetryLogs = new Map<string, TelemetryLog[]>();
 // Stock-Flow Consistency (SFC) tracking: detect fiat leaks/minting between iterations.
 // The economy is fully closed-loop — no state fiat injection. Total must remain constant.
 const sessionSFCTracking = new Map<string, { initialFiat: number }>();
+// D1: State Treasury — funds standalone WORK income. Initialized at session start.
+// Treasury is SFC-compliant: included in the SFC assertion so total fiat is conserved.
+const sessionStateTreasury = new Map<string, number>();
+// D4: Last iteration's physics trace log — injected into next iteration's resolution prompt.
+const sessionLastPhysicsTraces = new Map<string, string>();
 
 /**
  * Returns the telemetry log array for a session.
@@ -992,6 +996,39 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       if (genesisUpdates.length > 0) {
         await economyRepo.bulkUpsertAgentEconomy(genesisUpdates);
       }
+      // B4: Assign role-differentiated starting inventories for fresh sessions
+      const roleInventoryMap = (role: string): Partial<Record<string, number>> => {
+        const r = role.toLowerCase();
+        if (/farmer|gatherer|herder/.test(r)) return { food: 10, raw_materials: 2 };
+        if (/artisan|craftsman|blacksmith|carpenter|smith/.test(r)) return { food: 3, tools: 5, raw_materials: 5 };
+        if (/merchant|trader|shopkeeper/.test(r)) return { food: 3, tools: 1, raw_materials: 2, luxury_goods: 3 };
+        if (/scholar|healer|teacher|doctor|priest/.test(r)) return { food: 3, luxury_goods: 5 };
+        if (/miner|builder|laborer|worker/.test(r)) return { food: 5, tools: 2, raw_materials: 4 };
+        return { food: 5 };
+      };
+      const b4Updates: Array<{ agentId: string; sessionId: string; skills: SkillMatrix; inventory: Inventory; lastUpdated: number }> = [];
+      for (const agent of citizenAgents) {
+        const existing = agentEconomyMap.get(agent.id);
+        if (!existing) continue;
+        const roleItems = roleInventoryMap(agent.role);
+        const updatedInventory = { ...existing.inventory } as Record<string, { quantity: number }>;
+        for (const [item, qty] of Object.entries(roleItems)) {
+          if (qty !== undefined) {
+            updatedInventory[item] = { ...(updatedInventory[item] ?? {}), quantity: qty };
+          }
+        }
+        agentEconomyMap.set(agent.id, { ...existing, inventory: updatedInventory as Inventory });
+        b4Updates.push({
+          agentId: agent.id,
+          sessionId,
+          skills: existing.skills,
+          inventory: updatedInventory as Inventory,
+          lastUpdated: Date.now(),
+        });
+      }
+      if (b4Updates.length > 0) {
+        await economyRepo.bulkUpsertAgentEconomy(b4Updates);
+      }
       // Apply wealth floor: any agent below 20 wealth gets topped up
       const wealthFloorUpdates = agents
         .filter(a => a.isAlive && !a.isCentralAgent && a.currentStats.wealth < 20)
@@ -1030,6 +1067,17 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         sessionAMMRegistry.set(sessionId, amm);
       }
 
+      // D1: Initialise State Treasury for standalone WORK income (SFC-compliant).
+      // Restored from the latest AMM snapshot on process restart; only seeds fresh
+      // at 500 fiat per agent when no prior snapshot exists.
+      if (!sessionStateTreasury.has(sessionId)) {
+        const restoredTreasury = savedAMM?.treasury;
+        sessionStateTreasury.set(
+          sessionId,
+          restoredTreasury !== undefined ? restoredTreasury : Math.max(citizenAgents.length, 1) * 500,
+        );
+      }
+
       if (multiMissing) {
         const multiAMMs = createMultiCommodityAMMs(Math.max(citizenAgents.length, 1), avgWealth, startIter);
         if (savedAMM?.multi) {
@@ -1066,13 +1114,15 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       // ── Abort check ──────────────────────────────────────────────────────
       if (simulationManager.isAbortRequested(sessionId)) {
         asyncLogFlusher.stop();
-        cleanupSessionEconomy(sessionId);
+        clearOrderBook(sessionId);
         cleanupSessionCognition(sessionId);
         sessionAMMRegistry.delete(sessionId);
         sessionMultiAMMRegistry.delete(sessionId);
         sessionAllostaticStates.delete(sessionId);
         sessionIterationMetrics.delete(sessionId);
         sessionSFCTracking.delete(sessionId);
+        sessionStateTreasury.delete(sessionId);
+        sessionLastPhysicsTraces.delete(sessionId);
         if (simulationManager.isResetRequested(sessionId)) {
           // The abort-reset endpoint already cleaned the DB and set the stage.
           // Just exit — do not overwrite the stage with 'simulation-complete'.
@@ -1103,8 +1153,15 @@ export async function runSimulation(sessionId: string, totalIterations: number):
 
         if (simulationManager.isAbortRequested(sessionId)) {
           asyncLogFlusher.stop();
-          cleanupSessionEconomy(sessionId);
+          clearOrderBook(sessionId);
           cleanupSessionCognition(sessionId);
+          sessionAMMRegistry.delete(sessionId);
+          sessionMultiAMMRegistry.delete(sessionId);
+          sessionAllostaticStates.delete(sessionId);
+          sessionIterationMetrics.delete(sessionId);
+          sessionSFCTracking.delete(sessionId);
+          sessionStateTreasury.delete(sessionId);
+          sessionLastPhysicsTraces.delete(sessionId);
           if (simulationManager.isResetRequested(sessionId)) {
             simulationManager.broadcast(sessionId, { type: 'aborted-reset' });
           } else {
@@ -1164,24 +1221,66 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       );
       const employmentBoard = buildEmploymentBoardEntries(sessionId);
 
+      // C1: Build MarketIntelligence block once per iteration (all agents see same market)
+      const FOOD_SPOT_BASELINE = 6.0;
+      const COMMODITY_BASELINES: Record<string, number> = { food: FOOD_SPOT_BASELINE, raw_materials: 4.0, luxury_goods: 12.0, tools: 12.0 };
+      const miLines: string[] = [];
+      const primaryAMMForMI = sessionAMMRegistry.get(sessionId);
+      const multiAMMsForMI = sessionMultiAMMRegistry.get(sessionId);
+      if (primaryAMMForMI) {
+        const fp = primaryAMMForMI.spotPrice;
+        const fr = primaryAMMForMI.currentFoodReserve;
+        const fStatus = fr < 10 ? 'CRITICAL' : fr < 30 ? 'LOW' : fr < 100 ? 'NORMAL' : 'SURPLUS';
+        const prevFP = sessionPriceHistory.get(sessionId)?.get('food');
+        const fd = prevFP != null ? fp - prevFP : null;
+        const fdStr = fd != null ? ` │ Trend: ${fd >= 0 ? '▲' : '▼'} ${fd >= 0 ? '+' : ''}${fd.toFixed(2)}` : '';
+        const fVsB = Math.round((fp / FOOD_SPOT_BASELINE) * 100);
+        miLines.push(`  food          │ Price: ${fp.toFixed(2)} fiat/unit  │ reserve: ${Math.round(fr).toString().padStart(4)} units (${fStatus.padEnd(8)})${fdStr} │ ${fVsB}% of baseline`);
+      }
+      if (multiAMMsForMI) {
+        for (const [itemType, pool] of multiAMMsForMI) {
+          const p = pool.spotPrice;
+          const r = pool.currentFoodReserve;
+          const rStatus = r < 5 ? 'CRITICAL' : r < 20 ? 'LOW' : r < 80 ? 'NORMAL' : 'SURPLUS';
+          const prevP = sessionPriceHistory.get(sessionId)?.get(itemType as ItemType);
+          const pd = prevP != null ? p - prevP : null;
+          const pdStr = pd != null ? ` │ Trend: ${pd >= 0 ? '▲' : '▼'} ${pd >= 0 ? '+' : ''}${pd.toFixed(2)}` : '';
+          const bl = COMMODITY_BASELINES[itemType] ?? p;
+          const pVsB = Math.round((p / bl) * 100);
+          miLines.push(`  ${itemType.padEnd(13)} │ Price: ${p.toFixed(2)} fiat/unit  │ reserve: ${Math.round(r).toString().padStart(4)} units (${rStatus.padEnd(8)})${pdStr} │ ${pVsB}% of baseline`);
+        }
+      }
+      const iterEntsByIndustry: Record<string, number> = {};
+      for (const ent of enterpriseRegistry.values()) {
+        iterEntsByIndustry[ent.industry] = (iterEntsByIndustry[ent.industry] ?? 0) + 1;
+      }
+      const iterUnemployedCount = aliveAgents.filter(a => !employmentRegistry.has(a.id)).length;
+      const iterEntsSummary = Object.entries(iterEntsByIndustry).map(([k, v]) => `${k} ×${v}`).join(', ') || 'none';
+      const sharedMarketIntelligenceBlock = miLines.length > 0
+        ? `\n\n[MARKET INTELLIGENCE — Use this data to reason about economic opportunity]\n\nCommodity prices and supply:\n${miLines.join('\n')}\n\nEconomy:\n  Population: ${aliveAgents.length} alive agents\n  Active enterprises: ${iterEntsSummary}\n  Unemployed agents: ${iterUnemployedCount}\n\nHow to read this:\n- CRITICAL/LOW reserve means the market is undersupplied — prices will rise further if no one produces.\n- SURPLUS reserve means the market is oversupplied — selling now yields less than baseline.\n- Your skills determine how efficiently you can produce each commodity.`
+        : '';
+
       // Single-pass structured intent collection (replaces two-step natural language → parser flow)
       const intentTasks = aliveAgents.map(agent => async (): Promise<AgentIntent> => {
         try {
           // Build economy context for the agent
           const econState = agentEconomyMap.get(agent.id);
-          let economyContext: { foodLevel: number; toolCount: number; topSkills: string; isStarving: boolean } | undefined;
+          let economyContext: {
+            inventory: { food: number; tools: number; raw_materials: number; luxury_goods: number };
+            skills: SkillMatrix;
+            isStarving: boolean;
+          } | undefined;
           if (econState) {
             const inv = econState.inventory;
-            const skills = econState.skills;
-            const skillEntries = Object.entries(skills)
-              .map(([k, v]) => ({ name: k, level: (v as { level: number }).level }))
-              .sort((a, b) => b.level - a.level)
-              .slice(0, 3);
-            const topSkills = skillEntries.map(s => `${s.name}: ${Math.round(s.level)}`).join(', ');
+            const invAny = inv as Record<string, { quantity: number }>;
             economyContext = {
-              foodLevel: inv?.food?.quantity ?? 10,
-              toolCount: inv?.tools?.quantity ?? 1,
-              topSkills,
+              inventory: {
+                food: inv?.food?.quantity ?? 10,
+                tools: inv?.tools?.quantity ?? 0,
+                raw_materials: invAny?.raw_materials?.quantity ?? 0,
+                luxury_goods: invAny?.luxury_goods?.quantity ?? 0,
+              },
+              skills: econState.skills,
               isStarving: (inv?.food?.quantity ?? 10) <= 0,
             };
           }
@@ -1209,6 +1308,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             personalStatus,
             lastActionResults,
             sessionPolicy.enforcement_level,
+            sharedMarketIntelligenceBlock,
           );
 
           // throwOnExhaustion: true — after all retries, throw instead of silently defaulting to REST.
@@ -1344,6 +1444,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       let resolution: import('../parsers/simulation.js').ParsedResolution;
 
       const prevIterMetrics = sessionIterationMetrics.get(sessionId) ?? null;
+      // D4: Physics log from last iteration — grounding data for the narrator
+      const prevPhysicsLog = sessionLastPhysicsTraces.get(sessionId) ?? null;
 
       if (aliveAgents.length > MAPREDUCE_THRESHOLD) {
         // ── Map-Reduce path for large sessions (role-based clustering) ──
@@ -1354,7 +1456,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         const groups = clusterByRole(aliveAgents, BATCH_SIZE);
         const groupTasks = groups.map((group, gi) => async () => {
           const groupIntents = intents.filter(i => group.some(a => a.id === i.agentId));
-          const msgs = buildGroupResolutionMessages(session, group, groupIntents, allIntentsBrief, iterNum, previousSummary, prevIterMetrics, lockedVariables);
+          const msgs = buildGroupResolutionMessages(session, group, groupIntents, allIntentsBrief, iterNum, previousSummary, prevIterMetrics, lockedVariables, prevPhysicsLog);
           // Use citizenAgentModel for group coordinators (cheaper); merge step keeps centralAgentModel
           const resolutionPromise = retryWithHealing({
             provider: citizenProv,
@@ -1430,7 +1532,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       } else {
         // ── Standard path ────────────────────────────────────────────────
         // Bug #1 fix: pass aliveAgents only — dead agents must never appear in resolution
-        const resolutionMessages = buildResolutionPrompt(session, aliveAgents, intents, iterNum, previousSummary, prevIterMetrics, lockedVariables);
+        const resolutionMessages = buildResolutionPrompt(session, aliveAgents, intents, iterNum, previousSummary, prevIterMetrics, lockedVariables, prevPhysicsLog);
         resolution = await retryWithHealing({
           provider,
           messages: resolutionMessages,
@@ -1461,6 +1563,19 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       // ── Hybrid micro-turn execution: per-agent action queues + end-of-week market ──
       const intentMap = new Map(intents.map(i => [i.agentId, i]));
       const outcomeMap = new Map(resolution.agentOutcomes.map(o => [o.agentId, o]));
+      // Fix A1: Reconcile lifecycle death events with agent outcomes.
+      // If LLM narrated a death but forgot to set died:true in agentOutcomes, force it.
+      for (const event of resolution.lifecycleEvents ?? []) {
+        if ((event as { type: string; agentId?: string }).type === 'death') {
+          const evtAgentId = (event as { type: string; agentId?: string }).agentId;
+          if (evtAgentId) {
+            const existing = outcomeMap.get(evtAgentId);
+            if (existing && !existing.died) {
+              outcomeMap.set(evtAgentId, { ...existing, died: true });
+            }
+          }
+        }
+      }
       const weekStateMap = new Map<string, AgentWeekState>(
         aliveAgents.map(agent => [agent.id, createAgentWeekState(agentEconomyMap.get(agent.id))])
       );
@@ -1474,6 +1589,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       const statUpdates: Array<{ id: string; wealth: number; health: number; happiness: number; cortisol: number; dopamine: number }> = [];
       const deaths: Array<{ id: string; iterationNumber: number }> = [];
       const actionRows: Array<typeof resolvedActions.$inferInsert> = [];
+      const actionRowByAgentId = new Map<string, typeof resolvedActions.$inferInsert>();
       const economyUpdates: Array<{ agentId: string; sessionId: string; skills: SkillMatrix; inventory: Inventory; lastUpdated: number }> = [];
       const humiliatedAgentIds = new Set<string>();
       // Phase B: per-enterprise revenue/wage ledger for this iteration
@@ -1505,6 +1621,9 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           enterpriseRegistry.delete(enterpriseId);
         }
       }
+
+      // D4: Per-agent physics trace accumulator — stored for next iteration's resolution prompt
+      const agentTraceMap = new Map<string, string[]>();
 
       for (const agent of aliveAgents) {
         const weekState = weekStateMap.get(agent.id)!;
@@ -1561,6 +1680,12 @@ export async function runSimulation(sessionId: string, totalIterations: number):
 
           weekState.executedActions.push(action);
 
+          // D4: Accumulate physics trace (last 3 entries per action, max 9 per agent)
+          if (physics.trace.length > 0) {
+            const existing = agentTraceMap.get(agent.id) ?? [];
+            agentTraceMap.set(agent.id, [...existing, ...physics.trace.slice(-3)].slice(-9));
+          }
+
           // ── Phase Sheriff C: enforcement check ────────────────────────────
           // If the Central Agent flagged this action as illegal, roll detection.
           // On catch: seizure penalty replaces normal physics wealth gain.
@@ -1568,15 +1693,18 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           if (illegalCodesForAgent?.has(action.actionCode)) {
             const detectionProb = Math.min(0.9, 0.2 * sessionPolicy.enforcement_level);
             if (Math.random() < detectionProb) {
-              const seizureAmount = runningWealth * 0.25;
-              seizedWealthPool += seizureAmount;
-              // Replace any wealth gain from the action with the seizure loss
-              physics.wealthDelta = -seizureAmount - Math.max(0, physics.wealthDelta);
+              const seizureFromBalance = runningWealth * 0.25;
+              const seizedActionGain = Math.max(0, physics.wealthDelta);
+              const totalSeized = seizureFromBalance + seizedActionGain;
+              // Route both confiscated base wealth and any illegal action gain back into
+              // the redistribution pool so arrests remain SFC-neutral.
+              seizedWealthPool += totalSeized;
+              physics.wealthDelta -= totalSeized;
               // Arrest trauma: +30 cortisol, nullify happiness gain
               physics.cortisolDelta += 30;
               physics.happinessDelta = Math.min(physics.happinessDelta, -5);
               weekState.events.push(
-                `⚖️ ARRESTED for illegal "${action.actionCode}": −${seizureAmount.toFixed(1)} fiat seized by state (+30 stress, enforcement_level=${sessionPolicy.enforcement_level.toFixed(1)}).`
+                `⚖️ ARRESTED for illegal "${action.actionCode}": −${totalSeized.toFixed(1)} fiat seized by state (${seizureFromBalance.toFixed(1)} from savings, ${seizedActionGain.toFixed(1)} from illegal gain; +30 stress, enforcement_level=${sessionPolicy.enforcement_level.toFixed(1)}).`
               );
             }
           }
@@ -1586,10 +1714,47 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           const effectiveCortisolDelta = physics.cortisolDelta * enforcementCortisolScale;
 
           weekState.wealthDelta += physics.wealthDelta;
-          weekState.healthDelta += physics.healthDelta;
+
+          // D1: Deduct standalone WORK income from the state treasury (SFC-compliant).
+          // The treasury prevents WORK from creating fiat from nothing — income is
+          // a transfer from treasury to agent, keeping total fiat supply constant.
+          if (action.actionCode === 'WORK' && physics.wealthDelta > 0) {
+            const treasury = sessionStateTreasury.get(sessionId) ?? 0;
+            if (treasury < physics.wealthDelta) {
+              // Treasury exhausted — cap income at remaining balance
+              weekState.wealthDelta -= (physics.wealthDelta - treasury);
+              sessionStateTreasury.set(sessionId, 0);
+            } else {
+              sessionStateTreasury.set(sessionId, treasury - physics.wealthDelta);
+            }
+          }
+
+          // D2: REST recovery scaling by dopamine (anhedonia impairs recovery).
+          // High dopamine (≥70) → ×1.25 health recovery (motivated, well-rested).
+          // Low dopamine (≤30) → ×0.75 health recovery (anhedonic, impaired recovery).
+          let scaledHealthDelta = physics.healthDelta;
+          if (action.actionCode === 'REST' && physics.healthDelta > 0) {
+            const dopamineScaleMult = runningDopamine >= 70 ? 1.25 : runningDopamine <= 30 ? 0.75 : 1.0;
+            scaledHealthDelta = Math.round(physics.healthDelta * dopamineScaleMult);
+          }
+
+          weekState.healthDelta += scaledHealthDelta;
           weekState.happinessDelta += physics.happinessDelta;
           weekState.cortisolDelta += effectiveCortisolDelta;
           weekState.dopamineDelta += physics.dopamineDelta;
+
+          // Fix A: Zero-sum STEAL — deduct stolen amount from victim's weekState
+          if (action.actionCode === 'STEAL' && targetAgent && physics.wealthDelta > 0) {
+            const victimState = weekStateMap.get(targetAgent.id);
+            if (victimState) {
+              const victimAvailable = Math.max(0, targetAgent.currentStats.wealth + victimState.wealthDelta);
+              const actualStolen = Math.min(physics.wealthDelta, victimAvailable);
+              victimState.wealthDelta -= actualStolen;
+              if (actualStolen < physics.wealthDelta) {
+                weekState.wealthDelta -= (physics.wealthDelta - actualStolen);
+              }
+            }
+          }
 
           runningWealth = clampWealth(runningWealth + physics.wealthDelta);
           runningHealth = clampStat(runningHealth + physics.healthDelta);
@@ -1609,6 +1774,20 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             weekState.interruptedReason = 'mental_breakdown';
             break;
           }
+        }
+      }
+
+      // D4: Build physics log from this iteration's traces — used in next iteration's resolution
+      {
+        const logLines: string[] = [];
+        for (const ag of aliveAgents) {
+          const traces = agentTraceMap.get(ag.id) ?? [];
+          if (traces.length > 0) {
+            logLines.push(`${ag.name}: ${traces.slice(-3).join(' | ')}`);
+          }
+        }
+        if (logLines.length > 0) {
+          sessionLastPhysicsTraces.set(sessionId, logLines.join('\n'));
         }
       }
 
@@ -1822,9 +2001,11 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         for (const agent of aliveAgents) {
           const weekState = weekStateMap.get(agent.id)!;
           const currentCortisol = clampStat((agent.currentStats.cortisol ?? 20) + weekState.cortisolDelta);
+          const currentDopamine = clampStat((agent.currentStats.dopamine ?? 50) + weekState.dopamineDelta);
           const priorState = sessionAlloStates.get(agent.id) ?? { allostaticStrain: 0, allostaticLoad: 0 };
           const engine = new AllostaticEngine(priorState);
-          const alloResult = engine.tick({ cortisol: currentCortisol, state: priorState });
+          // D2: Pass dopamine so anhedonia (≤30) adds +4 cortisol feedback in the allostatic engine
+          const alloResult = engine.tick({ cortisol: currentCortisol, state: priorState, dopamine: currentDopamine });
           if (alloResult.healthDelta < 0) {
             weekState.healthDelta += alloResult.healthDelta;
             weekState.events.push(
@@ -1854,27 +2035,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         }
       }
 
-      // ── Phase Sheriff C: redistribute seized wealth (SFC-safe) ────────────
-      // Seized fiat is redistributed equally to all alive agents to prevent
-      // wealth from disappearing from the closed-loop economy.
-      if (seizedWealthPool > 0 && aliveAgents.length > 0) {
-        const seizedUBI = seizedWealthPool / aliveAgents.length;
-        for (const seizedAgent of aliveAgents) {
-          const ws = weekStateMap.get(seizedAgent.id);
-          if (ws) {
-            ws.wealthDelta += seizedUBI;
-            if (seizedUBI >= 0.5) {
-              ws.events.push(`Seizure redistribution: +${seizedUBI.toFixed(1)} fiat (from enforcement pool)`);
-            }
-          }
-        }
-        simulationManager.broadcast(sessionId, {
-          type: 'resolution',
-          iteration: iterNum,
-          narrativeSummary: `⚖️ State enforcement: ${seizedWealthPool.toFixed(1)} fiat seized from ${illegalActionMap.size} caught criminal(s) and redistributed equally (+${seizedUBI.toFixed(1)}/citizen).`,
-          lifecycleEvents: [],
-        });
-      }
+      // Phase Sheriff C redistribution is deferred until after the stat-update loop
+      // so that death/humiliation seizures (added inside that loop) are included.
 
 
       // ── Market board: AMM spot price for food + order book for other items ─
@@ -1892,21 +2054,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         else ammFoodTrend = 'flat';
         // Replace or prepend food entry
         const withoutFood = latestMarketBoard.filter(e => e.itemType !== 'food');
-        // Compute profit signal for PRODUCE_AND_SELL food
-        const BASE_FOOD_PRODUCTION = 20; // must match BASE_PRODUCE_QUANTITY in the enterprise action block above
         const INITIAL_FOOD_SPOT_PRICE = 6.0;
-        const priceRatio = ammFoodPrice / INITIAL_FOOD_SPOT_PRICE;
-        let foodProfitAlert: string | undefined;
-        if (priceRatio >= 1.5) {
-          const expectedProfit = Math.round(ammFoodPrice * BASE_FOOD_PRODUCTION);
-          const pctAbove = Math.round((priceRatio - 1) * 100);
-          const scarcityLabel = priceRatio >= 10 ? 'EXTREME FAMINE — CRITICAL SHORTAGE'
-            : priceRatio >= 5 ? 'SEVERE FOOD SHORTAGE'
-              : priceRatio >= 2 ? 'HIGH SCARCITY'
-                : 'ELEVATED DEMAND';
-          foodProfitAlert = `🚨 PROFIT ALERT: Food is ${scarcityLabel} (Spot Price: ${ammFoodPrice} Wealth/unit, +${pctAbove}% above baseline). Executing [PRODUCE_AND_SELL] for 'Food' will yield an estimated ${expectedProfit} Wealth this week. This is currently the most lucrative action in the economy.`;
-        }
-        latestMarketBoard = [{ itemType: 'food', averageClearingPrice: ammFoodPrice, trend: ammFoodTrend, profitAlert: foodProfitAlert }, ...withoutFood];
+        latestMarketBoard = [{ itemType: 'food', averageClearingPrice: ammFoodPrice, trend: ammFoodTrend }, ...withoutFood];
         // Update price history for food from AMM
         let priceHist = sessionPriceHistory.get(sessionId);
         if (!priceHist) { priceHist = new Map(); sessionPriceHistory.set(sessionId, priceHist); }
@@ -1917,12 +2066,25 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       if (multiAMMsForBoard) {
         const multiEntries = Array.from(multiAMMsForBoard.entries()).map(([itemType, pool]) => {
           const spotPrice = Math.round(pool.spotPrice * 100) / 100;
-          return { itemType, averageClearingPrice: spotPrice, trend: 'unknown' as const };
+          const prevMultiPrice = sessionPriceHistory.get(sessionId)?.get(itemType as ItemType);
+          let multiTrend: MarketBoardEntry['trend'] = 'unknown';
+          if (prevMultiPrice == null) multiTrend = 'new';
+          else if (spotPrice > prevMultiPrice) multiTrend = 'up';
+          else if (spotPrice < prevMultiPrice) multiTrend = 'down';
+          else multiTrend = 'flat';
+          return { itemType, averageClearingPrice: spotPrice, trend: multiTrend };
         });
         latestMarketBoard = [
           ...latestMarketBoard,
           ...multiEntries.filter(e => !latestMarketBoard.some(m => m.itemType === e.itemType)),
         ];
+      }
+      if (multiAMMsForBoard) {
+        let priceHistForMulti = sessionPriceHistory.get(sessionId);
+        if (!priceHistForMulti) { priceHistForMulti = new Map(); sessionPriceHistory.set(sessionId, priceHistForMulti); }
+        for (const [itemType, pool] of multiAMMsForBoard) {
+          priceHistForMulti.set(itemType as ItemType, Math.round(pool.spotPrice * 100) / 100);
+        }
       }
       updatePriceHistory(sessionId, marketState.priceIndices);
       orderBook.reset();
@@ -1942,22 +2104,44 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         // Prevents LLM hallucinations of "100 Happiness" while starving to death.
         newHappiness = clampHappinessByPhysiology(newHappiness, newHealth, newCortisol);
 
-        const shouldDie = (outcome?.died === true) || newHealth <= 0;
-        const shouldHumiliate = !shouldDie && newHealth < 20 && weekState.inventory.food.quantity <= 0;
+        const shouldDie = (outcome?.died === true) || newHealth <= 2;
+        const isBreakdownTrapped =
+          weekState.interruptedReason === 'mental_breakdown' &&
+          weekState.inventory.food.quantity <= 0 &&
+          newWealth < physicsConfig.lowWealthThreshold;
+        const shouldHumiliate = !shouldDie && (
+          (newHealth < 20 && weekState.inventory.food.quantity <= 0) ||
+          isBreakdownTrapped
+        );
 
         if (shouldDie) {
           deaths.push({ id: agent.id, iterationNumber: iterNum });
           const lifecycleEvent = resolution.lifecycleEvents?.find(
-            (e: { type: string; agentId: string; detail?: string }) => e.agentId === agent.id && e.type === 'death'
+            (e: { type: string; agentId: string; detail?: string }) => e.agentId && e.agentId === agent.id && e.type === 'death'
           );
-          const deathReason = lifecycleEvent?.detail ?? (newHealth <= 0 ? 'health depleted to zero' : 'fatal circumstances');
+          const deathReason = lifecycleEvent?.detail ?? (newHealth <= 2 ? 'health depleted' : 'fatal circumstances');
           deathReasonMap.set(agent.id, { iteration: iterNum, reason: deathReason });
+          // Fix B1: Redistribute dying agent's wealth into the seized pool (death tax / escheat)
+          seizedWealthPool += Math.max(0, newWealth);
+          newWealth = 0;
         } else if (shouldHumiliate) {
           humiliatedAgentIds.add(agent.id);
+          // Fix B2: Redistribute humiliated agent's stripped wealth before zeroing
+          seizedWealthPool += Math.max(0, newWealth);
           newHealth = 30;
           newWealth = 0;
-          newCortisol = 100;
-          // Re-clamp happiness with the new physiology: health=30, cortisol=100 → maxAllowed=0
+          // Set cortisol to 85 — below the mentalBreakdownCortisolInterrupt threshold (90)
+          // so the agent can queue at least one action next turn and is not permanently locked.
+          newCortisol = 85;
+          // Re-clamp happiness with the new physiology: health=30, cortisol=85
+          newHappiness = clampHappinessByPhysiology(newHappiness, newHealth, newCortisol);
+        }
+
+        // Deterministic recovery path for agents whose queues were interrupted by
+        // mental breakdown. This prevents locked-health sessions from trapping
+        // poor agents in a permanent cortisol > 90 loop with no route back to work.
+        if (weekState.interruptedReason === 'mental_breakdown') {
+          newCortisol = Math.min(newCortisol, 75);
           newHappiness = clampHappinessByPhysiology(newHappiness, newHealth, newCortisol);
         }
 
@@ -2039,7 +2223,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           lastUpdated: iterNum,
         });
 
-        actionRows.push({
+        const actionRow = {
           id: uuidv4(),
           sessionId,
           agentId: agent.id,
@@ -2062,8 +2246,48 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             foodAfterMetabolism: weekState.inventory.food.quantity,
           }),
           resolvedAt: now,
-        });
+        };
+        actionRows.push(actionRow);
+        actionRowByAgentId.set(agent.id, actionRow);
       }
+
+      // ── Phase Sheriff C: redistribute seized wealth (SFC-safe) ────────────
+      // Runs after the stat-update loop so death and humiliation seizures are
+      // included in the pool before redistribution. Distributes directly into
+      // statUpdates (excluding agents who died this iteration) so the pool is
+      // never silently dropped from the closed-loop economy.
+      if (seizedWealthPool > 0) {
+        const deadIds = new Set(deaths.map(d => d.id));
+        const survivorUpdates = statUpdates.filter(u => !deadIds.has(u.id));
+        if (survivorUpdates.length > 0) {
+          const seizedUBI = seizedWealthPool / survivorUpdates.length;
+          for (const update of survivorUpdates) {
+            update.wealth = clampWealth(update.wealth + seizedUBI);
+            const actionRow = actionRowByAgentId.get(update.id);
+            if (actionRow?.outcome) {
+              try {
+                const parsed = JSON.parse(actionRow.outcome) as {
+                  wealthDelta?: number;
+                  finalWealth?: number;
+                };
+                parsed.wealthDelta = Number(parsed.wealthDelta ?? 0) + seizedUBI;
+                parsed.finalWealth = update.wealth;
+                actionRow.outcome = JSON.stringify(parsed);
+              } catch {
+                // Leave malformed historical payloads untouched; live stats remain correct.
+              }
+            }
+          }
+          simulationManager.broadcast(sessionId, {
+            type: 'resolution',
+            iteration: iterNum,
+            narrativeSummary: `⚖️ State enforcement: ${seizedWealthPool.toFixed(1)} fiat redistributed equally among ${survivorUpdates.length} survivors (+${seizedUBI.toFixed(1)}/citizen).`,
+            lifecycleEvents: [],
+          });
+        }
+      }
+
+      const finalStatsByAgentId = new Map(statUpdates.map(u => [u.id, u]));
 
       const cognitivePostInputs: CognitivePostInput[] = aliveAgents.map(agent => {
         const agentIntent = intentMap.get(agent.id);
@@ -2077,7 +2301,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             ? `[HUMILIATION] I ran out of resources and was force-fed synthetic slop by the state. My remaining wealth was stripped. I am at the absolute bottom of society. I feel extreme rage and despair.`
             : (agentIntent?.intent ?? 'continued routine'),
           actionCode: agentIntent?.primaryActionCode ?? 'NONE',
-          wealthDelta: isHumiliated ? -agent.currentStats.wealth : weekState.wealthDelta,
+          wealthDelta: isHumiliated ? -agent.currentStats.wealth : (finalStatsByAgentId.get(agent.id)?.wealth ?? agent.currentStats.wealth) - agent.currentStats.wealth,
           healthDelta: isHumiliated ? -(agent.currentStats.health - 30) : weekState.healthDelta,
           happinessDelta: isHumiliated ? -20 : weekState.happinessDelta,
           economyEvents: weekState.events,
@@ -2098,12 +2322,43 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           ? ` ${bankruptciesThisIter} enterprise${bankruptciesThisIter > 1 ? 's' : ''} went bankrupt this week, causing a spike in unemployment.`
           : '';
         const ammForMetrics = sessionAMMRegistry.get(sessionId);
-        const ammNote = ammForMetrics
-          ? ` Food market: ${ammForMetrics.currentFoodReserve.toFixed(1)} units in reserve, spot price ${ammForMetrics.spotPrice.toFixed(2)} fiat/food.`
-          : '';
+        const multiAMMsForMetrics = sessionMultiAMMRegistry.get(sessionId);
+        let marketContextBlock = '';
+        if (ammForMetrics) {
+          const foodReserve = ammForMetrics.currentFoodReserve;
+          const foodPrice = ammForMetrics.spotPrice;
+          const foodStatus = foodReserve < 10 ? 'CRITICAL' : foodReserve < 30 ? 'LOW' : foodReserve < 100 ? 'NORMAL' : 'SURPLUS';
+          let foodVerdict = '';
+          if (foodStatus === 'CRITICAL' || foodStatus === 'LOW') foodVerdict = ' — food is SCARCE, famine conditions may apply';
+          else if (foodStatus === 'SURPLUS') foodVerdict = ' — food is ABUNDANT, do NOT narrate famine or empty markets';
+          else foodVerdict = ' — food supply is adequate';
+          marketContextBlock = `\n\n[MARKET STATE — AUTHORITATIVE]\n- Food: ${foodReserve.toFixed(1)} units in AMM reserve (${foodStatus}), spot price ${foodPrice.toFixed(2)} fiat${foodVerdict}`;
+        }
+        if (multiAMMsForMetrics) {
+          for (const [itemType, pool] of multiAMMsForMetrics) {
+            const reserve = pool.currentFoodReserve;
+            const price = pool.spotPrice;
+            const rStatus = reserve < 5 ? 'CRITICAL' : reserve < 20 ? 'LOW' : reserve < 80 ? 'NORMAL' : 'SURPLUS';
+            marketContextBlock += `\n- ${itemType}: ${reserve.toFixed(1)} units (${rStatus}), spot price ${price.toFixed(2)} fiat`;
+          }
+        }
         sessionIterationMetrics.set(sessionId,
-          `System Metrics (iteration ${iterNum}): ${totalWorked}/${aliveAgents.length} agents successfully worked. ${unemployedAgents.length} total unemployed. Average unemployed wealth: ${avgUnemployedWealth}.${bankruptcyNote}${ammNote}`
+          `System Metrics (iteration ${iterNum}): ${totalWorked}/${aliveAgents.length} agents successfully worked. ${unemployedAgents.length} total unemployed. Average unemployed wealth: ${avgUnemployedWealth}.${bankruptcyNote}${marketContextBlock}`
         );
+        // B5: Detect food monoculture and add diversity warning to LLM context
+        const produceActions = [...weekStateMap.values()].flatMap(ws =>
+          ws.executedActions.filter(a => a.actionCode === 'PRODUCE_AND_SELL')
+        );
+        if (produceActions.length > 0) {
+          const foodCount = produceActions.filter(a => a.parameters?.itemType === 'food' || !a.parameters?.itemType).length;
+          const foodPct = Math.round((foodCount / produceActions.length) * 100);
+          if (foodPct > 70) {
+            const prevMetricsB5 = sessionIterationMetrics.get(sessionId) ?? '';
+            sessionIterationMetrics.set(sessionId,
+              prevMetricsB5 + ` Economy warning: ${foodPct}% of production was food this iteration. Raw materials and luxury goods are undersupplied — agents who diversify will find higher margins.`
+            );
+          }
+        }
       }
 
       // ── Telemetry: push per-iteration physics snapshot ────────────────────
@@ -2117,7 +2372,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           : 0;
         const totalFiatSupply = statUpdates.reduce((sum, u) => sum + u.wealth, 0)
           + (sessionAMMForTelemetry?.currentFiatReserve ?? 0)
-          + multiAMMFiatTotal;
+          + multiAMMFiatTotal
+          + (sessionStateTreasury.get(sessionId) ?? 0);
         const totalCaloriesBurned = [...weekStateMap.values()].reduce((sum, ws) => sum + ws.caloriesBurned, 0);
         const totalCaloriesProduced = [...weekStateMap.values()].reduce((sum, ws) => sum + ws.caloriesProduced, 0);
         const totalFailedActions = [...weekStateMap.values()].reduce((sum, ws) => sum + ws.failedActionCount, 0);
@@ -2125,6 +2381,37 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         const actionFailureRate = totalActionSlots > 0
           ? Math.round((totalFailedActions / totalActionSlots) * 1000) / 1000
           : 0;
+        // ── Analytical metrics ──────────────────────────────────────────────
+        // Gini coefficient: measures wealth inequality (0 = perfect equality, 1 = total inequality)
+        const giniCoefficient = gini(statUpdates.map(u => u.wealth));
+        // Trust and crime indices from executed actions
+        const allExecutedActions = [...weekStateMap.values()].flatMap(ws => ws.executedActions);
+        const helpCount = allExecutedActions.filter(a => a.actionCode === 'HELP').length;
+        const stealCount = allExecutedActions.filter(a => a.actionCode === 'STEAL').length;
+        const sabotageCount = allExecutedActions.filter(a => a.actionCode === 'SABOTAGE').length;
+        const embezzleCount = allExecutedActions.filter(a => a.actionCode === 'EMBEZZLE').length;
+        const totalActions = allExecutedActions.filter(a => a.actionCode !== 'NONE').length;
+        const trustDenom = helpCount + stealCount;
+        // undefined when no cooperative/predatory actions occurred — avoids false "perfect trust" signal
+        const trustIndex = trustDenom > 0 ? Math.round((helpCount / trustDenom) * 1000) / 1000 : undefined;
+        const crimeRate = totalActions > 0
+          ? Math.round(((stealCount + sabotageCount + embezzleCount) / totalActions) * 1000) / 1000
+          : 0;
+        // Social mobility: fraction of agents with role changes this iteration
+        const roleChangeCount = resolution.lifecycleEvents?.filter(
+          (e: { type: string }) => e.type === 'role_change'
+        ).length ?? 0;
+        const socialMobilityIndex = aliveAgents.length > 0
+          ? Math.round((roleChangeCount / aliveAgents.length) * 1000) / 1000
+          : 0;
+        // Population averages
+        const averageCortisol = statUpdates.length > 0
+          ? Math.round(statUpdates.reduce((s, u) => s + u.cortisol, 0) / statUpdates.length)
+          : 0;
+        const averageDopamine = statUpdates.length > 0
+          ? Math.round(statUpdates.reduce((s, u) => s + u.dopamine, 0) / statUpdates.length)
+          : 0;
+
         iterTelemetry = {
           iterationNumber: iterNum,
           totalFiatSupply: Math.round(totalFiatSupply),
@@ -2134,6 +2421,12 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           totalCaloriesBurned: Math.round(totalCaloriesBurned * 10) / 10,
           totalCaloriesProduced: Math.round(totalCaloriesProduced),
           actionFailureRate,
+          giniCoefficient,
+          socialMobilityIndex,
+          trustIndex,
+          crimeRate,
+          averageCortisol,
+          averageDopamine,
         };
         // Phase A: SFC drift check — warn if unaccounted fiat appears or disappears.
         // Tolerance is ±0.01 per agent per iteration to absorb minimal IEEE-754 rounding.
@@ -2152,6 +2445,13 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         let logs = sessionTelemetryLogs.get(sessionId);
         if (!logs) { logs = []; sessionTelemetryLogs.set(sessionId, logs); }
         logs.push(iterTelemetry);
+
+        // Append analytical metrics to LLM context for the NEXT iteration's resolution
+        const prevMetrics = sessionIterationMetrics.get(sessionId) ?? '';
+        const trustNote = trustIndex !== undefined ? ` Trust ratio: ${trustIndex.toFixed(2)}.` : '';
+        sessionIterationMetrics.set(sessionId,
+          prevMetrics + ` Inequality: Gini=${giniCoefficient.toFixed(3)}.${trustNote} Crime rate: ${crimeRate.toFixed(2)}.`
+        );
       }
 
       sqlite.transaction(() => {
@@ -2192,7 +2492,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           startedAt: contract.startedAt,
         })),
         summary: {
-          totalWealth: aliveAgents.reduce((sum, agent) => sum + clampWealth(agent.currentStats.wealth + (weekStateMap.get(agent.id)?.wealthDelta ?? 0)), 0),
+          totalWealth: aliveAgents.reduce((sum, agent) => sum + (finalStatsByAgentId.get(agent.id)?.wealth ?? agent.currentStats.wealth), 0),
           totalFood: aliveAgents.reduce((sum, agent) => sum + (weekStateMap.get(agent.id)?.inventory.food.quantity ?? 0), 0),
           totalTools: aliveAgents.reduce((sum, agent) => sum + (weekStateMap.get(agent.id)?.inventory.tools.quantity ?? 0), 0),
           avgSkillLevel: aliveAgents.length > 0
@@ -2219,7 +2519,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
               multiRecord[itemType] = pool.snapshot(iterNum);
             }
           }
-          await economyRepo.saveAMMSnapshot(sessionId, iterNum, ammToPersist.snapshot(iterNum), multiRecord);
+          await economyRepo.saveAMMSnapshot(sessionId, iterNum, ammToPersist.snapshot(iterNum), multiRecord, sessionStateTreasury.get(sessionId));
           // Vacuum old snapshots every 10 iterations to reduce WAL write amplification.
           // Retains decadal rows + the latest for crash recovery.
           if (iterNum % 10 === 0) economyRepo.vacuumAMMSnapshots(sessionId);
@@ -2248,9 +2548,10 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         const sfcMultiAMMFiat = sfcMultiAMMs
           ? [...sfcMultiAMMs.values()].reduce((sum, pool) => sum + pool.currentFiatReserve, 0)
           : 0;
-        const sfcActual = agents.reduce((sum, a) => sum + a.currentStats.wealth, 0)
+        const sfcActual = agents.filter(a => a.isAlive).reduce((sum, a) => sum + a.currentStats.wealth, 0)
           + (sfcAMM?.currentFiatReserve ?? 0)
-          + sfcMultiAMMFiat;
+          + sfcMultiAMMFiat
+          + (sessionStateTreasury.get(sessionId) ?? 0);
 
         let sfcEntry = sessionSFCTracking.get(sessionId);
         if (!sfcEntry) {
@@ -2276,13 +2577,15 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       // causes the next simulation to start at the wrong iteration number.
       if (simulationManager.isAbortRequested(sessionId)) {
         asyncLogFlusher.stop();
-        cleanupSessionEconomy(sessionId);
+        clearOrderBook(sessionId);
         cleanupSessionCognition(sessionId);
         sessionAMMRegistry.delete(sessionId);
         sessionMultiAMMRegistry.delete(sessionId);
         sessionAllostaticStates.delete(sessionId);
         sessionIterationMetrics.delete(sessionId);
         sessionSFCTracking.delete(sessionId);
+        sessionStateTreasury.delete(sessionId);
+        sessionLastPhysicsTraces.delete(sessionId);
         if (simulationManager.isResetRequested(sessionId)) {
           simulationManager.broadcast(sessionId, { type: 'aborted-reset' });
         } else {
@@ -2444,7 +2747,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
     asyncLogFlusher.stop();
 
     // Phase 1: Clean up session economy state
-    cleanupSessionEconomy(sessionId);
+    clearOrderBook(sessionId);
     // Phase 3: Clean up cognitive state
     cleanupSessionCognition(sessionId);
     // Tick-based engines cleanup
@@ -2455,13 +2758,15 @@ export async function runSimulation(sessionId: string, totalIterations: number):
     sessionIterationMetrics.delete(sessionId);
     sessionTelemetryLogs.delete(sessionId);
     sessionSFCTracking.delete(sessionId);
+    sessionStateTreasury.delete(sessionId);
+    sessionLastPhysicsTraces.delete(sessionId);
 
     await sessionRepo.updateStage(sessionId, 'simulation-complete');
     simulationManager.broadcast(sessionId, { type: 'simulation-complete', finalReport });
     simulationManager.finish(sessionId);
   } catch (err) {
     asyncLogFlusher.stop();
-    cleanupSessionEconomy(sessionId);
+    clearOrderBook(sessionId);
     cleanupSessionCognition(sessionId);
     sessionAMMRegistry.delete(sessionId);
     sessionMultiAMMRegistry.delete(sessionId);
@@ -2470,6 +2775,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
     sessionIterationMetrics.delete(sessionId);
     sessionTelemetryLogs.delete(sessionId);
     sessionSFCTracking.delete(sessionId);
+    sessionStateTreasury.delete(sessionId);
+    sessionLastPhysicsTraces.delete(sessionId);
 
     if (err instanceof SimulationPausedError) {
       // Structured pause: persist simulation-paused stage so the resume route can restart.

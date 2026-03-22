@@ -147,15 +147,29 @@ export function resolveAction(input: PhysicsInput): PhysicsOutput {
   trace.push(`  productionMult = ${productionMult.toFixed(3)}`);
 
   switch (actionCode) {
-    case 'WORK':
-    case 'WORK_AT_ENTERPRISE': {
+    case 'WORK': {
       const base = roleIncome(agent.role);
       w = base * productionMult;
       h = -2;
       hap = -1;
       cor = -3;
       dop = 2;
-      trace.push(`  Δwealth: roleIncome(${agent.role} = ${roleTierLabel(agent.role)}) = ${base} × productionMult(${productionMult.toFixed(3)}) = ${w.toFixed(3)}`);
+      trace.push(`  Δwealth: roleIncome(${agent.role} = ${roleTierLabel(agent.role)}) = ${base} × productionMult(${productionMult.toFixed(3)}) = ${w.toFixed(3)} (funded from state treasury)`);
+      trace.push(`  Δhealth: -2 (labor cost)`);
+      trace.push(`  Δhappiness: -1 (moderate work satisfaction)`);
+      trace.push(`  Δcortisol: -3 (productive relief)`);
+      trace.push(`  Δdopamine: +2 (effort reward)`);
+      break;
+    }
+    case 'WORK_AT_ENTERPRISE': {
+      // Enterprise income flows through the runner: goods produced → AMM → owner, wages → worker.
+      // Physics must NOT add additional wealth here — that would be double income on top of wages.
+      w = 0;
+      h = -2;
+      hap = -1;
+      cor = -3;
+      dop = 2;
+      trace.push(`  Δwealth: 0 (wages settled by runner's enterprise system — roleIncome suppressed to prevent double income)`);
       trace.push(`  Δhealth: -2 (labor cost)`);
       trace.push(`  Δhappiness: -1 (moderate work satisfaction)`);
       trace.push(`  Δcortisol: -3 (productive relief)`);

@@ -198,5 +198,10 @@ export function runMigrations() {
     sqlite.exec(`ALTER TABLE agents ADD COLUMN allostatic_load REAL NOT NULL DEFAULT 0;`);
   } catch { /* column already exists */ }
 
+  // Personality traits: JSON array of 1–2 trait strings per agent
+  try {
+    sqlite.exec(`ALTER TABLE agents ADD COLUMN personality_traits TEXT NOT NULL DEFAULT '[]';`);
+  } catch { /* column already exists */ }
+
   console.log('Database migrations applied.');
 }

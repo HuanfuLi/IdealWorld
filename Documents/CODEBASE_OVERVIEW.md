@@ -1,116 +1,313 @@
-# Ideal World - Comprehensive Codebase Overview
+# Ideal World Codebase Overview
 
-This document provides a highly detailed architectural and mechanical overview of the **Ideal World** platform. It covers the project's goals, structural design, workflows, algorithm mechanisms (Neuro-Symbolic Engine), and technical optimizations. This document acts as the definitive source of truth for AI agents and human developers to rapidly understand the entire project and contribute immediately.
+This document summarizes the current implemented structure of the Ideal World repository. It is intended as a practical orientation guide for developers and agents working in the codebase now, not as a speculative design document.
 
----
+## 1. Repository Structure
 
-## 1. Project Goal and Architecture
-**Ideal World** is a local-first, LLM-powered multi-agent society simulation platform. It models micro-societies of 20 to 150+ "Citizen Agents" interacting in turn-based iterations, guided by an omniscient "Central Agent". 
-The core philosophy revolves around a **Neuro-Symbolic Engine**, removing pure LLM math hallucinations and replacing them with deterministic economics and physics calculations (e.g., cortisol, dopamine, hunger).
+Ideal World is an npm workspace with three packages:
 
-### Technical Stack
-- **Workspaces**: Monorepo using npm workspaces (`web`, `server`, `shared`).
-- **Backend**: Node.js (Express), TypeScript, SQLite (Drizzle ORM), multi-provider LLM SDKs (Anthropic, OpenAI, local Ollama).
-- **Frontend**: React 19, TypeScript, Zustand (State Management), Tailwind CSS, Vite.
-- **Data Storage**: Local SQLite database stored in `~/.idealworld/idealworld.db` featuring asynchronous queued writes.
-- **Communication**: Polling-free Server-Sent Events (SSE) for real-time frontend updates.
+- `web`
+- `server`
+- `shared`
 
----
+Top-level supporting folders:
 
-## 2. Platform Workflow
-The application runs on a structured 7-stage lifecycle:
-**1. Idea Input -> 2. Brainstorming -> 3. Design -> 4. Refine -> 5. Simulate -> 6. Reflect -> 7. Review.**
+- `Documents/`: design notes, changelogs, gap analysis, legacy docs
+- `SimulationResult/`: exported or sample simulation result files
+- `public/`: static assets used by the frontend
 
-*Code Evidence (`server/src/db/schema.ts`):*
-```typescript
-export const sessions = sqliteTable('sessions', {
-  id: text('id').primaryKey(),
-  title: text('name').notNull(),
-  idea: text('seed_idea').notNull(),
-  stage: text('stage').notNull().default('idea-input'), // Tracks the 7-stage position
-  config: text('config'),
-  // ...
-});
+## 2. Package Responsibilities
+
+### `shared/`
+
+`shared/src/types.ts` is the main cross-package contract surface. It defines:
+
+- session stages and session metadata
+- agent and stat types
+- iteration and telemetry types
+- reflection and comparison types
+- app settings response contracts
+
+`shared/src/economyTypes.ts` defines the deterministic economy model primitives used by the server.
+
+### `server/`
+
+The backend is an Express app with these main areas:
+
+- `src/routes/`: HTTP API surface
+- `src/orchestration/`: long-running workflows and managers
+- `src/mechanics/`: deterministic action, economy, and physiology systems
+- `src/llm/`: provider integrations, prompts, retries, parsing helpers
+- `src/db/`: schema, migrations, repositories, DB helpers
+- `src/cognition/`: memory and planning subsystems used during simulation
+- `src/parsers/`: parser logic for simulation and reflection outputs
+
+### `web/`
+
+The frontend is a Vite + React app using Zustand stores. The main areas are:
+
+- `src/pages/`: route-level screens
+- `src/components/`: reusable UI components
+- `src/stores/`: client state and live simulation state
+- `src/api/`: typed API wrappers
+
+## 3. Session Lifecycle
+
+The active shared stage model is defined in `shared/src/types.ts`. Current stages include:
+
+- `idea-input`
+- `brainstorming`
+- `designing`
+- `design-review`
+- `refining`
+- `simulating`
+- `simulation-paused`
+- `simulation-complete`
+- `reflecting`
+- `reflection-complete`
+- `reviewing`
+- `completed`
+
+Not every page or route uses every stage directly, but the backend and frontend both rely on this lifecycle model.
+
+## 4. Backend Flow by Area
+
+### 4.1 Session and Design APIs
+
+Key routes:
+
+- `server/src/routes/sessions.ts`
+- `server/src/routes/design.ts`
+- `server/src/routes/chat.ts`
+- `server/src/routes/artifacts.ts`
+
+These routes handle:
+
+- session CRUD
+- stage updates
+- design config updates
+- brainstorming and refinement chat
+- agent roster fetches
+- session fork flows
+- artifact retrieval
+
+### 4.2 Simulation APIs
+
+Key routes:
+
+- `server/src/routes/simulate.ts`
+- `server/src/routes/iterations.ts`
+
+Simulation route responsibilities:
+
+- start, pause, resume, abort, abort-reset
+- SSE stream for live progress
+- telemetry endpoint
+
+Iteration route responsibilities:
+
+- list iteration history
+- fetch full iteration history with statistics
+- per-agent stat history reconstruction
+- single-iteration detail fetch
+
+### 4.3 Reflection, Review, and Comparison
+
+Key routes:
+
+- `server/src/routes/reflect.ts`
+- `server/src/routes/review.ts`
+- `server/src/routes/compare.ts`
+
+These use stored session artifacts plus LLM summaries to generate:
+
+- agent reflections
+- society evaluation
+- cross-session comparisons
+- follow-up Q&A
+
+### 4.4 Import / Export
+
+`server/src/routes/importexport.ts` supports:
+
+- exporting a session snapshot as JSON
+- importing a saved session as a new local session
+
+## 5. Simulation Architecture
+
+The main simulation loop lives in:
+
+- `server/src/orchestration/simulationRunner.ts`
+
+Related managers:
+
+- `simulationManager.ts`: run state, pause/resume/abort flags, SSE fanout
+- `reflectionManager.ts`: reflection workflow SSE/state
+- `governanceManager.ts`: policy update cycles during simulation
+- `concurrencyPool.ts`: bounded async concurrency helper
+- `clustering.ts`: grouping helpers for larger simulations
+
+### Implemented Loop Shape
+
+At a high level, a simulation iteration does the following:
+
+1. Load live session and agent state
+2. Collect intents from citizen agents via provider-specific LLM calls
+3. Run resolution through the central agent
+4. Apply deterministic mechanics and stat updates
+5. Persist agents, iterations, economy state, telemetry, and snapshots
+6. Broadcast SSE events to the frontend
+
+The runner also supports:
+
+- pause/resume
+- abort-reset behavior
+- telemetry persistence
+- restart recovery using persisted state
+- simulation-paused stage on parser/context failures
+
+## 6. Deterministic Mechanics
+
+Key files:
+
+- `server/src/mechanics/physicsEngine.ts`
+- `server/src/mechanics/allostaticEngine.ts`
+- `server/src/mechanics/orderBook.ts`
+- `server/src/mechanics/automatedMarketMaker.ts`
+- `server/src/mechanics/skillSystem.ts`
+- `server/src/mechanics/inventorySystem.ts`
+- `server/src/mechanics/actionCodes.ts`
+- `server/src/mechanics/physicsConfig.ts`
+
+Implemented concerns include:
+
+- action code validation and role constraints
+- stat deltas for wealth, health, happiness, cortisol, dopamine
+- metabolism and satiety cost
+- allostatic strain/load
+- market clearing
+- AMM reserve tracking
+- skill and inventory progression
+
+## 7. Persistence Model
+
+Primary DB files:
+
+- `server/src/db/schema.ts`
+- `server/src/db/migrate.ts`
+- `server/src/db/index.ts`
+
+Repository helpers:
+
+- `server/src/db/repos/sessionRepo.ts`
+- `server/src/db/repos/agentRepo.ts`
+- `server/src/db/repos/iterationRepo.ts`
+- `server/src/db/repos/economyRepo.ts`
+- `server/src/db/repos/chatMessageRepo.ts`
+
+Persisted entities include:
+
+- sessions
+- agents
+- iterations
+- resolved actions
+- agent intents
+- reflections
+- chat messages
+- role changes
+- economy snapshots
+- market prices
+- AMM snapshots
+
+The backend mixes Drizzle ORM reads/writes with targeted `better-sqlite3` statements for hot paths and transactional batch updates.
+
+## 8. LLM Layer
+
+Key files:
+
+- `server/src/llm/gateway.ts`
+- `server/src/llm/prompts.ts`
+- `server/src/llm/centralAgent.ts`
+- `server/src/llm/retry.ts`
+- `server/src/llm/retryWithHealing.ts`
+- provider adapters: `openai.ts`, `anthropic.ts`, `gemini.ts`, `vertex.ts`
+
+Responsibilities:
+
+- provider selection from saved settings
+- structured message construction
+- prompt composition for design, simulation, reflection, and comparison
+- retry and parser-healing flows
+
+## 9. Frontend State and Screens
+
+### Stores
+
+Important Zustand stores:
+
+- `sessionDetailStore.ts`: brainstorming, design, session detail
+- `simulationStore.ts`: live simulation state, SSE buffering, controls
+- `reflectionStore.ts`: reflection workflow state
+- `compareStore.ts`: compare-session state
+- `sessionsStore.ts`: home/session list state
+- `settingsStore.ts`: provider and model settings
+
+### Pages
+
+Current route-level pages include:
+
+- `HomePage.tsx`
+- `IdeaInput.tsx`
+- `Brainstorming.tsx`
+- `DesignReview.tsx`
+- `Simulation.tsx`
+- `Reflection.tsx`
+- `AgentReview.tsx`
+- `CompareSessions.tsx`
+- `Artifacts.tsx`
+- `PhysicsLaboratory.tsx`
+- `SettingsPage.tsx`
+
+### Realtime UI Model
+
+The simulation UI consumes SSE events from `/simulate/stream`. `simulationStore.ts` batches incoming events behind `requestAnimationFrame` to reduce render pressure during active runs.
+
+## 10. Current Commands
+
+Workspace commands from the repository root:
+
+```bash
+npm install
+npm run dev
+npm run dev:server
+npm run dev:web
+npm run build
+npm run lint -w web
 ```
 
----
+Existing direct test scripts:
 
-## 3. The Central Loop & Map-Reduce Architecture
-
-During the **Simulate** stage, the simulation enters an "Intent-Resolution" cycle. Because querying 150 LLM agents iteratively would exceed context limits and rate limits, Ideal World implements a **Map-Reduce (HMAS) Clustering Architecture**.
-
-### The Map-Reduce Algorithm
-1. **Map**: Collect intents asynchronously from every citizen agent concurrently.
-2. **Reduce (Cluster)**: Form "local groups" of citizens by role/topology.
-3. **Draft Summaries**: Send local group data to smaller, cheaper LLMs to draft local resolutions.
-4. **Merge**: Send unified local drafts to the massive Central Agent model to craft the final iteration's global narrative.
-
-*Code Evidence (`server/src/orchestration/simulationRunner.ts`):*
-```typescript
-      if (aliveAgents.length > MAPREDUCE_THRESHOLD) {
-        // ── Map-Reduce path for large sessions (role-based clustering) ──
-        const groups = clusterByRole(aliveAgents, BATCH_SIZE);
-        const groupTasks = groups.map((group, gi) => async () => {
-          const msgs = buildGroupResolutionMessages(session, group, groupIntents, allIntentsBrief, iterNum, previousSummary);
-          // Use citizenAgentModel for group coordinators (cheaper); merge step keeps centralAgentModel
-          return retryWithHealing({ provider: citizenProv, ... });
-        });
-
-        const groupResults = await runWithConcurrency(groupTasks, settings.maxConcurrency);
-
-        // Merge step: synthesise group summaries into a society-wide narrative
-        const groupSummaries = groupResults.map(r => r.groupSummary);
-        const mergeMessages = buildMergeResolutionMessages(session, groupSummaries, iterNum, previousSummary);
-        
-        resolution = await retryWithHealing({ provider, messages: mergeMessages, ... });
-      }
+```bash
+npx tsx server/src/llm/__tests__/phase2.test.ts
+npx tsx server/src/cognition/__tests__/phase3.test.ts
+npx tsx server/src/mechanics/__tests__/physics_sandbox.ts --json
 ```
 
----
+## 11. Practical Notes for Contributors
 
-## 4. The Neuro-Symbolic Engine
+- The worktree may be dirty; do not assume a clean branch.
+- `Documents/Legacy/` contains older design material and may not match the current code.
+- Route-level manual object mapping exists in a few places; shared contracts should be checked carefully when changing response shapes.
+- High-value integration points are simulation state recovery, import/export fidelity, and frontend/store synchronization with SSE.
 
-The pinnacle algorithm of Ideal World is the **Neuro-Symbolic Engine**, ensuring agents adhere strictly to fundamental realities like resource limits and mortality.
+## 12. Source of Truth
 
-### 4.1 "Neuro" (Cognitive prompts & NLP generation)
-The LLM generates agent intents securely based on physical and psychological contexts. The prompt dynamically shifts tone when an agent is starving or under extreme stress (cortisol).
+For current implementation details, prefer:
 
-### 4.2 "Bridge" (Multi-Action Queue Parsing)
-The LLM generates raw natural language + an `actionQueue` (array of `actionCode`). This allows agents to perform sequential behaviors (e.g., `["WORK", "POST_BUY_ORDER", "REST"]`) in a single tick.
+1. `shared/src/types.ts`
+2. `server/src/db/schema.ts`
+3. route handlers in `server/src/routes/`
+4. orchestration code in `server/src/orchestration/`
+5. Zustand stores in `web/src/stores/`
 
-### 4.3 "Symbolic" (Physics, Metabolism & Economy Engine)
-
-#### 4.3.1 Physiological Metabolism (MET System)
-Computes per-tick Satiety depletion using **Metabolic Equivalent of Task (MET)**.
-- **Formula**: $\Delta_{\text{Satiety}} = (\text{weightKg} \cdot \text{MET} \cdot \text{AgeModifier}) / \text{SatietyKcalPerPoint}$
-- Intensities range from `SLEEP` (0.95) to `WORK_HEAVY_MANUAL` (7.25).
-- Physical labor over age 60 incurs up to 25% biomechanical inefficiency.
-
-#### 4.3.2 Allostatic Load Pipeline (EMAL)
-Translates transient **Cortisol** into permanent structural health damage via a 3-step differential pipeline:
-1. **Reversible Strain ($S_t$)**: A leaky integrator where $S_t = 0.85 \cdot S_{t-1} + \text{Cortisol}$.
-2. **Irreversible Load ($L_t$)**: Accumulates when Strain exceeds the elasticity limit (80): $L_t += (S_t - 80) \cdot 0.05$.
-3. **Structural Health Decay ($H_t$)**: Begins when Load crosses the disease threshold (500): $H -= (L_t - 500) \cdot 0.02$.
-
-#### 4.3.3 Constant Product AMM ($x \cdot y = k$)
-Replaces peer-to-peer bartering with an algorithmic liquidity pool.
-- **Invariant**: $k = \text{FiatReserve} \cdot \text{FoodReserve}$.
-- Spot price is determined by the reserve ratio. Buying food when reserves are low causes exponential price spikes, rationing scarce resources.
-
----
-
-## 5. Technical Performance Innovations
-
-### 5.1 Backend: HMAS Map-Reduce & Asynchronous SQLite Queuing
-To handle 150+ agents, the simulation uses **HMAS Clustering**:
-1. **Map**: Concurrent async intent collection.
-2. **Reduce**: Role-based clustering to form local group narratives.
-3. **Merge**: Central Agent synthesis into a global narrative.
-
-Log data is enqueued in the `asyncLogFlusher` to prevent `SQLITE_BUSY` deadlocks during high-concurrency writes.
-
-### 5.2 Frontend: React SSE Debouncing & Virtual Buffers
-To achieve 60 FPS, Zustand intercepts the `EventSource` stream, mutating a background array queue, and dumping it to React only via `requestAnimationFrame` (rAF) to avoid per-event re-renders.
-
-## Conclusion
- Ideal World heavily interleaves traditional high-performance concurrent scheduling, deterministic physics-like number crunching, and Generative Artificial Intelligence semantic intelligence. Developers should strictly preserve this **Neuro-Symbolic** barrier: AI defines **What/Why**, and the Hardcoded Physics dictates **How Much**.
+Treat older narrative docs as context, not authority, unless they match the code.

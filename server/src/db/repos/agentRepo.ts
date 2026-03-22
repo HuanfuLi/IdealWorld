@@ -5,7 +5,8 @@ import { eq } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { db, sqlite } from '../index.js';
 import { agents } from '../schema.js';
-import type { Agent, AgentStats } from '@idealworld/shared';
+import type { Agent, AgentStats, PersonalityTrait } from '@idealworld/shared';
+import { PERSONALITY_TRAITS } from '@idealworld/shared';
 
 function parseStats(raw: string): AgentStats {
   try {
@@ -39,7 +40,18 @@ function rowToAgent(row: typeof agents.$inferSelect): Agent {
     diedAtIteration: row.diedAtIteration ?? null,
     allostaticStrain: row.allostaticStrain ?? 0,
     allostaticLoad: row.allostaticLoad ?? 0,
+    personalityTraits: parseTraits(row.personalityTraits),
   };
+}
+
+function parseTraits(raw: string): PersonalityTrait[] {
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr.filter((t: unknown): t is PersonalityTrait =>
+      typeof t === 'string' && PERSONALITY_TRAITS.includes(t as PersonalityTrait)
+    );
+  } catch { return []; }
 }
 
 export const agentRepo = {
@@ -58,6 +70,7 @@ export const agentRepo = {
       status: a.status ?? 'alive',
       bornAtIteration: a.bornAtIteration ?? undefined,
       diedAtIteration: a.diedAtIteration ?? undefined,
+      personalityTraits: JSON.stringify(a.personalityTraits ?? []),
     }));
 
     // Insert in batches of 25

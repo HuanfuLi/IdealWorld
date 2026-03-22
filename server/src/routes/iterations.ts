@@ -76,7 +76,8 @@ router.get('/agent-stats', async (req, res) => {
       actionsByIter.get(iterId)!.set(a.agentId, { finalWealth: finalW, finalHealth: finalH, finalHappiness: finalHap, wealthDelta: w, healthDelta: h, happinessDelta: hap });
     }
 
-    const clamp = (v: number) => Math.min(100, Math.max(0, Math.round(v)));
+    const clampStat = (v: number) => Math.min(100, Math.max(0, Math.round(v)));
+    const clampWealth = (v: number) => Math.max(0, Math.round(v));
     const result: Record<string, { name: string; role: string; history: Array<{ iter: number; wealth: number; health: number; happiness: number }> }> = {};
 
     for (const agent of citizenAgents) {
@@ -95,9 +96,9 @@ router.get('/agent-stats', async (req, res) => {
             h = entry.finalHealth;
             hap = entry.finalHappiness;
           } else {
-            w = clamp(w + entry.wealthDelta);
-            h = clamp(h + entry.healthDelta);
-            hap = clamp(hap + entry.happinessDelta);
+            w = clampWealth(w + entry.wealthDelta);
+            h = clampStat(h + entry.healthDelta);
+            hap = clampStat(hap + entry.happinessDelta);
           }
         }
         history.push({ iter: iter.iterationNumber, wealth: w, health: h, happiness: hap });

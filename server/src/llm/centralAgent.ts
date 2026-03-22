@@ -202,7 +202,8 @@ export async function generateDesign(
         name: string;
         role: string;
         background: string;
-        initialStats: { wealth: number; health: number; happiness: number };
+        personalityTraits?: string[];
+        initialStats: { wealth: number; health: number; happiness: number; cortisol?: number; dopamine?: number };
       }>;
     }>(raw);
 
@@ -225,17 +226,27 @@ export async function generateDesign(
   await db.delete(reflections).where(eq(reflections.sessionId, session.id));
   await db.delete(agents).where(eq(agents.sessionId, session.id));
 
-  const agentRows = agentsData.agents.map(a => ({
-    id: uuidv4(),
-    sessionId: session.id,
-    name: a.name,
-    role: a.role,
-    background: a.background ?? '',
-    initialStats: JSON.stringify(a.initialStats ?? { wealth: 50, health: 70, happiness: 60 }),
-    currentStats: JSON.stringify(a.initialStats ?? { wealth: 50, health: 70, happiness: 60 }),
-    type: 'citizen',
-    status: 'alive',
-  }));
+  const agentRows = agentsData.agents.map(a => {
+    const stats = {
+      wealth: a.initialStats?.wealth ?? 50,
+      health: a.initialStats?.health ?? 70,
+      happiness: a.initialStats?.happiness ?? 60,
+      cortisol: a.initialStats?.cortisol ?? 20,
+      dopamine: a.initialStats?.dopamine ?? 50,
+    };
+    return {
+      id: uuidv4(),
+      sessionId: session.id,
+      name: a.name,
+      role: a.role,
+      background: a.background ?? '',
+      initialStats: JSON.stringify(stats),
+      currentStats: JSON.stringify(stats),
+      personalityTraits: JSON.stringify(Array.isArray(a.personalityTraits) ? a.personalityTraits.slice(0, 2) : []),
+      type: 'citizen',
+      status: 'alive',
+    };
+  });
 
   // Insert in batches of 25
   for (let i = 0; i < agentRows.length; i += 25) {
@@ -307,9 +318,9 @@ export async function refine(
       remove?: string[];
     } | null;
     agentChanges: {
-      add: Array<{ name: string; role: string; background: string; initialStats: { wealth: number; health: number; happiness: number } }>;
+      add: Array<{ name: string; role: string; background: string; personalityTraits?: string[]; initialStats: { wealth: number; health: number; happiness: number; cortisol?: number; dopamine?: number } }>;
       remove: string[];
-      modify: Array<{ name: string; role: string; background: string; initialStats: { wealth: number; health: number; happiness: number } }>;
+      modify: Array<{ name: string; role: string; background: string; personalityTraits?: string[]; initialStats: { wealth: number; health: number; happiness: number; cortisol?: number; dopamine?: number } }>;
     };
     agentsSummary: string | null;
   }>(raw);
@@ -321,6 +332,8 @@ export async function refine(
       wealth: Math.max(0, Math.round(Number(obj.wealth) || 50)),
       health: Math.max(0, Math.min(100, Math.round(Number(obj.health) || 70))),
       happiness: Math.max(0, Math.min(100, Math.round(Number(obj.happiness) || 60))),
+      cortisol: Math.max(0, Math.min(100, Math.round(Number(obj.cortisol) || 20))),
+      dopamine: Math.max(0, Math.min(100, Math.round(Number(obj.dopamine) || 50))),
     };
   };
 
@@ -417,6 +430,7 @@ export async function refine(
           background: a.background || undefined,
           initialStats: statsJson,
           currentStats: statsJson,
+          personalityTraits: JSON.stringify(Array.isArray(a.personalityTraits) ? a.personalityTraits.slice(0, 2) : []),
         })
         .where(sql`${agents.sessionId} = ${session.id} AND ${agents.name} = ${a.name}`);
     }
@@ -437,6 +451,7 @@ export async function refine(
           background: a.background ?? '',
           initialStats: JSON.stringify(clamped),
           currentStats: JSON.stringify(clamped),
+          personalityTraits: JSON.stringify(Array.isArray(a.personalityTraits) ? a.personalityTraits.slice(0, 2) : []),
           type: 'citizen',
           status: 'alive',
         };

@@ -339,8 +339,13 @@ export const useSessionDetailStore = create<SessionDetailStore>((set, get) => ({
   updateLockedVariables: async (id: string, lockedVars: string[]) => {
     await brainstormApi.patchConfig(id, { lockedVariables: lockedVars });
     set(state => ({
-      session: state.session && state.session.config
-        ? { ...state.session, config: { ...state.session.config, lockedVariables: lockedVars } }
+      session: state.session
+        ? {
+            ...state.session,
+            config: state.session.config
+              ? { ...state.session.config, lockedVariables: lockedVars }
+              : { totalIterations: 20, checklist: { governance: false, economy: false, legal: false, culture: false, infrastructure: false }, readyForDesign: false, lockedVariables: lockedVars },
+          }
         : state.session,
     }));
   },

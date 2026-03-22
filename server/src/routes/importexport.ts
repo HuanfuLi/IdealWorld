@@ -69,6 +69,9 @@ router.get('/:id/export', async (req, res) => {
       type: a.type,
       bornAtIteration: a.bornAtIteration ?? null,
       diedAtIteration: a.diedAtIteration ?? null,
+      personalityTraits: (() => { try { return JSON.parse(a.personalityTraits); } catch { return []; } })(),
+      allostaticStrain: a.allostaticStrain ?? 0,
+      allostaticLoad: a.allostaticLoad ?? 0,
     })),
     iterations: iterRows.map(it => ({
       iterationNumber: it.iterationNumber,
@@ -158,6 +161,9 @@ router.post('/import', async (req, res) => {
       status: a.status ?? 'alive',
       bornAtIteration: a.bornAtIteration ?? undefined,
       diedAtIteration: a.diedAtIteration ?? undefined,
+      personalityTraits: a.personalityTraits ? JSON.stringify(a.personalityTraits) : '[]',
+      allostaticStrain: a.allostaticStrain ?? 0,
+      allostaticLoad: a.allostaticLoad ?? 0,
     }));
     for (let i = 0; i < agentRows.length; i += 25) {
       if (agentRows.slice(i, i + 25).length > 0) {

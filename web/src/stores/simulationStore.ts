@@ -339,8 +339,12 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   },
 
   pause: async (sessionId: string) => {
-    set({ isPaused: true, isRunning: false });
-    await fetch(`/api/sessions/${sessionId}/simulate/pause`, { method: 'POST' });
+    const res = await fetch(`/api/sessions/${sessionId}/simulate/pause`, { method: 'POST' });
+    if (res.ok) {
+      set({ isPaused: true, isRunning: false });
+    } else {
+      set({ error: `Pause failed: ${res.status}` });
+    }
   },
 
   resume: async (sessionId: string) => {
@@ -351,8 +355,12 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   },
 
   abort: async (sessionId: string) => {
-    await fetch(`/api/sessions/${sessionId}/simulate/abort`, { method: 'POST' });
-    set({ isRunning: false, isPaused: false, isComplete: true });
+    const res = await fetch(`/api/sessions/${sessionId}/simulate/abort`, { method: 'POST' });
+    if (res.ok) {
+      set({ isRunning: false, isPaused: false, isComplete: true });
+    } else {
+      set({ error: `Abort failed: ${res.status}` });
+    }
   },
 
   abortAndReset: async (sessionId: string) => {
@@ -361,11 +369,15 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
   continueSimulation: async (sessionId: string, iterations: number, earlyStoppingEnabled = true) => {
     set({ isComplete: false, finalReport: null, error: null });
-    await fetch(`/api/sessions/${sessionId}/simulate`, {
+    const res = await fetch(`/api/sessions/${sessionId}/simulate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ iterations, earlyStoppingEnabled }),
     });
+    if (!res.ok) {
+      set({ error: `Continue failed: ${res.status}`, isComplete: true });
+      return;
+    }
     return get().connectSSE(sessionId);
   },
 

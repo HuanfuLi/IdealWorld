@@ -18,35 +18,26 @@ router.get('/', async (_req, res) => {
         stage: sessions.stage,
         createdAt: sessions.createdAt,
         updatedAt: sessions.updatedAt,
+        agentCount: sql<number>`count(distinct ${agents.id})`,
+        completedIterations: sql<number>`count(distinct ${iterations.id})`,
       })
       .from(sessions)
+      .leftJoin(agents, eq(agents.sessionId, sessions.id))
+      .leftJoin(iterations, eq(iterations.sessionId, sessions.id))
+      .groupBy(sessions.id)
       .orderBy(sql`${sessions.updatedAt} DESC`);
 
-    const result: SessionMetadata[] = await Promise.all(
-      rows.map(async (session) => {
-        const [agentCountRow] = await db
-          .select({ count: sql<number>`count(*)` })
-          .from(agents)
-          .where(eq(agents.sessionId, session.id));
-
-        const [iterCountRow] = await db
-          .select({ count: sql<number>`count(*)` })
-          .from(iterations)
-          .where(eq(iterations.sessionId, session.id));
-
-        return {
-          id: session.id,
-          title: session.title,
-          idea: session.idea,
-          stage: session.stage as Stage,
-          agentCount: Number(agentCountRow?.count ?? 0),
-          totalIterations: 0,
-          completedIterations: Number(iterCountRow?.count ?? 0),
-          createdAt: session.createdAt,
-          updatedAt: session.updatedAt,
-        };
-      })
-    );
+    const result: SessionMetadata[] = rows.map(row => ({
+      id: row.id,
+      title: row.title,
+      idea: row.idea,
+      stage: row.stage as Stage,
+      agentCount: Number(row.agentCount ?? 0),
+      totalIterations: 0,
+      completedIterations: Number(row.completedIterations ?? 0),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    }));
 
     res.json(result);
   } catch (err) {
@@ -152,6 +143,9 @@ router.get('/:id/agents', async (req, res) => {
       type: a.type,
       bornAtIteration: a.bornAtIteration ?? null,
       diedAtIteration: a.diedAtIteration ?? null,
+      personalityTraits: (() => { try { return JSON.parse(a.personalityTraits); } catch { return []; } })(),
+      allostaticStrain: a.allostaticStrain ?? 0,
+      allostaticLoad: a.allostaticLoad ?? 0,
     }));
 
     res.json({ agents: result, total: result.length });
@@ -313,7 +307,7 @@ router.patch('/:id/stage', async (req, res) => {
 // PUT /api/sessions/:id/config — patch config fields (kept for backward compat)
 router.put('/:id/config', async (req, res) => {
   const { id } = req.params;
-  const body = req.body as { totalIterations?: number; checklist?: unknown; readyForDesign?: boolean; stage?: string };
+  const body = req.body as { totalIterations?: number; checklist?: unknown; readyForDesign?: boolean; stage?: string; lockedVariables?: string[] };
 
   try {
     const [session] = await db.select().from(sessions).where(eq(sessions.id, id));
@@ -330,6 +324,7 @@ router.put('/:id/config', async (req, res) => {
     if (body.totalIterations !== undefined) updatedConfig.totalIterations = body.totalIterations;
     if (body.checklist !== undefined) updatedConfig.checklist = body.checklist;
     if (body.readyForDesign !== undefined) updatedConfig.readyForDesign = body.readyForDesign;
+    if (body.lockedVariables !== undefined) updatedConfig.lockedVariables = body.lockedVariables;
 
     const now = new Date().toISOString();
     const updates: Record<string, unknown> = {
@@ -402,6 +397,7 @@ router.post('/:id/fork', async (req, res) => {
         type: a.type,
         bornAtIteration: null,
         diedAtIteration: null,
+        personalityTraits: a.personalityTraits,
       });
     }
 
@@ -460,6 +456,9 @@ router.post('/:id/fork-simulation', async (req, res) => {
         type: a.type,
         bornAtIteration: a.bornAtIteration ?? null,
         diedAtIteration: a.diedAtIteration ?? null,
+        personalityTraits: a.personalityTraits,
+        allostaticStrain: a.allostaticStrain,
+        allostaticLoad: a.allostaticLoad,
       });
     }
 

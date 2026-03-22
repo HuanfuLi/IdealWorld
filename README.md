@@ -1,49 +1,123 @@
 # Ideal World
 
-**Ideal World** is a local-first, LLM-powered multi-agent society simulation platform. It models micro-societies by having dozens of distinct LLM-driven "Citizen Agents" interact in high-resolution turn-based iterations, guided by an omniscient "Central Agent" and a deterministic **Neuro-Symbolic Engine**.
+Ideal World is a local-first TypeScript workspace for designing, simulating, reflecting on, and comparing LLM-driven micro-societies. It combines LLM-based intent generation with deterministic mechanics for stats, markets, physiology, and telemetry.
 
-## Key Features
+## What It Does
 
-- **Hybrid Micro-Turn System**: "1 Iteration = 1 Week" ticks. Agents utilize a **Multi-Action Queue** (up to 3 actions per turn) allowing for complex behaviors like "Work, then Buy Food, then Rest."
-- **Neuro-Symbolic Engine**: Combines deterministic physics/economic algorithms with emergent LLM psychology. High-level intent is parsed into `ActionCodes`, while material outcomes are calculated by a hard-coded engine.
-- **HMAS Map-Reduce Architecture**: Optimized for high agent counts (20-150+), utilizing a clustering strategy to process agent intents and group resolutions efficiently.
-- **Empirical Metabolism (MET)**: Caloric burn system where task intensity (`WORK_HEAVY_MANUAL` vs `REST`) and agent characteristics (weight, age) dictate satiety depletion.
-- **Allostatic Load Pipeline**: Psychosomatic decay model where chronic stress (Cortisol) converts into reversible **Strain** and eventually irreversible **Allostatic Load** (chronic health damage).
-- **Constant Product AMM**: Always-liquid algorithmic market maker ($x \cdot y = k$) for commodities like Food, Raw Materials, and Luxury Goods.
-- **Stock-Flow Consistent UBI**: A **2% Demurrage Tax** on wealth redistributed as **Universal Basic Income (UBI)** every macro-cycle to ensure money velocity.
-- **Darwinian Humiliation Fallback**: A survival safety net where destitute agents are "humiliated" (wealth reset, stress spike) rather than immediately removed, maintaining societal pressure.
-- **Provider-Agnostic LLM Gateway**: Supports Anthropic (Claude), OpenAI, Google (Vertex/Gemini), and local models (via Ollama).
+The application supports a full session lifecycle:
 
-## Project Architecture
+1. Idea input
+2. Brainstorming
+3. Design generation and refinement
+4. Simulation
+5. Reflection
+6. Review / comparison
 
-### The Three-Phase Iteration Loop
-1. **Cognitive Phase**: Agents retrieve memories, run directional economic reflections, and update recursive plans.
-2. **Intent Phase (Parallel)**: Citizen Agents declare intentions, parsed into a structured Multi-Action Queue.
-3. **Resolution Phase (Map-Reduce)**: The Central Agent narrates social outcomes, while the **Physics Engine** calculates deterministic deltas (MET, Allostatic Load, AMM clearing).
+In simulation, citizen agents produce intents through LLM prompts, the central agent resolves society-level outcomes, and deterministic mechanics apply the actual economic and physiological effects.
 
-## Technical Notes
+## Workspace Layout
 
-- **Local-First**: All data is stored in a local SQLite database (`~/.idealworld/idealworld.db`).
-- **Persistence**: AMM reserves and market states are persisted across sessions.
-- **Current Limitations**: 
-  - Allostatic load values (Strain/Load) are currently stored in volatile memory (reset on server restart).
-  - Agent age and weight are currently using defaults as they are missing from the core database schema.
+- `web/`: Vite + React frontend
+- `server/`: Express API, orchestration, mechanics, persistence
+- `shared/`: shared domain types and economy primitives
+- `Documents/`: architecture notes, changelogs, design analysis
+- `SimulationResult/`: exported sample result files
 
-## Quick Start
+## Current Core Systems
 
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
-2. Start the application:
-   ```bash
-   npm run dev
-   ```
+- Multi-provider LLM gateway for Anthropic, OpenAI, Gemini, Vertex, and local-compatible endpoints
+- Session-based workflow with persisted stage transitions
+- Deterministic simulation loop with SSE updates to the frontend
+- Physics and action-resolution engine
+- MET-based metabolism and allostatic load persistence
+- Closed-loop economy with order books, AMM state snapshots, and per-agent economy state
+- Reflection, review, comparison, artifact browsing, and import/export flows
+- Local SQLite persistence with Drizzle schema plus direct `better-sqlite3` hot paths where needed
 
-## Documentation
+## Tech Stack
 
-Full project design, architectural plans, and detailed mechanism explanations can be found in the `Documents/` directory. 
+- Frontend: React 19, Vite, Zustand, React Router, lucide-react
+- Backend: Express, TypeScript, Drizzle ORM, `better-sqlite3`
+- Shared: TypeScript package with session, agent, iteration, and economy types
+- Realtime transport: Server-Sent Events
+
+## Development
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Run the full app:
+
+```bash
+npm run dev
+```
+
+Run backend only:
+
+```bash
+npm run dev:server
+```
+
+Run frontend only:
+
+```bash
+npm run dev:web
+```
+
+Build all packages:
+
+```bash
+npm run build
+```
+
+Lint the frontend:
+
+```bash
+npm run lint -w web
+```
+
+## Testing
+
+There is no single root test command yet. Existing executable test and sandbox scripts include:
+
+```bash
+npx tsx server/src/llm/__tests__/phase2.test.ts
+npx tsx server/src/cognition/__tests__/phase3.test.ts
+npx tsx server/src/mechanics/__tests__/physics_sandbox.ts --json
+```
+
+## Data and Persistence
+
+- Primary database: `~/.idealworld/idealworld.db`
+- Sessions, agents, iterations, reflections, messages, and economy state are stored locally
+- Simulation telemetry is embedded into iteration statistics and exposed through export and telemetry endpoints
+- AMM and physiological state are persisted so pause/resume and restart flows can recover state
+
+## Main User Surfaces
+
+The current frontend includes pages for:
+
+- Home / session listing
+- Idea input
+- Brainstorming
+- Design review
+- Simulation
+- Reflection
+- Agent review
+- Compare sessions
+- Artifacts
+- Physics laboratory
+- Settings
+
+## Notes
+
+- This repository is local-first and intentionally stores no cloud-side project state.
+- Do not commit API keys, local database files, or provider secrets.
+- Historical notes in `Documents/Legacy/` may not reflect the latest implementation.
 
 ## License
 
-This project is licensed under the GNU Affero General Public License v3.0 (AGPLv3). See the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU Affero General Public License v3.0. See [LICENSE](LICENSE).

@@ -1,49 +1,123 @@
-# Ideal World (理想世界)
+# Ideal World（理想世界）
 
-**Ideal World** 是一个本地优先、LLM 驱动的多代理社会模拟平台。它通过数十个各具特色的 LLM 驱动的“公民代理”在细粒度的回合制迭代中进行交互，由全知的“中央代理”和确定性的 **神经符号引擎 (Neuro-Symbolic Engine)** 引导。
+Ideal World 是一个本地优先的 TypeScript 工作区，用于设计、模拟、反思和比较由 LLM 驱动的微型社会。它将基于 LLM 的意图生成与确定性机制结合，用于处理属性、市场、生理状态和遥测数据。
 
-## 核心特性
+## 项目功能
 
-- **混合微回合系统 (Hybrid Micro-Turn System)**：“1 次迭代 = 1 周”。代理现在利用 **多操作队列 (Multi-Action Queue)**（每回合最多 3 个操作），允许复杂的行为逻辑，如“先工作，然后买食物，最后休息”。
-- **神经符号引擎 (Neuro-Symbolic Engine)**：将严格的确定性物理/经济算法与涌现的 LLM 心理学相结合。高层意图被解析为 `ActionCodes`，而物质结果由硬编码引擎计算。
-- **HMAS Map-Reduce 架构**：针对高代理数量 (20-150+) 进行了优化，利用集群策略高效处理代理意图和分组决议。
-- **经验代谢系统 (MET)**：根据任务强度（如 `WORK_HEAVY_MANUAL` 与 `REST`）以及代理特征（体重、年龄）决定饱腹度消耗。
-- **异体负荷管线 (Allostatic Load Pipeline)**：心身衰减模型，其中慢性压力 (皮质醇) 转化为可逆的 **应变 (Strain)**，并最终钙化为不可逆的 **异体负荷 (Allostatic Load)**（慢性健康损伤）。
-- **恒定乘积 AMM**：为食物、原材料和奢侈品等商品提供始终流动的算法市场制造者 ($x \cdot y = k$)。
-- **存量-流量一致性 UBI**：对财富征收 **2% 的滞留税 (Demurrage Tax)**，并作为 **全民基本收入 (UBI)** 每 10 次迭代重新分配，以确保货币流动性。
-- **达尔文式羞辱回退 (Darwinian Humiliation Fallback)**：生存安全网，赤贫代理会被系统“羞辱”（财富清零、压力激增）而不是直接移除，从而维持社会压力。
-- **厂商无关的 LLM 网关**：支持 Anthropic (Claude), OpenAI, Google (Vertex/Gemini) 以及本地模型 (通过 Ollama)。
+应用支持完整的会话生命周期：
 
-## 项目架构
+1. 创意输入
+2. 头脑风暴
+3. 设计生成与细化
+4. 运行模拟
+5. 反思
+6. 评审 / 对比
 
-### 三阶段迭代循环
-1. **认知阶段 (Cognitive Phase)**：代理检索主观记忆，进行定向经济反思，并根据物质现实更新递归计划。
-2. **意图阶段 (Intent Phase - 并行)**：公民代理以自然语言声明意图，解析为结构化的多操作队列。
-3. **决议阶段 (Resolution Phase - Map-Reduce)**：中央代理叙述社会结果，同时 **物理引擎** 计算确定性的属性增量（MET 代谢、异体负荷、AMM 市场清算）。
+在模拟阶段，公民代理通过 LLM 提出意图，中央代理生成社会层面的决议，而确定性机制负责真正应用经济和生理层面的结果。
 
-## 技术说明
+## 工作区结构
 
-- **本地优先**：所有数据存储在本地 SQLite 数据库中 (`~/.idealworld/idealworld.db`)。
-- **持久化**：AMM 储备和市场状态现在跨会话持久化。
-- **当前局限**：
-  - 异体负荷值（应变/负荷）目前存储在易失性内存中（服务器重启时重置）。
-  - 代理年龄和体重目前使用默认值，因为数据库架构尚未更新这些字段。
+- `web/`：Vite + React 前端
+- `server/`：Express API、编排逻辑、机制系统、持久化
+- `shared/`：共享领域类型与经济模型基础类型
+- `Documents/`：架构说明、变更记录、差距分析、历史文档
+- `SimulationResult/`：导出的示例结果文件
 
-## 快速开始
+## 当前核心系统
 
-1. 安装依赖：
-   ```bash
-   npm install
-   ```
-2. 启动应用：
-   ```bash
-   npm run dev
-   ```
+- 支持 Anthropic、OpenAI、Gemini、Vertex 和本地兼容端点的多提供商 LLM 网关
+- 基于会话阶段的工作流与持久化阶段切换
+- 通过 SSE 向前端实时推送的确定性模拟循环
+- 物理与动作结算引擎
+- 基于 MET 的代谢系统与异体负荷持久化
+- 含订单簿、AMM 状态快照和代理经济状态的闭环经济系统
+- 反思、评审、对比、制品浏览以及导入 / 导出流程
+- 基于 SQLite 的本地持久化，搭配 Drizzle schema 与部分高频路径上的 `better-sqlite3`
 
-## 文档
+## 技术栈
 
-完整的项目设计、架构计划和详细的机制解释可以在 `Documents/` 目录中找到。
+- 前端：React 19、Vite、Zustand、React Router、lucide-react
+- 后端：Express、TypeScript、Drizzle ORM、`better-sqlite3`
+- 共享层：用于定义会话、代理、迭代和经济类型的 TypeScript 包
+- 实时通信：Server-Sent Events
+
+## 开发命令
+
+安装依赖：
+
+```bash
+npm install
+```
+
+启动完整应用：
+
+```bash
+npm run dev
+```
+
+仅启动后端：
+
+```bash
+npm run dev:server
+```
+
+仅启动前端：
+
+```bash
+npm run dev:web
+```
+
+构建全部包：
+
+```bash
+npm run build
+```
+
+前端代码检查：
+
+```bash
+npm run lint -w web
+```
+
+## 测试
+
+目前还没有统一的根测试命令。现有可直接执行的测试 / 沙箱脚本包括：
+
+```bash
+npx tsx server/src/llm/__tests__/phase2.test.ts
+npx tsx server/src/cognition/__tests__/phase3.test.ts
+npx tsx server/src/mechanics/__tests__/physics_sandbox.ts --json
+```
+
+## 数据与持久化
+
+- 主数据库：`~/.idealworld/idealworld.db`
+- 会话、代理、迭代、反思、消息和经济状态都保存在本地
+- 模拟遥测会嵌入到迭代统计中，并通过导出与遥测接口暴露
+- AMM 与生理状态会持久化，以支持暂停 / 恢复和重启后的状态恢复
+
+## 主要用户界面
+
+当前前端包含以下页面：
+
+- 首页 / 会话列表
+- 创意输入
+- 头脑风暴
+- 设计评审
+- 模拟
+- 反思
+- 代理评审
+- 会话对比
+- 制品浏览
+- 物理实验室
+- 设置
+
+## 说明
+
+- 本仓库是本地优先项目，不依赖云端项目状态。
+- 不要提交 API Key、本地数据库文件或供应商密钥。
+- `Documents/Legacy/` 中的历史文档可能与当前实现不一致。
 
 ## 许可证
 
-本项目采用 GNU Affero General Public License v3.0 (AGPLv3) 许可证。详情请参阅 [LICENSE](LICENSE) 文件。
+本项目采用 GNU Affero General Public License v3.0。详见 [LICENSE](LICENSE)。

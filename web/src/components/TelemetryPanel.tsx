@@ -9,6 +9,12 @@ interface TelemetryLog {
   totalCaloriesBurned: number;
   totalCaloriesProduced: number;
   actionFailureRate: number;
+  giniCoefficient?: number;
+  socialMobilityIndex?: number;
+  trustIndex?: number;
+  crimeRate?: number;
+  averageCortisol?: number;
+  averageDopamine?: number;
 }
 
 // ── SVGLineChart ─────────────────────────────────────────────────────────────
@@ -461,6 +467,56 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
               />
             </div>
 
+            {/* Chart 4: Wealth Inequality (Gini) */}
+            {logs.some(l => l.giniCoefficient != null) && (
+              <div style={sectionStyle}>
+                <div style={sectionTitleStyle}>Chart 4 — Wealth Inequality (Gini Coefficient)</div>
+                <SVGLineChart
+                  data={logs.filter(l => l.giniCoefficient != null).map(l => ({ x: l.iterationNumber, y: l.giniCoefficient! }))}
+                  color="#a78bfa"
+                  label="Gini (0=equal, 1=total inequality)"
+                  width={860}
+                  height={170}
+                />
+              </div>
+            )}
+
+            {/* Chart 5: Trust vs Crime */}
+            {logs.some(l => l.trustIndex != null) && (
+              <div style={sectionStyle}>
+                <div style={sectionTitleStyle}>Chart 5 — Social Trust vs Crime Rate</div>
+                <SVGLineChart
+                  data={logs.filter(l => l.trustIndex != null).map(l => ({ x: l.iterationNumber, y: l.trustIndex! }))}
+                  color="#34d399"
+                  label="Trust Index"
+                  data2={logs.filter(l => l.crimeRate != null).map(l => ({ x: l.iterationNumber, y: l.crimeRate! }))}
+                  color2="#f87171"
+                  label2="Crime Rate"
+                  sharedYAxis={true}
+                  width={860}
+                  height={170}
+                />
+              </div>
+            )}
+
+            {/* Chart 6: Population Psychology */}
+            {logs.some(l => l.averageCortisol != null) && (
+              <div style={sectionStyle}>
+                <div style={sectionTitleStyle}>Chart 6 — Population Psychology</div>
+                <SVGLineChart
+                  data={logs.filter(l => l.averageCortisol != null).map(l => ({ x: l.iterationNumber, y: l.averageCortisol! }))}
+                  color="#fb923c"
+                  label="Avg Cortisol"
+                  data2={logs.filter(l => l.averageDopamine != null).map(l => ({ x: l.iterationNumber, y: l.averageDopamine! }))}
+                  color2="#60a5fa"
+                  label2="Avg Dopamine"
+                  sharedYAxis={true}
+                  width={860}
+                  height={170}
+                />
+              </div>
+            )}
+
             {/* Latest Stats Table */}
             {latest && (
               <div style={sectionStyle}>
@@ -469,11 +525,15 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
                   <thead>
                     <tr>
                       <th style={thStyle}>Fiat Supply</th>
-                      <th style={thStyle}>AMM Food Reserve</th>
+                      <th style={thStyle}>AMM Food</th>
                       <th style={thStyle}>Spot Price</th>
-                      <th style={thStyle}>Cal Produced</th>
-                      <th style={thStyle}>Cal Burned</th>
-                      <th style={thStyle}>Failure Rate</th>
+                      <th style={thStyle}>Cal P/B</th>
+                      <th style={thStyle}>Fail%</th>
+                      <th style={thStyle}>Gini</th>
+                      <th style={thStyle}>Trust</th>
+                      <th style={thStyle}>Crime</th>
+                      <th style={thStyle}>Cortisol</th>
+                      <th style={thStyle}>Dopamine</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -481,9 +541,13 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
                       <td style={tdStyle}>{fmt(latest.totalFiatSupply)}</td>
                       <td style={tdStyle}>{fmt(latest.ammFoodReserve_Y)}</td>
                       <td style={tdStyle}>{fmt(latest.ammSpotPrice_Food, 4)}</td>
-                      <td style={tdStyle}>{fmt(latest.totalCaloriesProduced)}</td>
-                      <td style={tdStyle}>{fmt(latest.totalCaloriesBurned)}</td>
+                      <td style={tdStyle}>{fmt(latest.totalCaloriesProduced)}/{fmt(latest.totalCaloriesBurned)}</td>
                       <td style={tdStyle}>{(latest.actionFailureRate * 100).toFixed(1)}%</td>
+                      <td style={tdStyle}>{latest.giniCoefficient?.toFixed(3) ?? '—'}</td>
+                      <td style={tdStyle}>{latest.trustIndex?.toFixed(2) ?? '—'}</td>
+                      <td style={tdStyle}>{latest.crimeRate?.toFixed(2) ?? '—'}</td>
+                      <td style={tdStyle}>{latest.averageCortisol ?? '—'}</td>
+                      <td style={tdStyle}>{latest.averageDopamine ?? '—'}</td>
                     </tr>
                   </tbody>
                 </table>

@@ -29,6 +29,7 @@ export const agents = sqliteTable('agents', {
   diedAtIteration: integer('died_at_iteration'),
   allostaticStrain: real('allostatic_strain').notNull().default(0),
   allostaticLoad: real('allostatic_load').notNull().default(0),
+  personalityTraits: text('personality_traits').notNull().default('[]'),
 });
 
 export const agentIntents = sqliteTable('agent_intents', {

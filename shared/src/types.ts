@@ -85,7 +85,26 @@ export interface Agent {
   allostaticStrain?: number;
   /** Irreversible physiological wear accumulating over long stressful simulations. */
   allostaticLoad?: number;
+  /** 1–2 immutable personality traits that bias decision-making via prompt context. */
+  personalityTraits?: PersonalityTrait[];
 }
+
+export type PersonalityTrait =
+  | 'risk-tolerant' | 'risk-averse'
+  | 'cooperative' | 'competitive'
+  | 'authoritarian' | 'libertarian'
+  | 'materialistic' | 'idealistic'
+  | 'impulsive' | 'calculating'
+  | 'empathetic' | 'ruthless';
+
+export const PERSONALITY_TRAITS: PersonalityTrait[] = [
+  'risk-tolerant', 'risk-averse',
+  'cooperative', 'competitive',
+  'authoritarian', 'libertarian',
+  'materialistic', 'idealistic',
+  'impulsive', 'calculating',
+  'empathetic', 'ruthless',
+];
 
 /** @alias Agent — kept for backward compat with Phase 1/2 imports */
 export type AgentDefinition = Agent;
@@ -221,6 +240,20 @@ export interface TelemetryLog {
   totalCaloriesProduced: number;
   /** Fraction of actions that explicitly failed/were rejected (0–1) */
   actionFailureRate: number;
+
+  // ── Analytical metrics ──────────────────────────────────────────────────
+  /** Gini coefficient: 0 = perfect equality, 1 = one agent holds all wealth */
+  giniCoefficient?: number;
+  /** Fraction of agents who changed role tier this iteration */
+  socialMobilityIndex?: number;
+  /** HELP actions / (HELP + STEAL actions). 1 = full cooperation, 0 = full predation */
+  trustIndex?: number;
+  /** (STEAL + SABOTAGE + EMBEZZLE) / total actions */
+  crimeRate?: number;
+  /** Population mean cortisol (0–100) */
+  averageCortisol?: number;
+  /** Population mean dopamine (0–100) */
+  averageDopamine?: number;
 }
 
 /** Full-fidelity export envelope */

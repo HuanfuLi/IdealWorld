@@ -14,7 +14,7 @@ import { eq, sql } from 'drizzle-orm';
 import { db, sqlite } from '../db/index.js';
 import {
   iterations, agentIntents, resolvedActions,
-  agents, economySnapshots, agentEconomy, marketPrices, roleChanges,
+  agents, economySnapshots, agentEconomy, marketPrices, roleChanges, ammSnapshots,
 } from '../db/schema.js';
 import { sessionRepo } from '../db/repos/sessionRepo.js';
 import { runSimulation, getSessionTelemetry } from '../orchestration/simulationRunner.js';
@@ -34,13 +34,17 @@ async function eraseSimulationData(sessionId: string): Promise<void> {
   await db.delete(agentEconomy).where(eq(agentEconomy.sessionId, sessionId));
   await db.delete(marketPrices).where(eq(marketPrices.sessionId, sessionId));
   await db.delete(roleChanges).where(eq(roleChanges.sessionId, sessionId));
+  await db.delete(ammSnapshots).where(eq(ammSnapshots.sessionId, sessionId));
 
-  // Reset every agent's current_stats back to initial_stats, revive the dead.
+  // Reset every agent's current_stats back to initial_stats, revive the dead,
+  // and clear persisted allostatic physiology so the next run starts clean.
   sqlite.prepare(
     `UPDATE agents
      SET current_stats = initial_stats,
          status = 'alive',
-         died_at_iteration = NULL
+         died_at_iteration = NULL,
+         allostatic_strain = 0,
+         allostatic_load = 0
      WHERE session_id = ?`
   ).run(sessionId);
 }

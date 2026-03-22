@@ -254,19 +254,20 @@ export const economyRepo = {
 
     /**
      * Persist AMM reserve state at the end of an iteration.
-     * Stores both primary food AMM and all multi-commodity pool states.
+     * Stores both primary food AMM, all multi-commodity pool states, and treasury balance.
      */
     async saveAMMSnapshot(
         sessionId: string,
         iterationNumber: number,
         primary: AMMState,
         multi: Record<string, AMMState>,
+        treasury?: number,
     ): Promise<void> {
         await db.insert(ammSnapshots).values({
             id: uuidv4(),
             sessionId,
             iterationNumber,
-            snapshotData: JSON.stringify({ primary, multi }),
+            snapshotData: JSON.stringify({ primary, multi, treasury }),
             timestamp: new Date().toISOString(),
         });
     },
@@ -277,7 +278,7 @@ export const economyRepo = {
      */
     async getLatestAMMSnapshot(
         sessionId: string,
-    ): Promise<{ primary: AMMState; multi: Record<string, AMMState> } | null> {
+    ): Promise<{ primary: AMMState; multi: Record<string, AMMState>; treasury?: number } | null> {
         const [row] = await db.select()
             .from(ammSnapshots)
             .where(eq(ammSnapshots.sessionId, sessionId))

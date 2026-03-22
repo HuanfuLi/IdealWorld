@@ -67,10 +67,8 @@ const DesignReview = () => {
       setIterations(session.config.totalIterations);
     }
     // Sync locked variables from config
-    if (session.config?.lockedVariables) {
-      setLockedVariables(session.config.lockedVariables);
-    }
-  }, [session?.stage, loading]);
+    setLockedVariables(session.config?.lockedVariables ?? []);
+  }, [session?.stage, session?.config?.lockedVariables, loading]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });

@@ -167,10 +167,13 @@ You MUST respond with ONLY valid JSON (no markdown, no preamble, no code fences)
       "name": "string - culturally appropriate unique name",
       "role": "string - occupation/role in society",
       "background": "string - 1-2 sentence background",
+      "personalityTraits": ["trait1", "trait2"],
       "initialStats": {
         "wealth": 50,
         "health": 70,
-        "happiness": 60
+        "happiness": 60,
+        "cortisol": 20,
+        "dopamine": 50
       }
     }
   ]
@@ -180,9 +183,10 @@ Rules:
 - Generate EXACTLY ${agentCount} agents
 - All names must be unique and culturally consistent with the society
 - Roles should reflect the society's governance and economic models
-- Stats: 'health' and 'happiness' must be integers between 0 and 100. 'wealth' is starting fiat currency (integer, typically 10-100 for initial balance).
+- Stats: 'health' and 'happiness' must be integers between 0 and 100. 'wealth' is starting fiat currency (integer, typically 10-100 for initial balance). 'cortisol' is baseline stress (0-100, default 20; higher for oppressed/dangerous roles like prisoners or soldiers). 'dopamine' is baseline satisfaction (0-100, default 50; higher for privileged/creative roles, lower for exploited roles).
 - Stats should vary realistically based on role and background
-- Include a diverse mix of roles: leaders, workers, artisans, caregivers, etc.`;
+- Include a diverse mix of roles: leaders, workers, artisans, caregivers, etc.
+- personalityTraits: assign 1-2 traits from this list: risk-tolerant, risk-averse, cooperative, competitive, authoritarian, libertarian, materialistic, idealistic, impulsive, calculating, empathetic, ruthless. Choose traits that match the agent's role and background. Avoid giving opposing traits to the same agent.`;
 
   return [
     { role: 'system', content: systemPrompt },
@@ -452,8 +456,6 @@ export interface MarketBoardEntry {
   itemType: string;
   averageClearingPrice: number | null;
   trend: 'up' | 'down' | 'flat' | 'new' | 'unknown';
-  /** Optional profit alert for PRODUCE_AND_SELL, computed by the symbolic engine */
-  profitAlert?: string;
 }
 
 export interface EmploymentBoardEntry {
@@ -480,9 +482,6 @@ function buildMarketBoardSection(entries?: readonly MarketBoardEntry[]): string 
   for (const entry of entries) {
     const priceText = entry.averageClearingPrice == null ? 'no clear price yet' : `avg clearing price ${entry.averageClearingPrice}`;
     lines.push(`- ${entry.itemType}: ${priceText}; trend ${entry.trend}`);
-    if (entry.profitAlert) {
-      lines.push(`  ${entry.profitAlert}`);
-    }
   }
   return lines.join('\n');
 }
@@ -525,9 +524,8 @@ export function buildNaturalIntentPrompt(
   previousSummary: string | null,
   iterationNumber: number,
   economyContext?: {
-    foodLevel: number;
-    toolCount: number;
-    topSkills: string;
+    inventory: { food: number; tools: number; raw_materials: number; luxury_goods: number };
+    skills: import('@idealworld/shared').SkillMatrix;
     isStarving: boolean;
   },
   /** Phase 3: subjective cognitive context (memories, plan, reflection). */
@@ -561,6 +559,7 @@ export function buildNaturalIntentPrompt(
    * can weigh the cost of illegal actions before choosing.
    */
   enforcementLevel?: number,
+  marketIntelligenceBlock?: string,
 ): LLMMessage[] {
   // Static prefix: identical across all agent calls in an iteration → cacheable
   const staticPrefix = `You are a citizen living in a simulated society based on: "${session.idea}"
@@ -599,6 +598,25 @@ You MUST respond with ONLY valid JSON — no markdown, no preamble, no code fenc
   ]
 }
 
+[PARAMETER SCHEMA — EXACT FORMAT REQUIRED]
+Your "parameters" field MUST exactly match one of these schemas. Wrong keys = action silently dropped.
+
+PRODUCE_AND_SELL:   { "itemType": "food", "quantity": 3 }
+  itemType options: "food" | "raw_materials" | "luxury_goods"
+  quantity: integer 1–10
+
+POST_BUY_ORDER:     { "itemType": "food", "quantity": 2, "maxPrice": 8 }
+  maxPrice: number (your maximum willingness to pay per unit)
+
+WORK_AT_ENTERPRISE: { "enterprise_id": "ent_abc123" }
+  enterprise_id: exact enterprise ID from [Employment Board] — copy it verbatim
+
+APPLY_FOR_JOB:      { "enterprise_id": "ent_abc123" }
+  enterprise_id: exact enterprise ID from [Employment Board]
+
+STEAL:              { "target": "agent_abc123" }
+  target: exact agent ID from the agent list
+
 OUTPUT RULES (read carefully — violations waste your action turn):
 - "actions" must be an array of 1–3 objects.
 - Each "actionCode" MUST exactly match a code string from [AVAILABLE ACTIONS] shown below. Any code not on that list is silently dropped.
@@ -623,27 +641,37 @@ OUTPUT RULES (read carefully — violations waste your action turn):
     stressModifier += `\n\n${subconsciousDrive}`;
   }
 
-  // Phase 1: Economy context
+  // Phase 1: Economy context (C2: full inventory + full skill matrix)
   let economyBlock = '';
   if (economyContext) {
     const foodStatus = economyContext.isStarving
       ? '⚠️ STARVING — no food!'
-      : economyContext.foodLevel <= 3
+      : economyContext.inventory.food <= 3
         ? '⚠️ Food critically low'
-        : economyContext.foodLevel <= 6
+        : economyContext.inventory.food <= 6
           ? 'Food running low'
           : 'Adequately fed';
-    const toolStatus = economyContext.toolCount > 0
-      ? `${economyContext.toolCount} tool(s) available`
-      : 'No tools (reduced productivity)';
+    const toolBonus = economyContext.inventory.tools > 0
+      ? ` (${economyContext.inventory.tools} tools → +${Math.min(economyContext.inventory.tools * 15, 60)}% wage on WORK)`
+      : ' (no tools — reduced wage)';
 
-    economyBlock = `\n\nEconomy:
-- Food: ${economyContext.foodLevel} units (${foodStatus})
-- Tools: ${toolStatus}
-- Skills: ${economyContext.topSkills}`;
+    const skillLines = Object.entries(economyContext.skills)
+      .map(([k, v]) => ({ name: k, level: (v as { level: number }).level }))
+      .sort((a, b) => b.level - a.level)
+      .map(s => `    ${s.name.padEnd(14)}: ${Math.round(s.level)}`)
+      .join('\n');
+
+    economyBlock = `\n\nYour inventory:
+  Food:          ${economyContext.inventory.food} units (${foodStatus})
+  Tools:         ${economyContext.inventory.tools} units${toolBonus}
+  Raw materials: ${economyContext.inventory.raw_materials} units
+  Luxury goods:  ${economyContext.inventory.luxury_goods} units
+
+Your skills (level 0–100):
+${skillLines}`;
 
     if (economyContext.isStarving) {
-      economyBlock += '\n\nYou have no food stockpile. You should buy food, work for wages, or produce goods for sale immediately.';
+      economyBlock += '\n\n⚠️ You have no food stockpile. Buy food, work for wages, or produce goods for sale immediately.';
     }
   }
 
@@ -721,17 +749,23 @@ Next step: ${cognitiveContext.currentPlanStep}`;
   // Build role-specific action dictionary (Task 1: full parameter schemas injected)
   const actionDictionary = buildActionDictionary(allowedActions);
 
+  // Personality traits — injected as a character influence, not a hard rule
+  const traitsBlock = agent.personalityTraits && agent.personalityTraits.length > 0
+    ? `\nPersonality: ${agent.personalityTraits.join(', ')}. These are deep-seated tendencies that colour your decisions — a risk-tolerant agent may attempt daring moves; an empathetic agent might help others at personal cost. You are not bound rigidly by these traits, but they influence how you weigh choices.`
+    : '';
+
   const dynamicSuffix = `You are ${agent.name}, a ${agent.role}.
-Background: ${agent.background}
+Background: ${agent.background}${traitsBlock}
 
 Your current situation:
 - Wealth: ${agent.currentStats.wealth} Wealth (fiat currency — no upper limit)
 - Health: ${agent.currentStats.health}/100
 - Happiness: ${agent.currentStats.happiness}/100
-- Stress: ${cortisol > 60 ? 'overwhelmed' : cortisol > 40 ? 'tense' : 'manageable'}
-- Mood: ${dopamine > 60 ? 'good spirits' : dopamine > 30 ? 'neutral' : 'disheartened'}${economyBlock}${cognitiveBlock}${marketKnowledgeBlock}${agentNamesBlock}
+- Cortisol (stress): ${cortisol}/100  ${cortisol > 80 ? '— extreme; survival instincts dominant' : cortisol > 60 ? '— elevated; risk tolerance impaired' : cortisol > 40 ? '— moderate tension' : '— calm'}
+- Dopamine (drive):  ${dopamine}/100  ${dopamine > 70 ? '— energized, ambitious' : dopamine > 40 ? '— baseline motivation' : '— low drive, prone to conservative choices'}${economyBlock}${cognitiveBlock}${marketKnowledgeBlock}${agentNamesBlock}
 
 ${iterationContext}${capitalistIdentityBlock}${biologicalSubconscious}${stressModifier}${actionResultsBlock}
+${marketIntelligenceBlock ?? ''}
 
 ${marketBoardBlock}
 
@@ -774,6 +808,8 @@ export function buildResolutionPrompt(
   previousSummary: string | null,
   iterationMetrics?: string | null,
   lockedVariables?: string[],
+  /** D4: Physics trace log from the previous iteration — grounds narrative in actual math. */
+  physicsLog?: string | null,
 ): LLMMessage[] {
   const agentList = intents.map(ai => {
     const agent = agents.find(a => a.id === ai.agentId);
@@ -786,6 +822,10 @@ export function buildResolutionPrompt(
     ? `\n\n[OBJECTIVE SYSTEM METRICS — last iteration]\n${iterationMetrics}\n⚠️ You MUST reflect these statistics in your narrative. Do NOT ignore the unemployed or failed agents. If many agents failed to find work, narrate a society gripped by unemployment crisis, desperation, and inequality.`
     : '';
 
+  const physicsLogBlock = physicsLog
+    ? `\n\n[PHYSICS LOG — exact mechanical outcomes last iteration]\nThe following math log shows the precise stat changes the physics engine computed. Your narrative MUST be consistent with these numbers — do not invent different values.\n${physicsLog}`
+    : '';
+
   const lockedNote = lockedVariables && lockedVariables.length > 0
     ? `\n\nCONTROLLED VARIABLE METHOD: The following variables are ABSOLUTELY LOCKED and will not change, regardless of any agent actions or events: ${lockedVariables.join(', ')}. Consider this when evaluating consequences or resolving conflicts, and do not narrate changes to these variables.`
     : '';
@@ -794,7 +834,7 @@ export function buildResolutionPrompt(
 
 Society: "${session.idea}"
 Time scale: ${session.timeScale ?? '1 iteration = 1 week'}
-${previousSummary ? `\nPrevious iteration summary:\n${previousSummary.slice(0, 600)}` : ''}${metricsBlock}${lockedNote}
+${previousSummary ? `\nPrevious iteration summary:\n${previousSummary.slice(0, 600)}` : ''}${physicsLogBlock}${metricsBlock}${lockedNote}
 
 Agent intentions this iteration:
 ${agentList}
@@ -830,7 +870,8 @@ You MUST respond with ONLY valid JSON (no markdown, no preamble):
 
 Rules:
 - Include one entry in agentOutcomes for every agent listed in the intentions
-- died: true only if the agent faces fatal circumstances (e.g. violent conflict, severe illness)
+- died: true only if the agent faces fatal circumstances (e.g. violent conflict, severe illness, or health ≤ 5)
+- DEATH RULE: Any agent whose current health stat is ≤ 5 MUST have "died": true in their agentOutcomes entry. Do not narrate recovery for agents at ≤ 5 health unless they explicitly received food or medical aid this iteration.
 - lifecycleEvents: only include deaths and role changes that actually occur
 - For role changes use type "role_change" with detail "from X to Y: reason"`;
 
@@ -1190,6 +1231,8 @@ export function buildGroupResolutionMessages(
   previousSummary: string | null,
   iterationMetrics?: string | null,
   lockedVariables?: string[],
+  /** D4: Physics trace log from the previous iteration — grounds narrative in actual math. */
+  physicsLog?: string | null,
 ): LLMMessage[] {
   const groupList = groupIntents.map(ai => {
     const agent = groupAgents.find(a => a.id === ai.agentId);
@@ -1228,14 +1271,17 @@ Respond with ONLY valid JSON (no markdown, no preamble):
 Rules:
 - Include an entry for EVERY agent in your sub-group
 - died: true only for fatal circumstances
+- DEATH RULE: Any agent whose current health stat is ≤ 5 MUST have "died": true. Do not narrate recovery at ≤ 5 health unless they received food or medical aid.
 - lifecycleEvents: only deaths and role changes for your sub-group`;
 
   // Dynamic suffix: group-specific data
   const metricsSnippet = iterationMetrics
     ? `\n[SYSTEM METRICS — last iteration]\n${iterationMetrics}\n` : '';
+  const physicsLogSnippet = physicsLog
+    ? `\n[PHYSICS LOG — exact mechanical outcomes last iteration]\nYour narrative MUST be consistent with these numbers — do not invent different values.\n${physicsLog}\n` : '';
   const dynamicSuffix = `Iteration ${iterationNumber}. Sub-group of ${groupAgents.length} agents.
 ${previousSummary ? `\nPrevious iteration summary:\n${previousSummary.slice(0, 400)}` : ''}
-${metricsSnippet}
+${physicsLogSnippet}${metricsSnippet}
 Your sub-group's intentions:
 ${groupList}
 

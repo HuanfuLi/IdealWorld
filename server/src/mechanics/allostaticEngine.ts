@@ -254,6 +254,12 @@ export interface AllostaticTickInput {
   cortisol: number;
   /** Prior allostatic state (restored from DB or initialised). */
   state: AllostaticState;
+  /**
+   * D2: Current dopamine level (0–100).
+   * When ≤ 30, adds +4 cortisol feedback (anhedonia→anxiety loop):
+   * chronic low-reward state amplifies stress, modelling poverty/disengagement.
+   */
+  dopamine?: number;
 }
 
 export interface AllostaticTickOutput {
@@ -307,13 +313,20 @@ export class AllostaticEngine {
    * PURE COMPUTATION per call — mutation is isolated to this instance.
    */
   tick(input: AllostaticTickInput): AllostaticTickOutput {
-    const { cortisol } = input;
+    const { cortisol, dopamine } = input;
+
+    // D2: Dopamine anhedonia feedback — low drive amplifies cortisol.
+    // When an agent is chronically under-rewarded (dopamine ≤ 30), their
+    // stress system remains elevated even without external stressors.
+    const effectiveCortisol = (dopamine !== undefined && dopamine <= 30)
+      ? Math.min(100, cortisol + 4)
+      : cortisol;
 
     // ── Step 1: Reversible Strain ──────────────────────────────────────────
-    // Leaky integrator: Cortisol is the forcing signal, 0.15 is the decay rate.
+    // Leaky integrator: effectiveCortisol is the forcing signal, 0.15 is the decay rate.
     // Equilibrium reached when dS/dt = 0: S_eq = Cortisol / 0.15 = 6.67 × Cortisol
     // At Cortisol = 15 → S_eq = 100 (cap). At Cortisol = 12 → S_eq = 80 (elasticity limit).
-    this.strain = this.strain + cortisol - (physicsConfig.strainDecay * this.strain);
+    this.strain = this.strain + effectiveCortisol - (physicsConfig.strainDecay * this.strain);
     this.strain = Math.max(0, Math.min(100, this.strain));
 
     const strainOverElasticityLimit = this.strain > physicsConfig.strainElasticityLimit;
