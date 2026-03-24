@@ -2465,9 +2465,19 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         const deadIds = new Set(deaths.map(d => d.id));
         const survivorUpdates = statUpdates.filter(u => !deadIds.has(u.id));
         if (survivorUpdates.length > 0) {
-          const seizedUBI = seizedWealthPool / survivorUpdates.length;
-          for (const update of survivorUpdates) {
-            update.wealth = clampWealth(update.wealth + seizedUBI);
+          // BUG-12/14 fix: Use distributeProRata for integer-safe equal distribution
+          // to prevent float drift (e.g., 100 / 3 = 33.33... × 3 = 99.999...).
+          const equalShares = distributeProRata(
+            Math.floor(seizedWealthPool),
+            survivorUpdates.map(() => 1),
+          );
+          // Fractional remainder (seizedWealthPool - Math.floor(seizedWealthPool))
+          // is too small to matter SFC-wise; route to first survivor.
+          const seizedUBI = seizedWealthPool / survivorUpdates.length; // for display only
+          for (let i = 0; i < survivorUpdates.length; i++) {
+            const update = survivorUpdates[i];
+            const share = equalShares[i] ?? 0;
+            update.wealth = clampWealth(update.wealth + share);
             const actionRow = actionRowByAgentId.get(update.id);
             if (actionRow?.outcome) {
               try {
@@ -2475,7 +2485,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
                   wealthDelta?: number;
                   finalWealth?: number;
                 };
-                parsed.wealthDelta = Number(parsed.wealthDelta ?? 0) + seizedUBI;
+                parsed.wealthDelta = Number(parsed.wealthDelta ?? 0) + share;
                 parsed.finalWealth = update.wealth;
                 actionRow.outcome = JSON.stringify(parsed);
               } catch {
