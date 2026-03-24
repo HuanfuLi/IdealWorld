@@ -48,10 +48,10 @@ function DeltaBadge({ label, value, clamped }: { label: string; value: number; c
       : 'var(--text-dim, #94a3b8)';
   const sign = value > 0 ? '+' : '';
   return (
-    <span style={{
+    <span className="text-sm" style={{
       display: 'inline-flex', alignItems: 'center', gap: 4,
       background: `${color}22`, border: `1px solid ${clamped ? '#fbbf2499' : color + '66'}`,
-      borderRadius: 6, padding: '3px 10px', fontSize: '0.82rem', color: clamped ? '#fbbf24' : color,
+      borderRadius: 6, padding: '3px 10px', color: clamped ? 'var(--warning)' : color,
       fontFamily: 'monospace',
     }}>
       {clamped && <AlertTriangle size={12} />}
@@ -64,13 +64,13 @@ function DeltaBadge({ label, value, clamped }: { label: string; value: number; c
 function StatSlider({ label, value, max, setter }: { label: string; value: number; max: number; setter: (v: number) => void }) {
   const pct = (value / max) * 100;
   const color = label === 'Cortisol'
-    ? (pct > 60 ? '#f87171' : pct > 30 ? '#fbbf24' : '#4ade80')
+    ? (pct > 60 ? 'var(--danger)' : pct > 30 ? 'var(--warning)' : 'var(--success)')
     : label === 'Health'
-      ? (pct < 30 ? '#f87171' : pct < 60 ? '#fbbf24' : '#4ade80')
+      ? (pct < 30 ? 'var(--danger)' : pct < 60 ? 'var(--warning)' : 'var(--success)')
       : 'var(--accent, #818cf8)';
   return (
     <div style={{ marginBottom: '0.55rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: 2 }}>
+      <div className="text-sm" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
         <span style={{ color: 'var(--text-dim)' }}>{label}</span>
         <span style={{ fontWeight: 700, fontFamily: 'monospace', color }}>{value}</span>
       </div>
@@ -205,10 +205,10 @@ const PhysicsLaboratory: React.FC = () => {
   return (
     <div className="glass-panel animate-fade-in" style={{ padding: '1.5rem', marginBottom: '2rem' }}>
       {/* Header */}
-      <h2 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+      <h2 className="text-xl" style={{ marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
         <FlaskConical size={20} /> Physics Laboratory
       </h2>
-      <p style={{ color: 'var(--text-dim)', fontSize: '0.88rem', marginBottom: '1.5rem' }}>
+      <p className="text-sm" style={{ color: 'var(--text-dim)', marginBottom: '1.5rem' }}>
         Test any action against a mock agent and see the exact math trace in real-time.
         Tweak global constants → Run Sandbox → Check Charts → Apply to World.
       </p>
@@ -218,20 +218,21 @@ const PhysicsLaboratory: React.FC = () => {
 
         {/* ── Left: Mock Agent Configuration ──────────────────────────────── */}
         <div>
-          <div style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
+          <div className="text-xs" style={{ fontWeight: 700, letterSpacing: '0.07em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
             Mock Agent
           </div>
 
           <div style={{ marginBottom: '0.65rem' }}>
-            <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)', display: 'block', marginBottom: 3 }}>Role</label>
+            <label className="text-sm" style={{ color: 'var(--text-dim)', display: 'block', marginBottom: 3 }}>Role</label>
             <input
               type="text" value={role}
               onChange={e => setRole(e.target.value.toUpperCase())}
               placeholder="e.g. FARMER, MERCHANT, KING"
+              className="text-sm"
               style={{
                 width: '100%', padding: '5px 9px', borderRadius: 6,
                 background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.12)',
-                color: '#e2e8f0', fontSize: '0.85rem', boxSizing: 'border-box',
+                color: 'var(--text-main)', boxSizing: 'border-box',
               }}
             />
           </div>
@@ -243,7 +244,7 @@ const PhysicsLaboratory: React.FC = () => {
           <StatSlider label="Dopamine" value={dopamine} max={100} setter={setDopamine} />
 
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.07)', paddingTop: '0.65rem', marginTop: '0.3rem' }}>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: '0.5rem', fontWeight: 600 }}>
+            <div className="text-xs" style={{ color: 'var(--text-dim)', marginBottom: '0.5rem', fontWeight: 600 }}>
               Skill Levels (1–100)
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
@@ -253,10 +254,11 @@ const PhysicsLaboratory: React.FC = () => {
                   <input
                     type="number" min={1} max={100} value={skillLevels[sk] ?? 10}
                     onChange={e => updateSkill(sk, Number(e.target.value))}
+                    className="text-xs"
                     style={{
                       width: '100%', padding: '2px 5px', borderRadius: 4,
                       background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.1)',
-                      color: '#e2e8f0', fontSize: '0.75rem',
+                      color: 'var(--text-main)',
                     }}
                   />
                 </label>
@@ -267,31 +269,32 @@ const PhysicsLaboratory: React.FC = () => {
 
         {/* ── Right: Action Selector + Trace Output ───────────────────────── */}
         <div>
-          <div style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
+          <div className="text-xs" style={{ fontWeight: 700, letterSpacing: '0.07em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
             Action Simulator
           </div>
 
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: '0.75rem' }}>
             <div style={{ flex: 1, minWidth: 150 }}>
-              <label style={{ fontSize: '0.8rem', color: 'var(--text-dim)', display: 'block', marginBottom: 3 }}>Action</label>
+              <label className="text-sm" style={{ color: 'var(--text-dim)', display: 'block', marginBottom: 3 }}>Action</label>
               <select
                 value={actionCode}
                 onChange={e => setActionCode(e.target.value)}
+                className="text-sm"
                 style={{
                   width: '100%', padding: '5px 8px', borderRadius: 6,
                   background: 'rgba(0,0,0,0.5)', border: '1px solid rgba(255,255,255,0.12)',
-                  color: '#e2e8f0', fontSize: '0.85rem',
+                  color: 'var(--text-main)',
                 }}
               >
                 {ALL_ACTION_CODES.map(code => <option key={code} value={code}>{code}</option>)}
               </select>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: '0.78rem', color: 'var(--text-dim)', cursor: 'pointer' }}>
+              <label className="text-xs" style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--text-dim)', cursor: 'pointer' }}>
                 <input type="checkbox" checked={isSabotaged} onChange={e => setIsSabotaged(e.target.checked)} />
                 Sabotaged (×0.5 productivity)
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: '0.78rem', color: 'var(--text-dim)', cursor: 'pointer' }}>
+              <label className="text-xs" style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--text-dim)', cursor: 'pointer' }}>
                 <input type="checkbox" checked={isSuppressed} onChange={e => setIsSuppressed(e.target.checked)} />
                 Suppressed (enforcement active)
               </label>
@@ -300,7 +303,7 @@ const PhysicsLaboratory: React.FC = () => {
 
           {/* Computing indicator */}
           {loading && (
-            <div style={{ color: 'var(--text-dim)', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: 6, marginBottom: '0.5rem' }}>
+            <div className="text-sm" style={{ color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 6, marginBottom: '0.5rem' }}>
               <RefreshCw size={13} className="animate-spin" /> Computing trace…
             </div>
           )}
@@ -314,11 +317,11 @@ const PhysicsLaboratory: React.FC = () => {
 
               {/* Happiness clamp alert */}
               {result.happinessClamped && (
-                <div style={{
+                <div className="text-alert" style={{
                   display: 'flex', alignItems: 'flex-start', gap: 8,
                   background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.35)',
                   borderRadius: 6, padding: '7px 11px', marginBottom: '0.75rem',
-                  fontSize: '0.79rem', color: '#fbbf24', lineHeight: 1.5,
+                  color: 'var(--warning)',
                 }}>
                   <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
                   <span>
@@ -345,33 +348,33 @@ const PhysicsLaboratory: React.FC = () => {
 
               {/* Projected final stats */}
               {projected && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: '0.78rem', color: 'var(--text-dim)', marginBottom: '0.75rem', paddingBottom: '0.65rem', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-                  <span>→ W: <strong style={{ color: '#e2e8f0' }}>{projected.wealth.toFixed(0)}</strong></span>
-                  <span>H: <strong style={{ color: projected.health < 30 ? '#f87171' : '#e2e8f0' }}>{projected.health.toFixed(0)}</strong></span>
-                  <span>Hap: <strong style={{ color: result.happinessClamped ? '#fbbf24' : '#e2e8f0' }}>{projected.happiness.toFixed(0)}</strong></span>
-                  <span>Cor: <strong style={{ color: projected.cortisol > 60 ? '#f87171' : '#e2e8f0' }}>{projected.cortisol.toFixed(0)}</strong></span>
-                  <span>Dop: <strong style={{ color: '#e2e8f0' }}>{projected.dopamine.toFixed(0)}</strong></span>
+                <div className="text-xs" style={{ display: 'flex', flexWrap: 'wrap', gap: 12, color: 'var(--text-dim)', marginBottom: '0.75rem', paddingBottom: '0.65rem', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+                  <span>→ W: <strong style={{ color: 'var(--text-main)' }}>{projected.wealth.toFixed(0)}</strong></span>
+                  <span>H: <strong style={{ color: projected.health < 30 ? 'var(--danger)' : 'var(--text-main)' }}>{projected.health.toFixed(0)}</strong></span>
+                  <span>Hap: <strong style={{ color: result.happinessClamped ? 'var(--warning)' : 'var(--text-main)' }}>{projected.happiness.toFixed(0)}</strong></span>
+                  <span>Cor: <strong style={{ color: projected.cortisol > 60 ? 'var(--danger)' : 'var(--text-main)' }}>{projected.cortisol.toFixed(0)}</strong></span>
+                  <span>Dop: <strong style={{ color: 'var(--text-main)' }}>{projected.dopamine.toFixed(0)}</strong></span>
                 </div>
               )}
 
               {/* Math trace */}
               <div>
-                <div style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
+                <div className="text-xs" style={{ fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
                   Math Trace
                 </div>
                 {result.trace.length === 0 ? (
-                  <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>No trace available</span>
+                  <span className="text-sm" style={{ color: 'var(--text-dim)' }}>No trace available</span>
                 ) : (
-                  <div style={{ fontFamily: 'monospace', fontSize: '0.74rem', lineHeight: 1.75, maxHeight: 280, overflowY: 'auto' }}>
+                  <div className="text-trace" style={{ maxHeight: 280, overflowY: 'auto' }}>
                     {result.trace.map((line, i) => (
                       <div key={i} style={{
                         color: line.startsWith('⚠')
-                          ? '#fbbf24'
+                          ? 'var(--warning)'
                           : line.startsWith('→')
-                            ? '#a5f3fc'
+                            ? 'var(--color-trace-arrow)'
                             : line.startsWith('  Δ') || line.startsWith('  Note')
-                              ? '#94a3b8'
-                              : '#cbd5e1',
+                              ? 'var(--text-muted)'
+                              : 'var(--text-main)',
                         paddingLeft: line.startsWith('  ') ? 0 : undefined,
                       }}>
                         {line}
@@ -385,7 +388,7 @@ const PhysicsLaboratory: React.FC = () => {
 
           {/* Empty state */}
           {!result && !loading && (
-            <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '1rem 0' }}>
+            <div className="text-sm" style={{ color: 'var(--text-dim)', padding: '1rem 0' }}>
               Adjust the mock agent or select an action to see the math trace.
             </div>
           )}
@@ -396,18 +399,18 @@ const PhysicsLaboratory: React.FC = () => {
       <div style={{ marginTop: '1.5rem', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
           <div>
-            <div style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--text-dim)', textTransform: 'uppercase' }}>
+            <div className="text-xs" style={{ fontWeight: 700, letterSpacing: '0.07em', color: 'var(--text-dim)', textTransform: 'uppercase' }}>
               Long-Run Sandbox
             </div>
-            <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', margin: '0.2rem 0 0' }}>
+            <p className="text-sm" style={{ color: 'var(--text-dim)', margin: '0.2rem 0 0' }}>
               Run 100 deterministic iterations to detect poverty traps or price collapses.
             </p>
           </div>
           <button
-            className="btn-primary"
+            className="btn-primary text-sm"
             onClick={runSandbox}
             disabled={sandboxRunning}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', padding: '7px 16px' }}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 16px' }}
           >
             {sandboxRunning
               ? <><RefreshCw size={13} className="animate-spin" /> Running…</>
@@ -418,12 +421,12 @@ const PhysicsLaboratory: React.FC = () => {
         {sandboxData && !sandboxData.error && (
           <div className="animate-fade-in">
             {/* Pass/fail banner */}
-            <div style={{
+            <div className="text-sm" style={{
               display: 'flex', alignItems: 'center', gap: 8,
               background: sandboxData.allPassed ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)',
               border: `1px solid ${sandboxData.allPassed ? 'rgba(74,222,128,0.3)' : 'rgba(248,113,113,0.3)'}`,
-              borderRadius: 6, padding: '7px 12px', marginBottom: '1rem', fontSize: '0.8rem',
-              color: sandboxData.allPassed ? '#4ade80' : '#f87171',
+              borderRadius: 6, padding: '7px 12px', marginBottom: '1rem',
+              color: sandboxData.allPassed ? 'var(--success)' : 'var(--danger)',
             }}>
               {sandboxData.allPassed
                 ? <><CheckCircle size={14} /> {sandboxData.passed}/{sandboxData.passed + sandboxData.failed} tests passed — Economy is mathematically sound</>
@@ -434,7 +437,7 @@ const PhysicsLaboratory: React.FC = () => {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
               {/* Row 1, Col 1: Vitals (0-100 stats) */}
               <div>
-                <div style={{ fontSize: '0.71rem', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
+                <div className="text-xs" style={{ fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
                   Survival Vitals
                 </div>
                 <LineChart
@@ -449,7 +452,7 @@ const PhysicsLaboratory: React.FC = () => {
               </div>
               {/* Row 1, Col 2: Economy */}
               <div>
-                <div style={{ fontSize: '0.71rem', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
+                <div className="text-xs" style={{ fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
                   Economy (Avg Wealth)
                 </div>
                 <LineChart
@@ -462,7 +465,7 @@ const PhysicsLaboratory: React.FC = () => {
               </div>
               {/* Row 2, Col 1: Market */}
               <div>
-                <div style={{ fontSize: '0.71rem', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
+                <div className="text-xs" style={{ fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
                   Market Stability (AMM Spot Price)
                 </div>
                 <LineChart
@@ -475,7 +478,7 @@ const PhysicsLaboratory: React.FC = () => {
               </div>
               {/* Row 2, Col 2: Allostatic Load (hidden stress signal) */}
               <div>
-                <div style={{ fontSize: '0.71rem', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
+                <div className="text-xs" style={{ fontWeight: 700, letterSpacing: '0.06em', color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
                   Allostatic Load (Cumulative Stress)
                 </div>
                 <LineChart
@@ -491,7 +494,7 @@ const PhysicsLaboratory: React.FC = () => {
         )}
 
         {sandboxData?.error && (
-          <div style={{ color: '#f87171', fontSize: '0.8rem', padding: '0.5rem', background: 'rgba(248,113,113,0.08)', borderRadius: 6, marginTop: '0.5rem' }}>
+          <div className="text-sm" style={{ color: 'var(--danger)', padding: '0.5rem', background: 'rgba(248,113,113,0.08)', borderRadius: 6, marginTop: '0.5rem' }}>
             {sandboxData.error}
           </div>
         )}
@@ -501,28 +504,29 @@ const PhysicsLaboratory: React.FC = () => {
       <div style={{ marginTop: '1.5rem', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '1rem' }}>
         <button
           onClick={() => setShowConfig(v => !v)}
+          className="text-sm"
           style={{
             display: 'flex', alignItems: 'center', gap: 7,
             background: 'none', border: 'none', color: 'var(--text-dim)',
-            cursor: 'pointer', fontSize: '0.88rem', fontWeight: 600, padding: 0,
+            cursor: 'pointer', fontWeight: 600, padding: 0,
           }}
         >
           {showConfig ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           Global Physics Constants
-          {!config && <span style={{ fontWeight: 400, fontSize: '0.8rem' }}> (loading…)</span>}
+          {!config && <span className="text-sm" style={{ fontWeight: 400 }}> (loading…)</span>}
         </button>
 
         {showConfig && configDraft && (
           <div className="animate-fade-in" style={{ marginTop: '1rem' }}>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '1rem' }}>
+            <p className="text-sm" style={{ color: 'var(--text-dim)', marginBottom: '1rem' }}>
               Edit constants, then <strong>Run Long-Run Sandbox</strong> above to preview the impact.
               Click <strong>Apply to World</strong> to push to the server, or <strong>Reset to Defaults</strong> to revert.
             </p>
 
             {CONFIG_GROUPS.map(group => (
               <div key={group.label} style={{ marginBottom: '1.1rem' }}>
-                <div style={{
-                  fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.07em',
+                <div className="text-xs" style={{
+                  fontWeight: 700, letterSpacing: '0.07em',
                   color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '0.5rem',
                 }}>
                   {group.label}
@@ -530,10 +534,10 @@ const PhysicsLaboratory: React.FC = () => {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '8px' }}>
                   {group.keys.map(key => (
                     <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      <span style={{ fontSize: '0.71rem', color: 'var(--text-dim)', fontFamily: 'monospace' }}>
+                      <span className="text-xs" style={{ color: 'var(--text-dim)', fontFamily: 'monospace' }}>
                         {key}
                         {config && configDraft[key] !== config[key] && (
-                          <span style={{ color: '#fbbf24', marginLeft: 4 }}>●</span>
+                          <span style={{ color: 'var(--warning)', marginLeft: 4 }}>●</span>
                         )}
                       </span>
                       <input
@@ -541,13 +545,14 @@ const PhysicsLaboratory: React.FC = () => {
                         step="any"
                         value={configDraft[key]}
                         onChange={e => setConfigDraft(prev => prev ? { ...prev, [key]: Number(e.target.value) } : prev)}
+                        className="text-sm"
                         style={{
                           padding: '3px 7px', borderRadius: 5,
                           background: configDraft[key] !== (config?.[key] ?? configDraft[key])
                             ? 'rgba(251,191,36,0.08)'
                             : 'rgba(0,0,0,0.3)',
                           border: `1px solid ${configDraft[key] !== (config?.[key] ?? configDraft[key]) ? 'rgba(251,191,36,0.4)' : 'rgba(255,255,255,0.1)'}`,
-                          color: '#e2e8f0', fontSize: '0.8rem',
+                          color: 'var(--text-main)',
                         }}
                       />
                     </label>
@@ -558,17 +563,17 @@ const PhysicsLaboratory: React.FC = () => {
 
             <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.75rem' }}>
               <button
-                className="btn-primary"
+                className="btn-primary text-sm"
                 onClick={applyConfig}
                 disabled={configSaving}
-                style={{ fontSize: '0.82rem', padding: '6px 16px' }}
+                style={{ padding: '6px 16px' }}
               >
                 {configSaving ? 'Applying…' : 'Apply to World'}
               </button>
               <button
-                className="btn-secondary"
+                className="btn-secondary text-sm"
                 onClick={resetConfig}
-                style={{ fontSize: '0.82rem', padding: '6px 16px', borderColor: 'rgba(248,113,113,0.4)', color: '#f87171' }}
+                style={{ padding: '6px 16px', borderColor: 'rgba(248,113,113,0.4)', color: 'var(--danger)' }}
               >
                 Reset to Defaults
               </button>
