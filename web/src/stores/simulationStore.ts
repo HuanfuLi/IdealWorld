@@ -56,6 +56,10 @@ interface SimulationStore {
   currentIteration: number;
   totalIterations: number;
 
+  // SSE synchronization
+  /** The SSE `id` of the last processed event. Used to filter duplicates on reconnect. */
+  lastSeenId: number | null;
+
   // Live feed
   feed: IterationFeed[];
   pendingIntents: Record<string, string>; // agentId → narrative
@@ -94,6 +98,7 @@ const initialState = {
   isComplete: false,
   currentIteration: 0,
   totalIterations: 0,
+  lastSeenId: null as number | null,
   feed: [] as IterationFeed[],
   pendingIntents: {} as Record<string, string>,
   pendingActionCodes: {} as Record<string, { actionCode: string; actionTarget: string | null; actions: ActionQueueRecord[] }>,
@@ -181,7 +186,8 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
     // ── Double-buffering: push events into a mutable buffer and flush
     // via requestAnimationFrame to avoid per-event React re-renders. ────
-    const buffer: SSEEvent[] = [];
+    type BufferedEvent = { seqId: number | null; event: SSEEvent };
+    const buffer: BufferedEvent[] = [];
     let rafId: number | null = null;
 
     const flushBuffer = () => {
@@ -194,6 +200,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       set(state => {
         // Clone mutable state we'll update across the batch
         let { isRunning, isPaused, isComplete, currentIteration, totalIterations,
+          lastSeenId,
           pendingIntents, pendingActionCodes, agentIntentHistory,
           feed, statsHistory, finalReport, error } = state;
 
@@ -203,7 +210,12 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
         pendingActionCodes = { ...pendingActionCodes };
         agentIntentHistory = { ...agentIntentHistory };
 
-        for (const event of batch) {
+        for (const { seqId, event } of batch) {
+          // Advance lastSeenId; track the highest id seen this batch
+          if (seqId !== null) {
+            lastSeenId = Math.max(lastSeenId ?? 0, seqId);
+          }
+
           switch (event.type) {
             case 'iteration-start':
               isRunning = true;
@@ -302,6 +314,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
         return {
           isRunning, isPaused, isComplete, currentIteration, totalIterations,
+          lastSeenId,
           pendingIntents, pendingActionCodes, agentIntentHistory,
           feed, statsHistory, finalReport, error,
         };
@@ -320,8 +333,28 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
 
     es.onmessage = (e) => {
       try {
+        // Parse the SSE sequence id (the `id:` line) provided by the browser's EventSource API.
+        // e.lastEventId is a string; parse to int. Empty string means no id was set.
+        const rawId = e.lastEventId !== '' ? parseInt(e.lastEventId, 10) : null;
+        const seqId = rawId !== null && !isNaN(rawId) ? rawId : null;
+
+        // Duplicate filtering: skip events we've already processed (can arrive on reconnect).
+        const currentLastSeen = get().lastSeenId;
+        if (seqId !== null && currentLastSeen !== null && seqId <= currentLastSeen) {
+          // This event was already processed before the reconnect; skip it.
+          return;
+        }
+
+        // Gap detection: warn if events may have been missed.
+        if (seqId !== null && currentLastSeen !== null && seqId > currentLastSeen + 1) {
+          console.warn(
+            `[SSE] Sequence gap detected: expected ${currentLastSeen + 1}, got ${seqId}. ` +
+            `${seqId - currentLastSeen - 1} event(s) may have been missed.`
+          );
+        }
+
         const event = JSON.parse(e.data) as SSEEvent;
-        buffer.push(event);
+        buffer.push({ seqId, event });
         scheduleFlush();
       } catch { /* ignore parse errors */ }
     };
