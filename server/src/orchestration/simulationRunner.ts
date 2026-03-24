@@ -385,6 +385,31 @@ function clampWealth(value: number): number {
 }
 
 /**
+ * Integer-safe pro-rata distribution (BUG-12/14).
+ *
+ * Divides `total` fiat among participants according to `ratios` using Math.floor,
+ * then distributes the integer remainder (total - sum(shares)) to the first N
+ * participants. Guarantees: sum(shares) === total exactly, preventing micro-leaks
+ * from IEEE-754 float division (e.g., 100 / 3 = 33.33... × 3 = 99.99).
+ *
+ * @param total  Total integer fiat to distribute.
+ * @param ratios Relative weight for each participant (need not sum to any particular value).
+ * @returns      Array of integer shares, same length as `ratios`, summing to `total`.
+ */
+function distributeProRata(total: number, ratios: number[]): number[] {
+  const ratioSum = ratios.reduce((s, r) => s + r, 0);
+  if (ratioSum === 0 || ratios.length === 0) return ratios.map(() => 0);
+  const shares = ratios.map(r => Math.floor(total * (r / ratioSum)));
+  const distributed = shares.reduce((s, v) => s + v, 0);
+  let remainder = Math.round(total - distributed); // round to handle float imprecision in sum
+  for (let i = 0; i < shares.length && remainder > 0; i++) {
+    shares[i]++;
+    remainder--;
+  }
+  return shares;
+}
+
+/**
  * MET-based weekly metabolism — replaces flat -1 food deduction.
  *
  * Satiety cost scales with the physical intensity of the agent's primary action:
@@ -560,10 +585,14 @@ function applyEnterpriseAction(params: {
           minSkill: 0,
         });
         economyDelta.wealthDelta -= FOUNDING_COST;
-        // Registration fee re-enters the circular economy via the AMM fiat reserve.
-        // This prevents the 40 Wealth from vanishing into a black hole.
-        if (amm) amm.injectFiatReserve(FOUNDING_COST);
-        state.events.push(`Founded enterprise ${enterpriseId} in ${industry} (spent ${FOUNDING_COST} Wealth — fee recycled into market pool)`);
+        // SFC fix: Registration fee goes to state treasury instead of injecting into
+        // AMM (which would mutate k and distort the trading curve). The fiat stays in
+        // the closed-loop economy and funds future WORK wages and system purchases.
+        {
+          const treasury = sessionStateTreasury.get(params.sessionId) ?? 0;
+          sessionStateTreasury.set(params.sessionId, treasury + FOUNDING_COST);
+        }
+        state.events.push(`Founded enterprise ${enterpriseId} in ${industry} (spent ${FOUNDING_COST} Wealth — fee recycled into treasury)`);
       }
       break;
     }
@@ -667,7 +696,7 @@ function applyEnterpriseAction(params: {
           if (itemType === 'food' && amm) {
             const receipt = amm.executeSell(producedQty, iterationNumber);
             if (receipt.success) {
-              fiatRevenue = Math.floor('fiatOut' in receipt.quote ? receipt.quote.fiatOut : 0);
+              fiatRevenue = 'fiatOut' in receipt.quote ? receipt.quote.fiatOut : 0;
               const effectivePrice = 'effectivePrice' in receipt.quote ? receipt.quote.effectivePrice.toFixed(2) : '?';
               if (ownerState) {
                 ownerState.wealthDelta += fiatRevenue;
@@ -685,7 +714,7 @@ function applyEnterpriseAction(params: {
             if (commodityAMM) {
               const receipt = commodityAMM.executeSell(producedQty, iterationNumber);
               if (receipt.success) {
-                fiatRevenue = Math.floor('fiatOut' in receipt.quote ? receipt.quote.fiatOut : 0);
+                fiatRevenue = 'fiatOut' in receipt.quote ? receipt.quote.fiatOut : 0;
                 const effectivePrice = 'effectivePrice' in receipt.quote ? receipt.quote.effectivePrice.toFixed(2) : '?';
                 if (ownerState) {
                   ownerState.wealthDelta += fiatRevenue;
@@ -727,7 +756,7 @@ function applyEnterpriseAction(params: {
         // Food production → sell directly to AMM pool (instant liquidity)
         const receipt = amm.executeSell(quantity, iterationNumber);
         if (receipt.success) {
-          const fiatReceived = Math.floor('fiatOut' in receipt.quote ? receipt.quote.fiatOut : 0);
+          const fiatReceived = 'fiatOut' in receipt.quote ? receipt.quote.fiatOut : 0;
           economyDelta.wealthDelta += fiatReceived;
           const effectivePrice = 'effectivePrice' in receipt.quote ? receipt.quote.effectivePrice.toFixed(2) : price.toString();
           state.events.push(`Produced ${quantity} food → sold to market at ${effectivePrice}/unit (+${fiatReceived} fiat)`);
@@ -744,7 +773,7 @@ function applyEnterpriseAction(params: {
         if (commodityAMMProduce) {
           const receipt = commodityAMMProduce.executeSell(quantity, iterationNumber);
           if (receipt.success) {
-            const fiatReceived = Math.floor('fiatOut' in receipt.quote ? receipt.quote.fiatOut : 0);
+            const fiatReceived = 'fiatOut' in receipt.quote ? receipt.quote.fiatOut : 0;
             economyDelta.wealthDelta += fiatReceived;
             const effectivePrice = 'effectivePrice' in receipt.quote ? receipt.quote.effectivePrice.toFixed(2) : price.toString();
             state.events.push(`Produced ${quantity} ${itemType} → sold to AMM at ${effectivePrice}/unit (+${fiatReceived} fiat)`);
@@ -858,7 +887,7 @@ function applyEnterpriseAction(params: {
           state.inventory.food.quantity -= quantity;
           const receipt = amm.executeSell(quantity, iterationNumber);
           if (receipt.success) {
-            const fiatReceived = Math.floor('fiatOut' in receipt.quote ? receipt.quote.fiatOut : 0);
+            const fiatReceived = 'fiatOut' in receipt.quote ? receipt.quote.fiatOut : 0;
             economyDelta.wealthDelta += fiatReceived;
             const effectivePrice = 'effectivePrice' in receipt.quote ? receipt.quote.effectivePrice.toFixed(2) : price.toString();
             state.events.push(`Sold ${quantity} food to market at ${effectivePrice}/unit (+${fiatReceived} fiat)`);
@@ -973,6 +1002,20 @@ export async function runSimulation(sessionId: string, totalIterations: number):
     const startIter = (maxRow?.max ?? 0) + 1;
     const endIter = startIter + totalIterations - 1;
 
+    // ── BUG-04 Fix: Seed treasury BEFORE genesis wealth floor ─────────────
+    // The genesis wealth floor (below) funds top-ups from the treasury.
+    // If the treasury is seeded after the floor runs, treasury === 0 and
+    // no agents get topped up. Seed it here using the restored snapshot value
+    // or the default formula so the floor can draw from it on iteration 1.
+    if (!sessionStateTreasury.has(sessionId)) {
+      const savedAMMForTreasury = await economyRepo.getLatestAMMSnapshot(sessionId);
+      const restoredTreasury = savedAMMForTreasury?.treasury;
+      sessionStateTreasury.set(
+        sessionId,
+        restoredTreasury !== undefined ? restoredTreasury : Math.max(citizenAgents.length, 1) * 500,
+      );
+    }
+
     // ── Phase 2: Darwinian Market Protocol — Genesis Endowment ────────────
     // Override default food surplus (10) with scarce starting ration (3)
     // to force immediate market participation and prevent trivial first iterations.
@@ -1029,20 +1072,32 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       if (b4Updates.length > 0) {
         await economyRepo.bulkUpsertAgentEconomy(b4Updates);
       }
-      // Apply wealth floor: any agent below 20 wealth gets topped up
-      const wealthFloorUpdates = agents
-        .filter(a => a.isAlive && !a.isCentralAgent && a.currentStats.wealth < 20)
-        .map(a => ({
-          id: a.id,
-          wealth: 20,
-          health: a.currentStats.health,
-          happiness: a.currentStats.happiness,
-          cortisol: a.currentStats.cortisol ?? 20,
-          dopamine: a.currentStats.dopamine ?? 50,
-        }));
-      if (wealthFloorUpdates.length > 0) {
-        sqlite.transaction(() => { agentRepo.bulkUpdateStats(wealthFloorUpdates); })();
-        agents = await agentRepo.listBySession(sessionId);
+      // Apply wealth floor: any agent below 20 wealth gets topped up.
+      // SFC fix: fund the top-ups from the state treasury to prevent minting fiat.
+      {
+        const wealthFloorCandidates = agents
+          .filter(a => a.isAlive && !a.isCentralAgent && a.currentStats.wealth < 20);
+        let totalTopUp = 0;
+        for (const a of wealthFloorCandidates) {
+          totalTopUp += 20 - a.currentStats.wealth;
+        }
+        const treasury = sessionStateTreasury.get(sessionId) ?? 0;
+        const fundable = Math.min(totalTopUp, treasury);
+        if (fundable > 0 && wealthFloorCandidates.length > 0) {
+          // Proportionally distribute funded amount if treasury can't cover all
+          const ratio = totalTopUp > 0 ? fundable / totalTopUp : 0;
+          const wealthFloorUpdates = wealthFloorCandidates.map(a => ({
+            id: a.id,
+            wealth: a.currentStats.wealth + (20 - a.currentStats.wealth) * ratio,
+            health: a.currentStats.health,
+            happiness: a.currentStats.happiness,
+            cortisol: a.currentStats.cortisol ?? 20,
+            dopamine: a.currentStats.dopamine ?? 50,
+          }));
+          sessionStateTreasury.set(sessionId, treasury - fundable);
+          sqlite.transaction(() => { agentRepo.bulkUpdateStats(wealthFloorUpdates); })();
+          agents = await agentRepo.listBySession(sessionId);
+        }
       }
     }
 
@@ -1655,6 +1710,22 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             enterpriseLedger: enterpriseLedgerMap,
           });
 
+          // SFC fix: For STEAL actions, patch the target's wealth in the allAgents
+          // snapshot to reflect accumulated deltas, preventing stealCalc from using
+          // stale start-of-iteration wealth and over-calculating the stolen amount.
+          let agentsForPhysics = aliveAgents;
+          if (action.actionCode === 'STEAL' && targetAgent) {
+            const targetState = weekStateMap.get(targetAgent.id);
+            if (targetState) {
+              const targetRunningWealth = Math.max(0, targetAgent.currentStats.wealth + targetState.wealthDelta);
+              agentsForPhysics = aliveAgents.map(a =>
+                a.id === targetAgent.id
+                  ? { ...a, currentStats: { ...a.currentStats, wealth: targetRunningWealth } }
+                  : a
+              );
+            }
+          }
+
           const physics = resolveAction({
             agent: {
               ...agent,
@@ -1669,7 +1740,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             },
             actionCode: action.actionCode,
             actionTarget: targetAgent?.id,
-            allAgents: aliveAgents,
+            allAgents: agentsForPhysics,
             skills: weekState.skills,
             inventory: weekState.inventory,
             economyDeltas: economyDelta,
@@ -1756,6 +1827,26 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             }
           }
 
+          // BUG-03 fix: Zero-sum HELP — transfer the helper's wealth cost to the target.
+          // Without this, HELP destroys fiat (helper loses wealth, nobody gains it).
+          // Cap the transfer to what the helper can actually afford (runningWealth is the
+          // in-action-loop position BEFORE this action's physics.wealthDelta is applied).
+          // If the helper has less than the full help_amount, only transfer what is available
+          // and clawback the uncovered portion from weekState.wealthDelta so no fiat is destroyed.
+          if (action.actionCode === 'HELP' && targetAgent && physics.wealthDelta < 0) {
+            const beneficiaryState = weekStateMap.get(targetAgent.id);
+            if (beneficiaryState) {
+              const helpAmount = Math.abs(physics.wealthDelta);
+              // actualGift is capped at runningWealth — the helper cannot give what they don't have
+              const actualGift = Math.min(helpAmount, runningWealth);
+              beneficiaryState.wealthDelta += actualGift;
+              // Clawback: undo the uncovered portion of the physics delta so weekState stays SFC-neutral
+              if (actualGift < helpAmount) {
+                weekState.wealthDelta += (helpAmount - actualGift);
+              }
+            }
+          }
+
           runningWealth = clampWealth(runningWealth + physics.wealthDelta);
           runningHealth = clampStat(runningHealth + physics.healthDelta);
           runningHappiness = clampStat(runningHappiness + physics.happinessDelta);
@@ -1818,6 +1909,19 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           buyerState.wealthDelta -= trade.executionPrice * trade.quantity;
           buyerState.inventory[trade.itemType].quantity += trade.quantity;
           buyerState.events.push(`Bought ${trade.quantity} ${trade.itemType} at ${trade.executionPrice}`);
+        } else if (trade.buyerId === 'SYSTEM_NPC') {
+          // SFC fix: SYSTEM_NPC purchases are funded from the state treasury
+          // to prevent minting fiat from nothing when sellers are paid.
+          const cost = trade.executionPrice * trade.quantity;
+          const treasury = sessionStateTreasury.get(sessionId) ?? 0;
+          const fundedCost = Math.min(cost, treasury);
+          sessionStateTreasury.set(sessionId, treasury - fundedCost);
+          if (sellerState && fundedCost < cost) {
+            // Treasury cannot cover full cost — cap seller payment to funded amount
+            sellerState.wealthDelta += fundedCost;
+            sellerState.events.push(`Sold ${trade.quantity} ${trade.itemType} at ${trade.executionPrice} (treasury-backed)`);
+            continue; // skip the sellerState block below
+          }
         }
         if (sellerState) {
           sellerState.wealthDelta += trade.executionPrice * trade.quantity;
@@ -1886,10 +1990,25 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             const liquidatable = Math.max(0, ownerAvailableWealth);
             const payRatio = totalWageObligation > 0 ? liquidatable / totalWageObligation : 0;
 
+            // SFC fix: compute payments first, then distribute truncation remainder
+            // so Math.floor doesn't silently destroy fiat.
+            const workerPayments: Array<{ employment: (typeof workers)[0]; payment: number }> = [];
+            let totalPaid = 0;
             for (const employment of workers) {
+              const payment = Math.floor(employment.wage * payRatio);
+              workerPayments.push({ employment, payment });
+              totalPaid += payment;
+            }
+            // Distribute truncation remainder (1 fiat each) to first workers
+            let remainder = Math.floor(liquidatable) - totalPaid;
+            for (let i = 0; i < workerPayments.length && remainder > 0; i++) {
+              workerPayments[i].payment++;
+              remainder--;
+            }
+
+            for (const { employment, payment: partialPay } of workerPayments) {
               const employeeState = weekStateMap.get(employment.employeeId);
               if (!employeeState) continue;
-              const partialPay = Math.floor(employment.wage * payRatio);
               if (partialPay > 0) {
                 ownerState.wealthDelta -= partialPay;
                 employeeState.wealthDelta += partialPay;
@@ -1945,6 +2064,13 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       // ── EMBEZZLE Settlement: skim communal pool pro-rata from all other agents ──
       // SFC-correct: wealth is redistributed, not created. Each embezzler draws up to
       // 20 fiat spread evenly across all other alive agents (capped by their available wealth).
+      //
+      // BUG-12/14 fix: Use distributeProRata (Math.floor + remainder distribution) instead
+      // of simple division to avoid IEEE-754 float drift (e.g., 20/3 = 6.666... × 3 = 19.998).
+      //
+      // BUG-01 fix: Victim wealthDelta is updated here (cState.wealthDelta -= deducted).
+      // When the death seizure loop runs later, newWealth = clamp(wealth + wealthDelta) already
+      // reflects this deduction, so the seized amount is correct and no fiat is double-counted.
       {
         for (const intent of intents) {
           const embezzleActions = intent.actions?.filter(a => a.actionCode === 'EMBEZZLE') ?? [];
@@ -1954,13 +2080,26 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           const EMBEZZLE_TARGET = 20 * embezzleActions.length;
           const contributors = aliveAgents.filter(a => a.id !== intent.agentId);
           if (contributors.length === 0) continue;
-          const perContributor = EMBEZZLE_TARGET / contributors.length;
+
+          // Compute available wealth per contributor (capped at 0)
+          const availableList = contributors.map(c => {
+            const cState = weekStateMap.get(c.id);
+            return cState ? Math.max(0, c.currentStats.wealth + cState.wealthDelta) : 0;
+          });
+          const totalAvailable = availableList.reduce((s, v) => s + v, 0);
+
+          // Use pro-rata shares based on available wealth; cap each contributor at their available
+          const targetShares = distributeProRata(
+            Math.min(EMBEZZLE_TARGET, Math.floor(totalAvailable)),
+            availableList.map(a => (a > 0 ? a : 0)),
+          );
+
           let totalEmbezzled = 0;
-          for (const contributor of contributors) {
+          for (let i = 0; i < contributors.length; i++) {
+            const contributor = contributors[i];
             const cState = weekStateMap.get(contributor.id);
             if (!cState) continue;
-            const available = Math.max(0, contributor.currentStats.wealth + cState.wealthDelta);
-            const deducted = Math.min(perContributor, available);
+            const deducted = Math.min(targetShares[i] ?? 0, availableList[i] ?? 0);
             cState.wealthDelta -= deducted;
             totalEmbezzled += deducted;
           }
@@ -1974,13 +2113,67 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       // background food production into the AMM so the auto-buy in applyMETMetabolism
       // always finds some supply, preventing complete market deadlock.
       // Injection = 1 food unit per alive agent (baseline subsistence floor).
+      // SFC fix: withdraw matching fiat from the AMM to keep k constant, and fund
+      // the withdrawn fiat into the treasury so total system fiat is conserved.
       {
         const primaryAMM = sessionAMMRegistry.get(sessionId);
         if (primaryAMM && aliveAgents.length > 0) {
           const foodReserve = primaryAMM.currentFoodReserve;
           const minReserve = aliveAgents.length * 2;
           if (foodReserve < minReserve) {
-            primaryAMM.injectGoodsReserve(minReserve - foodReserve);
+            const injection = minReserve - foodReserve;
+            // Add food to AMM without changing k: sell food into the AMM at market rate.
+            // This increases food reserve and decreases fiat reserve, keeping k constant.
+            // The fiat withdrawn goes to the treasury (system subsidy).
+            const sellReceipt = primaryAMM.executeSell(injection, iterNum);
+            if (sellReceipt.success && 'fiatOut' in sellReceipt.quote) {
+              // Route the fiat from this system sale into the treasury
+              const fiatFromSale = sellReceipt.quote.fiatOut;
+              const treasury = sessionStateTreasury.get(sessionId) ?? 0;
+              sessionStateTreasury.set(sessionId, treasury + fiatFromSale);
+            }
+          }
+        }
+      }
+
+      // ── Inventory Depreciation: food spoilage + tool wear ─────────────────
+      // Previously orphaned in inventorySystem.processInventory — now integrated
+      // into the simulation loop so tools actually break and food actually spoils.
+      for (const agent of aliveAgents) {
+        const weekState = weekStateMap.get(agent.id)!;
+        const inv = weekState.inventory;
+
+        // Food quality decay: 15% per iteration (ITEM_PROPERTIES.food.decayRate = 0.15)
+        if (inv.food.quantity > 0) {
+          inv.food.quality = Math.max(0, inv.food.quality - 0.15 * 100);
+          // Spoiled food (quality < 10) is removed
+          if (inv.food.quality < 10) {
+            weekState.events.push(`${inv.food.quantity} food spoiled (quality decayed below threshold)`);
+            inv.food.quantity = 0;
+            inv.food.quality = 100; // reset for new stock
+          }
+        }
+
+        // Tool depreciation from work actions
+        const workedThisTurn = weekState.executedActions.some(
+          a => a.actionCode === 'WORK' || a.actionCode === 'WORK_AT_ENTERPRISE' || a.actionCode === 'PRODUCE_AND_SELL'
+        );
+        if (workedThisTurn && inv.tools.quantity > 0) {
+          inv.tools.quality = Math.max(0, inv.tools.quality - 5); // TOOL_WEAR_PER_WORK = 5
+          if (inv.tools.quality < 5) { // TOOL_BREAK_THRESHOLD = 5
+            inv.tools.quantity = Math.max(0, inv.tools.quantity - 1);
+            inv.tools.quality = inv.tools.quantity > 0 ? 80 : 100;
+            weekState.events.push('A tool broke from use');
+          }
+        }
+
+        // Raw materials quality decay: 1% per iteration (very slow)
+        if (inv.raw_materials.quantity > 0) {
+          inv.raw_materials.quality = Math.max(0, inv.raw_materials.quality - 0.01 * 100);
+          if (inv.raw_materials.quality < 10) {
+            weekState.events.push(`${inv.raw_materials.quantity} raw materials degraded`);
+            inv.raw_materials.quantity = 0;
+            inv.raw_materials.quality = 100;
           }
         }
       }
@@ -2005,7 +2198,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           const priorState = sessionAlloStates.get(agent.id) ?? { allostaticStrain: 0, allostaticLoad: 0 };
           const engine = new AllostaticEngine(priorState);
           // D2: Pass dopamine so anhedonia (≤30) adds +4 cortisol feedback in the allostatic engine
-          const alloResult = engine.tick({ cortisol: currentCortisol, state: priorState, dopamine: currentDopamine });
+          const alloResult = engine.tick({ cortisol: currentCortisol, dopamine: currentDopamine });
           if (alloResult.healthDelta < 0) {
             weekState.healthDelta += alloResult.healthDelta;
             weekState.events.push(
@@ -2031,6 +2224,15 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             weekState.events.push(`UBI received: +${netDelta.toFixed(1)} fiat (demurrage redistribution @ ${(sessionPolicy.ubi_allocation * 100).toFixed(0)}% UBI allocation)`);
           } else if (netDelta < -0.5) {
             weekState.events.push(`Demurrage tax: ${netDelta.toFixed(1)} fiat (${(sessionPolicy.tax_rate * 100).toFixed(1)}% wealth decay)`);
+          }
+        }
+        // SFC fix: When ubiAllocation < 1.0, the un-redistributed portion of the tax
+        // pool would vanish from the economy. Route it to the treasury instead.
+        if (sessionPolicy.ubi_allocation < 1.0) {
+          const unredistributed = demurrage.taxPoolCollected * (1 - Math.min(1, Math.max(0, sessionPolicy.ubi_allocation)));
+          if (unredistributed > 0) {
+            const treasury = sessionStateTreasury.get(sessionId) ?? 0;
+            sessionStateTreasury.set(sessionId, treasury + unredistributed);
           }
         }
       }
@@ -2121,6 +2323,9 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           );
           const deathReason = lifecycleEvent?.detail ?? (newHealth <= 2 ? 'health depleted' : 'fatal circumstances');
           deathReasonMap.set(agent.id, { iteration: iterNum, reason: deathReason });
+          // SFC fix: Remove dead agent's orders from the order book to prevent
+          // stale orders matching in future iterations and leaking fiat.
+          orderBook.removeAgentOrders(agent.id);
           // Fix B1: Redistribute dying agent's wealth into the seized pool (death tax / escheat)
           seizedWealthPool += Math.max(0, newWealth);
           newWealth = 0;
