@@ -234,10 +234,13 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
                 actions: event.actions ?? [],
               };
               // Accumulate in history (deduplicate by agentId + iterationNumber)
+              // Ring-buffer cap: keep at most 500 entries per agent to prevent
+              // unbounded memory growth during long-running simulations (BUG-10).
+              const INTENT_HISTORY_CAP = 500;
               const agentHistory = agentIntentHistory[event.agentId] ?? [];
               const alreadyRecorded = agentHistory.some(r => r.iterationNumber === currentIteration);
               if (!alreadyRecorded && currentIteration > 0) {
-                agentIntentHistory[event.agentId] = [...agentHistory, {
+                const newRecord = {
                   agentId: event.agentId,
                   agentName: event.agentName,
                   iterationNumber: currentIteration,
@@ -245,7 +248,13 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
                   actionTarget: event.actionTarget,
                   actions: event.actions ?? [],
                   narrative: event.intent,
-                }];
+                };
+                // Append new record; if over cap, drop the oldest entry (shift)
+                const updated = [...agentHistory, newRecord];
+                if (updated.length > INTENT_HISTORY_CAP) {
+                  updated.shift();
+                }
+                agentIntentHistory[event.agentId] = updated;
               }
               break;
             }
