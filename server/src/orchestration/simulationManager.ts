@@ -19,6 +19,8 @@ interface SimulationState {
   /** When false, regime-collapse early stopping is suppressed for this session. */
   earlyStoppingEnabled: boolean;
   clients: Set<Response>;
+  /** Monotonic counter for SSE event sequencing. Session-scoped; used as the SSE `id:` field. */
+  sequenceId: number;
 }
 
 export type SimulationEvent =
@@ -51,6 +53,7 @@ class SimulationManager {
         resetRequested: false,
         earlyStoppingEnabled: true,
         clients: new Set(),
+        sequenceId: 0,
       });
     }
     return this.sessions.get(sessionId)!;
@@ -145,10 +148,17 @@ class SimulationManager {
     });
   }
 
+  /** Returns the next sequence ID for this session (used by keep-alive pings). */
+  nextSequenceId(sessionId: string): number {
+    const state = this.getOrCreate(sessionId);
+    return ++state.sequenceId;
+  }
+
   broadcast(sessionId: string, event: SimulationEvent): void {
     const state = this.sessions.get(sessionId);
     if (!state || state.clients.size === 0) return;
-    const data = `data: ${JSON.stringify(event)}\n\n`;
+    const seq = ++state.sequenceId;
+    const data = `id: ${seq}\ndata: ${JSON.stringify(event)}\n\n`;
     for (const client of state.clients) {
       try {
         client.write(data);

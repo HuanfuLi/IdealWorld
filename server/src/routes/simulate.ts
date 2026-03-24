@@ -195,9 +195,13 @@ router.get('/stream', (req, res) => {
 
   simulationManager.addClient(id, res);
 
-  // Keep-alive ping every 15s
+  // Keep-alive ping every 15s — carries a sequence ID so the client's lastEventId
+  // stays current and reconnects use the correct Last-Event-ID header.
   const ping = setInterval(() => {
-    try { res.write(': ping\n\n'); } catch { clearInterval(ping); }
+    try {
+      const seq = simulationManager.nextSequenceId(id);
+      res.write(`id: ${seq}\n: ping\n\n`);
+    } catch { clearInterval(ping); }
   }, 15000);
 
   req.on('close', () => clearInterval(ping));
