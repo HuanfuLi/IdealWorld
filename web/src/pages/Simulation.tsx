@@ -6,8 +6,8 @@ import { useShallow } from 'zustand/react/shallow';
 import MarkdownText from '../components/MarkdownText';
 
 // Chart color tokens (kept in sync with --chart-* CSS variables in index.css)
-const CHART_ORANGE = '#f97316';
-const CHART_VIOLET = '#a78bfa';
+const CHART_ORANGE = 'var(--chart-orange)';
+const CHART_VIOLET = 'var(--chart-violet)';
 
 const Simulation = () => {
   const navigate = useNavigate();

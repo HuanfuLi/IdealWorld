@@ -18,14 +18,14 @@ interface TelemetryLog {
 }
 
 // ── Chart color tokens (kept in sync with --chart-* CSS variables in index.css)
-const CHART_BLUE    = '#60a5fa';
-const CHART_ORANGE  = '#f97316';
-const CHART_GREEN   = '#4ade80';
-const CHART_TEAL    = '#2dd4bf';
-const CHART_RED     = '#f87171';
-const CHART_VIOLET  = '#a78bfa';
-const CHART_EMERALD = '#34d399';
-const CHART_CORAL   = '#fb923c';
+const CHART_BLUE    = 'var(--chart-blue)';
+const CHART_ORANGE  = 'var(--chart-orange)';
+const CHART_GREEN   = 'var(--chart-green)';
+const CHART_TEAL    = 'var(--chart-teal)';
+const CHART_RED     = 'var(--chart-red)';
+const CHART_VIOLET  = 'var(--chart-violet)';
+const CHART_EMERALD = 'var(--chart-emerald)';
+const CHART_CORAL   = 'var(--chart-coral)';
 
 // ── SVGLineChart ─────────────────────────────────────────────────────────────
 
@@ -144,7 +144,7 @@ function SVGLineChart({
         <polyline
           points={points2}
           fill="none"
-          stroke={color2 ?? CHART_ORANGE}
+          style={{ stroke: color2 ?? CHART_ORANGE }}
           strokeWidth={1.5}
           strokeLinejoin="round"
           strokeLinecap="round"
@@ -157,31 +157,31 @@ function SVGLineChart({
       <polyline
         points={points1}
         fill="none"
-        stroke={color}
+        style={{ stroke: color }}
         strokeWidth={2}
         strokeLinejoin="round"
         strokeLinecap="round"
       />
 
       {/* Dots: first and last for series 1 */}
-      <circle cx={toSvgX(data[0].x)} cy={toSvgY1(data[0].y)} r={3} fill={color} />
-      <circle cx={toSvgX(data[data.length - 1].x)} cy={toSvgY1(data[data.length - 1].y)} r={3} fill={color} />
+      <circle cx={toSvgX(data[0].x)} cy={toSvgY1(data[0].y)} r={3} style={{ fill: color }} />
+      <circle cx={toSvgX(data[data.length - 1].x)} cy={toSvgY1(data[data.length - 1].y)} r={3} style={{ fill: color }} />
 
       {/* Dots: first and last for series 2 */}
       {hasSeries2 && data2 && data2.length > 0 && (
         <>
-          <circle cx={toSvgX(data2[0].x)} cy={toSvgY2(data2[0].y)} r={3} fill={color2 ?? CHART_ORANGE} />
-          <circle cx={toSvgX(data2[data2.length - 1].x)} cy={toSvgY2(data2[data2.length - 1].y)} r={3} fill={color2 ?? CHART_ORANGE} />
+          <circle cx={toSvgX(data2[0].x)} cy={toSvgY2(data2[0].y)} r={3} style={{ fill: color2 ?? CHART_ORANGE }} />
+          <circle cx={toSvgX(data2[data2.length - 1].x)} cy={toSvgY2(data2[data2.length - 1].y)} r={3} style={{ fill: color2 ?? CHART_ORANGE }} />
         </>
       )}
 
       {/* Right-axis: series 1 min/max */}
       <text x={paddingLeft + chartW + 6} y={paddingTop + 5}
-        fill={color} fontSize={9} dominantBaseline="hanging">
+        style={{ fill: color }} fontSize={9} dominantBaseline="hanging">
         {fmt(yMax1)}
       </text>
       <text x={paddingLeft + chartW + 6} y={paddingTop + chartH}
-        fill={color} fontSize={9} dominantBaseline="auto">
+        style={{ fill: color }} fontSize={9} dominantBaseline="auto">
         {fmt(yMin1)}
       </text>
 
@@ -189,11 +189,11 @@ function SVGLineChart({
       {hasSeries2 && !sharedYAxis && (
         <>
           <text x={paddingLeft + chartW + 6} y={paddingTop + 16}
-            fill={color2 ?? CHART_ORANGE} fontSize={9} dominantBaseline="hanging">
+            style={{ fill: color2 ?? CHART_ORANGE }} fontSize={9} dominantBaseline="hanging">
             {fmt(yMax2)}
           </text>
           <text x={paddingLeft + chartW + 6} y={paddingTop + chartH - 12}
-            fill={color2 ?? CHART_ORANGE} fontSize={9} dominantBaseline="auto">
+            style={{ fill: color2 ?? CHART_ORANGE }} fontSize={9} dominantBaseline="auto">
             {fmt(yMin2)}
           </text>
         </>
@@ -210,17 +210,17 @@ function SVGLineChart({
       </text>
 
       {/* Legend dots */}
-      <circle cx={paddingLeft + 8} cy={paddingTop + 8} r={4} fill={color} />
+      <circle cx={paddingLeft + 8} cy={paddingTop + 8} r={4} style={{ fill: color }} />
       <text x={paddingLeft + 16} y={paddingTop + 8}
-        fill={color} fontSize={9} dominantBaseline="middle">
+        style={{ fill: color }} fontSize={9} dominantBaseline="middle">
         {label}
       </text>
       {hasSeries2 && label2 && (
         <>
           <line x1={paddingLeft + 80} y1={paddingTop + 8} x2={paddingLeft + 96} y2={paddingTop + 8}
-            stroke={color2 ?? CHART_ORANGE} strokeWidth={1.5} strokeDasharray="4,2" />
+            style={{ stroke: color2 ?? CHART_ORANGE }} strokeWidth={1.5} strokeDasharray="4,2" />
           <text x={paddingLeft + 100} y={paddingTop + 8}
-            fill={color2 ?? CHART_ORANGE} fontSize={9} dominantBaseline="middle">
+            style={{ fill: color2 ?? CHART_ORANGE }} fontSize={9} dominantBaseline="middle">
             {label2}
           </text>
         </>

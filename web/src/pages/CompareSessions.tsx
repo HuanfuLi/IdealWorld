@@ -20,7 +20,7 @@ function ScoreBar({ score, color }: { score: number; color: string }) {
 
 function DimensionRow({ dim, idx }: { dim: ComparisonDimension; idx: number }) {
   const [open, setOpen] = useState(false);
-  const colors = ['var(--primary)', '#f59e0b'];
+  const colors = ['var(--primary)', 'var(--warning)'];
 
   return (
     <div style={{ borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.75rem', marginBottom: '0.75rem' }}>
@@ -76,14 +76,14 @@ function SVGLineChart({ title, iterations }: { title: string, iterations: any[] 
           <line x1={padUrl} y1={y(50)} x2={width - padUrl} y2={y(50)} strokeDasharray="4,4" />
           <line x1={padUrl} y1={y(100)} x2={width - padUrl} y2={y(100)} />
         </g>
-        <polyline points={pointsWealth} fill="none" stroke="#10b981" strokeWidth="2" />
-        <polyline points={pointsHealth} fill="none" stroke="#ef4444" strokeWidth="2" />
-        <polyline points={pointsHappiness} fill="none" stroke="#3b82f6" strokeWidth="2" />
+        <polyline points={pointsWealth} fill="none" style={{ stroke: 'var(--success)' }} strokeWidth="2" />
+        <polyline points={pointsHealth} fill="none" style={{ stroke: 'var(--danger)' }} strokeWidth="2" />
+        <polyline points={pointsHappiness} fill="none" style={{ stroke: 'var(--chart-sapphire)' }} strokeWidth="2" />
       </svg>
       <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', marginTop: '0.5rem', fontSize: '0.75rem' }}>
-        <span style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>● Wealth</span>
-        <span style={{ color: '#ef4444', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>● Health</span>
-        <span style={{ color: '#3b82f6', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>● Happiness</span>
+        <span style={{ color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>● Wealth</span>
+        <span style={{ color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>● Health</span>
+        <span style={{ color: 'var(--chart-sapphire)', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>● Happiness</span>
       </div>
     </div>
   );
@@ -275,7 +275,7 @@ const CompareSessions = () => {
           {/* Side-by-side stat cards */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '2rem' }}>
             {[selected1, selected2].map((s, idx) => s && (
-              <div key={s.id} className="glass-card" style={{ borderTop: `4px solid ${idx === 0 ? 'var(--primary)' : '#f59e0b'}` }}>
+              <div key={s.id} className="glass-card" style={{ borderTop: `4px solid ${idx === 0 ? 'var(--primary)' : 'var(--warning)'}` }}>
                 <h3 style={{ fontSize: '1.1rem', color: 'var(--color-bright)', marginBottom: '1rem', textAlign: 'center' }}>
                   {idx === 0 ? 'Society A' : 'Society B'}: {s.title}
                 </h3>
@@ -297,7 +297,7 @@ const CompareSessions = () => {
             </h3>
             <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', paddingLeft: '180px' }}>
               <div style={{ flex: 1, textAlign: 'center', fontSize: '0.8rem', color: 'var(--primary)' }}>Society A</div>
-              <div style={{ flex: 1, textAlign: 'center', fontSize: '0.8rem', color: '#f59e0b' }}>Society B</div>
+              <div style={{ flex: 1, textAlign: 'center', fontSize: '0.8rem', color: 'var(--warning)' }}>Society B</div>
             </div>
             {comparison.dimensions.map((dim, idx) => (
               <DimensionRow key={dim.name} dim={dim} idx={idx} />

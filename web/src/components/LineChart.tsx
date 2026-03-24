@@ -71,13 +71,13 @@ export function LineChart({ series, width = 400, height = 180, xLabels }: LineCh
         {/* Lines */}
         {series.map((s, si) => {
           const path = s.data.map((v, i) => `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
-          return <path key={si} d={path} fill="none" stroke={s.color} strokeWidth={1.5} strokeLinejoin="round" opacity={0.85} />;
+          return <path key={si} d={path} fill="none" style={{ stroke: s.color }} strokeWidth={1.5} strokeLinejoin="round" opacity={0.85} />;
         })}
 
         {/* Dots on last point */}
         {series.map((s, si) => {
           const lastIdx = s.data.length - 1;
-          return <circle key={`dot-${si}`} cx={toX(lastIdx)} cy={toY(s.data[lastIdx])} r={3} fill={s.color} />;
+          return <circle key={`dot-${si}`} cx={toX(lastIdx)} cy={toY(s.data[lastIdx])} r={3} style={{ fill: s.color }} />;
         })}
       </svg>
 

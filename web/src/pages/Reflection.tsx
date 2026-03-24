@@ -310,9 +310,9 @@ const Reflection = () => {
                     <div style={{ background: 'var(--panel-alpha-05)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--glass-border)', marginBottom: '2rem' }}>
                       <LineChart
                         series={[
-                          { label: 'Wealth', color: '#f59e0b', data: displayStats.map(s => s.avgWealth) },
-                          { label: 'Health', color: '#10b981', data: displayStats.map(s => s.avgHealth) },
-                          { label: 'Happiness', color: '#6366f1', data: displayStats.map(s => s.avgHappiness) },
+                          { label: 'Wealth', color: 'var(--warning)', data: displayStats.map(s => s.avgWealth) },
+                          { label: 'Health', color: 'var(--success)', data: displayStats.map(s => s.avgHealth) },
+                          { label: 'Happiness', color: 'var(--chart-indigo)', data: displayStats.map(s => s.avgHappiness) },
                         ]}
                         xLabels={displayStats.map(s => String(s.iterationNumber))}
                         height={200}
@@ -398,9 +398,9 @@ const Reflection = () => {
                       <div style={{ background: 'var(--panel-alpha-05)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--glass-border)', marginBottom: '0.75rem' }}>
                         <LineChart
                           series={[
-                            { label: 'Wealth', color: '#f59e0b', data: agentHistory.map(h => h.wealth) },
-                            { label: 'Health', color: '#10b981', data: agentHistory.map(h => h.health) },
-                            { label: 'Happiness', color: '#6366f1', data: agentHistory.map(h => h.happiness) },
+                            { label: 'Wealth', color: 'var(--warning)', data: agentHistory.map(h => h.wealth) },
+                            { label: 'Health', color: 'var(--success)', data: agentHistory.map(h => h.health) },
+                            { label: 'Happiness', color: 'var(--chart-indigo)', data: agentHistory.map(h => h.happiness) },
                           ]}
                           xLabels={agentHistory.map(h => String(h.iter))}
                           height={160}

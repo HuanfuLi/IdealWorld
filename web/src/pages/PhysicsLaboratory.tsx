@@ -50,7 +50,7 @@ function DeltaBadge({ label, value, clamped }: { label: string; value: number; c
   return (
     <span className="text-sm" style={{
       display: 'inline-flex', alignItems: 'center', gap: 4,
-      background: `${color}22`, border: `1px solid ${clamped ? '#fbbf2499' : color + '66'}`,
+      background: `${color}22`, border: `1px solid ${clamped ? 'rgba(251,191,36,0.6)' : color + '66'}`,
       borderRadius: 6, padding: '3px 10px', color: clamped ? 'var(--warning)' : color,
       fontFamily: 'monospace',
     }}>
@@ -250,7 +250,7 @@ const PhysicsLaboratory: React.FC = () => {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
               {SKILL_NAMES.map(sk => (
                 <label key={sk} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', textTransform: 'capitalize' }}>{sk}</span>
+                  <span className="text-[0.68rem] capitalize" style={{ color: 'var(--text-dim)' }}>{sk}</span>
                   <input
                     type="number" min={1} max={100} value={skillLevels[sk] ?? 10}
                     onChange={e => updateSkill(sk, Number(e.target.value))}
@@ -442,9 +442,9 @@ const PhysicsLaboratory: React.FC = () => {
                 </div>
                 <LineChart
                   series={[
-                    { label: 'Avg Health', color: '#4ade80', data: sandboxData.iterations.map(d => d.avgHealth) },
-                    { label: 'Avg Happiness', color: '#c084fc', data: sandboxData.iterations.map(d => d.avgHappiness) },
-                    { label: 'Avg Cortisol', color: '#f87171', data: sandboxData.iterations.map(d => d.avgCortisol) },
+                    { label: 'Avg Health', color: 'var(--chart-green)', data: sandboxData.iterations.map(d => d.avgHealth) },
+                    { label: 'Avg Happiness', color: 'var(--chart-pink)', data: sandboxData.iterations.map(d => d.avgHappiness) },
+                    { label: 'Avg Cortisol', color: 'var(--chart-red)', data: sandboxData.iterations.map(d => d.avgCortisol) },
                   ]}
                   height={160}
                   xLabels={sandboxData.iterations.map((_, i) => String(i + 1))}
@@ -457,7 +457,7 @@ const PhysicsLaboratory: React.FC = () => {
                 </div>
                 <LineChart
                   series={[
-                    { label: 'Avg Wealth', color: '#60a5fa', data: sandboxData.iterations.map(d => d.avgWealth) },
+                    { label: 'Avg Wealth', color: 'var(--chart-blue)', data: sandboxData.iterations.map(d => d.avgWealth) },
                   ]}
                   height={160}
                   xLabels={sandboxData.iterations.map((_, i) => String(i + 1))}
@@ -470,7 +470,7 @@ const PhysicsLaboratory: React.FC = () => {
                 </div>
                 <LineChart
                   series={[
-                    { label: 'Spot Price', color: '#fb923c', data: sandboxData.iterations.map(d => d.spotPrice) },
+                    { label: 'Spot Price', color: 'var(--chart-coral)', data: sandboxData.iterations.map(d => d.spotPrice) },
                   ]}
                   height={160}
                   xLabels={sandboxData.iterations.map((_, i) => String(i + 1))}
@@ -483,7 +483,7 @@ const PhysicsLaboratory: React.FC = () => {
                 </div>
                 <LineChart
                   series={[
-                    { label: 'Allostatic Load', color: '#fbbf24', data: sandboxData.iterations.map(d => d.avgAllostaticLoad) },
+                    { label: 'Allostatic Load', color: 'var(--chart-yellow)', data: sandboxData.iterations.map(d => d.avgAllostaticLoad) },
                   ]}
                   height={160}
                   xLabels={sandboxData.iterations.map((_, i) => String(i + 1))}

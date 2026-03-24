@@ -43,6 +43,33 @@
   --chart-emerald: #34d399;
   --chart-coral: #fb923c;
   --chart-sky: #60a5fa;
+  --chart-yellow: #fbbf24;
+  --chart-indigo: #6366f1;
+  --chart-pink: #c084fc;
+  --chart-sapphire: #3b82f6;
+
+  /* Action-code semantic color tokens (mirrored by ACTION_COLORS in Simulation.tsx) */
+  --action-work: #10b981;
+  --action-work-enterprise: #059669;
+  --action-produce: #84cc16;
+  --action-buy: #d97706;
+  --action-sell: #b45309;
+  --action-job-offer: #92400e;
+  --action-found-enterprise: #7c3aed;
+  --action-apply: #2563eb;
+  --action-hire: #0f766e;
+  --action-fire: #b91c1c;
+  --action-quit: #9f1239;
+  --action-rest: #60a5fa;
+  --action-invest: #818cf8;
+  --action-strike: #f97316;
+  --action-steal: #ef4444;
+  --action-sabotage: #dc2626;
+  --action-help: #ec4899;
+  --action-embezzle: #c084fc;
+  --action-adjust-tax: #e879f9;
+  --action-suppress: #fb7185;
+  --action-none: #6b7280;
 }
 
 [data-theme="light"] {
