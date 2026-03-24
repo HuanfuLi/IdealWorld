@@ -5,6 +5,10 @@ import { useSimulationStore, type AgentIntentRecord } from '../stores/simulation
 import { useShallow } from 'zustand/react/shallow';
 import MarkdownText from '../components/MarkdownText';
 
+// Chart color tokens (kept in sync with --chart-* CSS variables in index.css)
+const CHART_ORANGE = '#f97316';
+const CHART_VIOLET = '#a78bfa';
+
 const Simulation = () => {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
@@ -257,7 +261,7 @@ const Simulation = () => {
             }}>
               <div style={{
                 width: '14px', height: '14px', borderRadius: '50%',
-                background: autoProceed ? '#fff' : 'var(--text-dim)',
+                background: autoProceed ? 'var(--color-bright)' : 'var(--text-dim)',
                 position: 'absolute', top: '1px',
                 left: autoProceed ? '16px' : '1px',
                 transition: 'left 0.2s ease, background 0.2s',
@@ -292,7 +296,7 @@ const Simulation = () => {
             }}>
               <div style={{
                 width: '14px', height: '14px', borderRadius: '50%',
-                background: earlyStoppingEnabled ? '#fff' : 'var(--text-dim)',
+                background: earlyStoppingEnabled ? 'var(--color-bright)' : 'var(--text-dim)',
                 position: 'absolute', top: '1px',
                 left: earlyStoppingEnabled ? '16px' : '1px',
                 transition: 'left 0.2s ease, background 0.2s',
@@ -391,7 +395,7 @@ const Simulation = () => {
                       </span>
                     )}
                   </h4>
-                  <p style={{ fontSize: '0.95rem', lineHeight: 1.5, color: '#e5e7eb' }}>
+                  <p style={{ fontSize: '0.95rem', lineHeight: 1.5, color: 'var(--text-main)' }}>
                     <MarkdownText>{entry.narrativeSummary}</MarkdownText>
                   </p>
                 </div>
@@ -400,7 +404,7 @@ const Simulation = () => {
             {isComplete && finalReport && (
               <div style={{ paddingLeft: '1rem', borderLeft: '2px solid var(--success)', marginTop: '0.5rem' }}>
                 <h4 style={{ fontSize: '0.9rem', color: 'var(--success)', marginBottom: '0.5rem' }}>Final Report</h4>
-                <div style={{ fontSize: '0.9rem', lineHeight: 1.6, color: '#e5e7eb' }}>
+                <div style={{ fontSize: '0.9rem', lineHeight: 1.6, color: 'var(--text-main)' }}>
                   <MarkdownText>{finalReport}</MarkdownText>
                 </div>
               </div>
@@ -447,7 +451,7 @@ const Simulation = () => {
                 {latestStats.avgCortisol !== undefined && (
                   <StatCard
                     label="Cortisol"
-                    color="#f97316"
+                    color={CHART_ORANGE}
                     icon={<Activity size={16} />}
                     avg={latestStats.avgCortisol}
                     history={statsHistory.map(s => s.avgCortisol ?? 0)}
@@ -456,7 +460,7 @@ const Simulation = () => {
                 {latestStats.avgDopamine !== undefined && (
                   <StatCard
                     label="Dopamine"
-                    color="#a78bfa"
+                    color={CHART_VIOLET}
                     icon={<Zap size={16} />}
                     avg={latestStats.avgDopamine}
                     history={statsHistory.map(s => s.avgDopamine ?? 0)}

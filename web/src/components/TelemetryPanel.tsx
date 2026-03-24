@@ -17,6 +17,16 @@ interface TelemetryLog {
   averageDopamine?: number;
 }
 
+// ── Chart color tokens (kept in sync with --chart-* CSS variables in index.css)
+const CHART_BLUE    = '#60a5fa';
+const CHART_ORANGE  = '#f97316';
+const CHART_GREEN   = '#4ade80';
+const CHART_TEAL    = '#2dd4bf';
+const CHART_RED     = '#f87171';
+const CHART_VIOLET  = '#a78bfa';
+const CHART_EMERALD = '#34d399';
+const CHART_CORAL   = '#fb923c';
+
 // ── SVGLineChart ─────────────────────────────────────────────────────────────
 
 interface SVGLineChartProps {
@@ -134,7 +144,7 @@ function SVGLineChart({
         <polyline
           points={points2}
           fill="none"
-          stroke={color2 ?? '#f97316'}
+          stroke={color2 ?? CHART_ORANGE}
           strokeWidth={1.5}
           strokeLinejoin="round"
           strokeLinecap="round"
@@ -160,8 +170,8 @@ function SVGLineChart({
       {/* Dots: first and last for series 2 */}
       {hasSeries2 && data2 && data2.length > 0 && (
         <>
-          <circle cx={toSvgX(data2[0].x)} cy={toSvgY2(data2[0].y)} r={3} fill={color2 ?? '#f97316'} />
-          <circle cx={toSvgX(data2[data2.length - 1].x)} cy={toSvgY2(data2[data2.length - 1].y)} r={3} fill={color2 ?? '#f97316'} />
+          <circle cx={toSvgX(data2[0].x)} cy={toSvgY2(data2[0].y)} r={3} fill={color2 ?? CHART_ORANGE} />
+          <circle cx={toSvgX(data2[data2.length - 1].x)} cy={toSvgY2(data2[data2.length - 1].y)} r={3} fill={color2 ?? CHART_ORANGE} />
         </>
       )}
 
@@ -179,11 +189,11 @@ function SVGLineChart({
       {hasSeries2 && !sharedYAxis && (
         <>
           <text x={paddingLeft + chartW + 6} y={paddingTop + 16}
-            fill={color2 ?? '#f97316'} fontSize={9} dominantBaseline="hanging">
+            fill={color2 ?? CHART_ORANGE} fontSize={9} dominantBaseline="hanging">
             {fmt(yMax2)}
           </text>
           <text x={paddingLeft + chartW + 6} y={paddingTop + chartH - 12}
-            fill={color2 ?? '#f97316'} fontSize={9} dominantBaseline="auto">
+            fill={color2 ?? CHART_ORANGE} fontSize={9} dominantBaseline="auto">
             {fmt(yMin2)}
           </text>
         </>
@@ -208,9 +218,9 @@ function SVGLineChart({
       {hasSeries2 && label2 && (
         <>
           <line x1={paddingLeft + 80} y1={paddingTop + 8} x2={paddingLeft + 96} y2={paddingTop + 8}
-            stroke={color2 ?? '#f97316'} strokeWidth={1.5} strokeDasharray="4,2" />
+            stroke={color2 ?? CHART_ORANGE} strokeWidth={1.5} strokeDasharray="4,2" />
           <text x={paddingLeft + 100} y={paddingTop + 8}
-            fill={color2 ?? '#f97316'} fontSize={9} dominantBaseline="middle">
+            fill={color2 ?? CHART_ORANGE} fontSize={9} dominantBaseline="middle">
             {label2}
           </text>
         </>
@@ -313,7 +323,7 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
     margin: 0,
     fontSize: '1.15rem',
     fontWeight: 700,
-    color: '#e2e8f0',
+    color: 'var(--text-main)',
     letterSpacing: '0.02em',
   };
 
@@ -321,7 +331,7 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
     background: 'rgba(255,255,255,0.08)',
     border: '1px solid rgba(255,255,255,0.15)',
     borderRadius: 8,
-    color: '#e2e8f0',
+    color: 'var(--text-main)',
     cursor: 'pointer',
     fontSize: '1.1rem',
     width: 34,
@@ -368,7 +378,7 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
 
   const tdStyle: React.CSSProperties = {
     padding: '8px 10px',
-    color: '#e2e8f0',
+    color: 'var(--text-main)',
     fontVariantNumeric: 'tabular-nums',
     fontFamily: 'monospace',
     fontSize: '0.82rem',
@@ -420,7 +430,7 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
               <div style={sectionTitleStyle}>Chart 1A — Fiat Supply</div>
               <SVGLineChart
                 data={fiatData}
-                color="#60a5fa"
+                color={CHART_BLUE}
                 label="Fiat Supply"
                 width={860}
                 height={170}
@@ -432,7 +442,7 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
               <div style={sectionTitleStyle}>Chart 1B — AMM Food Reserve</div>
               <SVGLineChart
                 data={foodReserveData}
-                color="#f97316"
+                color={CHART_ORANGE}
                 label="Food Reserve"
                 width={860}
                 height={170}
@@ -444,7 +454,7 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
               <div style={sectionTitleStyle}>Chart 2 — Food Price Action</div>
               <SVGLineChart
                 data={spotPriceData}
-                color="#4ade80"
+                color={CHART_GREEN}
                 label="AMM Spot Price (Food)"
                 width={860}
                 height={170}
@@ -456,10 +466,10 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
               <div style={sectionTitleStyle}>Chart 3 — Thermodynamic Balance</div>
               <SVGLineChart
                 data={calProducedData}
-                color="#2dd4bf"
+                color={CHART_TEAL}
                 label="Cal Produced"
                 data2={calBurnedData}
-                color2="#f87171"
+                color2={CHART_RED}
                 label2="Cal Burned"
                 sharedYAxis={true}
                 width={860}
@@ -473,7 +483,7 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
                 <div style={sectionTitleStyle}>Chart 4 — Wealth Inequality (Gini Coefficient)</div>
                 <SVGLineChart
                   data={logs.filter(l => l.giniCoefficient != null).map(l => ({ x: l.iterationNumber, y: l.giniCoefficient! }))}
-                  color="#a78bfa"
+                  color={CHART_VIOLET}
                   label="Gini (0=equal, 1=total inequality)"
                   width={860}
                   height={170}
@@ -487,10 +497,10 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
                 <div style={sectionTitleStyle}>Chart 5 — Social Trust vs Crime Rate</div>
                 <SVGLineChart
                   data={logs.filter(l => l.trustIndex != null).map(l => ({ x: l.iterationNumber, y: l.trustIndex! }))}
-                  color="#34d399"
+                  color={CHART_EMERALD}
                   label="Trust Index"
                   data2={logs.filter(l => l.crimeRate != null).map(l => ({ x: l.iterationNumber, y: l.crimeRate! }))}
-                  color2="#f87171"
+                  color2={CHART_RED}
                   label2="Crime Rate"
                   sharedYAxis={true}
                   width={860}
@@ -505,10 +515,10 @@ export default function TelemetryPanel({ sessionId, onClose }: TelemetryPanelPro
                 <div style={sectionTitleStyle}>Chart 6 — Population Psychology</div>
                 <SVGLineChart
                   data={logs.filter(l => l.averageCortisol != null).map(l => ({ x: l.iterationNumber, y: l.averageCortisol! }))}
-                  color="#fb923c"
+                  color={CHART_CORAL}
                   label="Avg Cortisol"
                   data2={logs.filter(l => l.averageDopamine != null).map(l => ({ x: l.iterationNumber, y: l.averageDopamine! }))}
-                  color2="#60a5fa"
+                  color2={CHART_BLUE}
                   label2="Avg Dopamine"
                   sharedYAxis={true}
                   width={860}
