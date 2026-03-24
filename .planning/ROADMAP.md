@@ -21,5 +21,5 @@
 **Plans:** 4 plans
 - [x] 03-01-PLAN.md — SFC & Accounting Core Hardening (completed 2026-03-24)
 - [x] 03-02-PLAN.md — Persistence & Reliability Foundations
-- [ ] 03-03-PLAN.md — SSE Synchronization & Store Cleanup
-- [ ] 03-04-PLAN.md — UI/UX Standardization & Cleanup
+- [x] 03-03-PLAN.md — SSE Synchronization & Store Cleanup (completed 2026-03-24)
+- [x] 03-04-PLAN.md — UI/UX Standardization & Cleanup (completed 2026-03-24)
