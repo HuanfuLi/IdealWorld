@@ -16,7 +16,7 @@
  */
 import { v4 as uuidv4 } from 'uuid';
 import { db, sqlite } from '../db/index.js';
-import { agentIntents, resolvedActions, iterations as iterationsTable } from '../db/schema.js';
+import { agentIntents, resolvedActions, iterations as iterationsTable, ammSnapshots as ammSnapshotsTable } from '../db/schema.js';
 import { asc, eq, sql } from 'drizzle-orm';
 import { agentRepo } from '../db/repos/agentRepo.js';
 import { sessionRepo } from '../db/repos/sessionRepo.js';
@@ -412,10 +412,14 @@ function distributeProRata(total: number, ratios: number[]): number[] {
 /**
  * MET-based weekly metabolism — replaces flat -1 food deduction.
  *
- * Satiety cost scales with the physical intensity of the agent's primary action:
- *   REST / cognitive actions: ~1 food/week
- *   WORK_MODERATE_MANUAL:     ~4.5 food/week
- *   WORK_HEAVY_MANUAL:        ~7.25 food/week
+ * Satiety cost is now aggregated across ALL actions in the agent's weekly queue
+ * (BUG-06 / REL-03).  Previously only the primary (first) action was billed,
+ * which under-charged agents that performed multiple high-intensity actions and
+ * broke the SFC food-supply balance.
+ *
+ *   REST / cognitive actions: ~1 food/week each
+ *   WORK_MODERATE_MANUAL:     ~4.5 food/week each
+ *   WORK_HEAVY_MANUAL:        ~7.25 food/week each
  *
  * Luxury goods are consumed here to reduce Cortisol before the starvation check.
  */
@@ -433,8 +437,7 @@ function applyMETMetabolism(
     state.events.push('Enjoyed luxury services — stress reduced');
   }
 
-  // ── Determine MET category from primary executed action ──────────────────
-  const primaryAction = state.executedActions[0]?.actionCode ?? 'NONE';
+  // ── Determine enterprise industry for MET lookup ─────────────────────────
   const enterpriseIndustry = (() => {
     const enterprises = getEnterpriseRegistry(sessionId);
     for (const ent of enterprises.values()) {
@@ -442,18 +445,31 @@ function applyMETMetabolism(
     }
     return undefined;
   })();
-  const metCategory = getMetCategory(primaryAction, agent.role, enterpriseIndustry);
 
-  // ── Compute MET satiety cost ─────────────────────────────────────────────
-  const metResult = runFullMetabolicTick({
-    cortisol: 0, // cortisol processed separately in allostatic loop
-    weightKg: agent.weightKg ?? 70,
-    age: agent.age ?? 35,
-    metCategory,
-    allostaticState: { allostaticStrain: 0, allostaticLoad: 0 }, // allostatic handled separately
-  });
+  // ── Aggregate MET satiety cost across ALL actions in the queue (BUG-06) ──
+  // If no actions were executed, fall back to a minimal REST-equivalent cost.
+  const actionsToMeter = state.executedActions.length > 0
+    ? state.executedActions
+    : [{ actionCode: 'NONE' as const }];
+
+  let totalSatietyCost = 0;
+  let primaryMetCategory = 'rest'; // for event logging
+  for (let i = 0; i < actionsToMeter.length; i++) {
+    const metCategory = getMetCategory(actionsToMeter[i].actionCode, agent.role, enterpriseIndustry);
+    if (i === 0) primaryMetCategory = metCategory;
+    const metResult = runFullMetabolicTick({
+      cortisol: 0, // cortisol processed separately in allostatic loop
+      weightKg: agent.weightKg ?? 70,
+      age: agent.age ?? 35,
+      metCategory,
+      allostaticState: { allostaticStrain: 0, allostaticLoad: 0 }, // allostatic handled separately
+    });
+    totalSatietyCost += metResult.satietyCost;
+  }
+
   // Use Math.round — ceil would charge agents up to 2× for fractional costs (e.g. 1.05 → 2).
-  const satietyCost = Math.max(1, Math.round(metResult.satietyCost));
+  const satietyCost = Math.max(1, Math.round(totalSatietyCost));
+  const metCategory = primaryMetCategory;
 
   // ── Fulfill metabolic demand: inventory first, then AMM auto-buy, then penalties ──
   // Order matters: attempt auto-buy BEFORE applying starvation penalties so agents
@@ -502,7 +518,7 @@ function applyMETMetabolism(
   if (foodToConsume <= 0) {
     // Fully fed
     const ammNote = foodFromAMM > 0 ? ', AMM top-up' : '';
-    state.events.push(`Consumed ${satietyCost} food (${metCategory}, ×${metResult.met.metMultiplier.toFixed(2)} MET${ammNote})`);
+    state.events.push(`Consumed ${satietyCost} food (${metCategory}×${actionsToMeter.length} actions${ammNote})`);
   } else if (foodToConsume < satietyCost) {
     // Partial nutrition — scale penalties to actual deficit fraction
     const deficitRatio = foodToConsume / satietyCost;
@@ -2731,23 +2747,9 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         await economyRepo.savePriceIndices(sessionId, iterNum, marketState.priceIndices);
       }
 
-      // ── Persist AMM state for SFC resilience across server restarts ───────
-      {
-        const ammToPersist = sessionAMMRegistry.get(sessionId);
-        const multiAMMsToPersist = sessionMultiAMMRegistry.get(sessionId);
-        if (ammToPersist) {
-          const multiRecord: Record<string, ReturnType<typeof ammToPersist.snapshot>> = {};
-          if (multiAMMsToPersist) {
-            for (const [itemType, pool] of multiAMMsToPersist) {
-              multiRecord[itemType] = pool.snapshot(iterNum);
-            }
-          }
-          await economyRepo.saveAMMSnapshot(sessionId, iterNum, ammToPersist.snapshot(iterNum), multiRecord, sessionStateTreasury.get(sessionId));
-          // Vacuum old snapshots every 10 iterations to reduce WAL write amplification.
-          // Retains decadal rows + the latest for crash recovery.
-          if (iterNum % 10 === 0) economyRepo.vacuumAMMSnapshots(sessionId);
-        }
-      }
+      // AMM snapshot is now committed atomically above with the iteration record.
+      // Vacuum old snapshots every 10 iterations to reduce WAL write amplification.
+      if (iterNum % 10 === 0) economyRepo.vacuumAMMSnapshots(sessionId);
 
       // Resolved-action rows are log data → enqueue for async flush
       const actionCols = ['id', 'session_id', 'agent_id', 'iteration_id', 'action', 'outcome', 'resolved_at'];
@@ -2819,22 +2821,59 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         return;
       }
 
-      // ── Persist iteration record ─────────────────────────────────────────
+      // ── Atomic iteration snapshot: iterations row + AMM state (BUG-05 / REL-02) ──
+      // Wrapping the iterationsTable insert and the AMM snapshot insert in a single
+      // sqlite transaction ensures that a crash between the two writes cannot leave
+      // the DB with a dangling iteration record but a stale AMM state, or vice versa.
       const stats = computeStats(agents, iterNum);
       // Embed telemetry in the statistics blob so it survives server restarts
       // and is available even when the in-memory map has been cleared.
       const statsWithTelemetry = iterTelemetry
         ? { ...stats, _telemetry: iterTelemetry }
         : stats;
-      await db.insert(iterationsTable).values({
-        id: iterationId,
-        sessionId,
-        iterationNumber: iterNum,
-        stateSummary: resolution.narrativeSummary,
-        statistics: JSON.stringify(statsWithTelemetry),
-        lifecycleEvents: JSON.stringify(resolution.lifecycleEvents),
-        timestamp: now,
-      });
+
+      // Build AMM snapshot values once (used inside the transaction)
+      const ammToPersistAtomic = sessionAMMRegistry.get(sessionId);
+      const multiAMMsToPersistAtomic = sessionMultiAMMRegistry.get(sessionId);
+      const ammSnapshotValues = ammToPersistAtomic
+        ? (() => {
+            const multiRecord: Record<string, ReturnType<typeof ammToPersistAtomic.snapshot>> = {};
+            if (multiAMMsToPersistAtomic) {
+              for (const [itemType, pool] of multiAMMsToPersistAtomic) {
+                multiRecord[itemType] = pool.snapshot(iterNum);
+              }
+            }
+            return {
+              id: uuidv4(),
+              sessionId,
+              iterationNumber: iterNum,
+              snapshotData: JSON.stringify({
+                primary: ammToPersistAtomic.snapshot(iterNum),
+                multi: multiRecord,
+                treasury: sessionStateTreasury.get(sessionId),
+              }),
+              timestamp: now,
+            };
+          })()
+        : null;
+
+      sqlite.transaction(() => {
+        // 1. Iteration record
+        db.insert(iterationsTable).values({
+          id: iterationId,
+          sessionId,
+          iterationNumber: iterNum,
+          stateSummary: resolution.narrativeSummary,
+          statistics: JSON.stringify(statsWithTelemetry),
+          lifecycleEvents: JSON.stringify(resolution.lifecycleEvents),
+          timestamp: now,
+        }).run();
+
+        // 2. AMM + Treasury snapshot (co-committed with the iteration row)
+        if (ammSnapshotValues) {
+          db.insert(ammSnapshotsTable).values(ammSnapshotValues).run();
+        }
+      })();
 
       summaries.push({ number: iterNum, summary: resolution.narrativeSummary });
       previousSummary = resolution.narrativeSummary;
