@@ -203,5 +203,25 @@ export function runMigrations() {
     sqlite.exec(`ALTER TABLE agents ADD COLUMN personality_traits TEXT NOT NULL DEFAULT '[]';`);
   } catch { /* column already exists */ }
 
+  // Order Book persistence: survive server restarts (REL-01 / BUG-02)
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS order_book (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      side TEXT NOT NULL,
+      item_type TEXT NOT NULL,
+      price REAL NOT NULL,
+      quantity INTEGER NOT NULL,
+      filled_quantity INTEGER NOT NULL DEFAULT 0,
+      iteration_placed INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_order_book_session_status
+      ON order_book(session_id, status);
+  `);
+
   console.log('Database migrations applied.');
 }

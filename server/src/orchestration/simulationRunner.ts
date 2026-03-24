@@ -54,7 +54,7 @@ import { type ActionCode, getAllowedActions, getRoleTier } from '../mechanics/ac
 import { clusterByRole } from './clustering.js';
 import { retryWithHealing } from '../llm/retryWithHealing.js';
 // Phase 1 Economy imports
-import { getOrderBook, clearOrderBook } from '../mechanics/orderBook.js';
+import { getOrderBook, clearOrderBook, restoreOrderBook, isOrderBookWarm } from '../mechanics/orderBook.js';
 import { economyRepo, type AgentEconomyState } from '../db/repos/economyRepo.js';
 import type { Agent, IterationStats, Inventory, ItemType, MarketState, PriceIndex, SkillMatrix, TelemetryLog } from '@idealworld/shared';
 import { DEFAULT_SKILL_MATRIX, DEFAULT_INVENTORY } from '@idealworld/shared';
@@ -1143,6 +1143,14 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         }
         sessionMultiAMMRegistry.set(sessionId, multiAMMs);
       }
+    }
+
+    // ── Order Book Restoration (REL-01 / BUG-02) ─────────────────────────
+    // Only restore from the DB if the in-memory registry is cold (new process /
+    // server restart).  If the registry is already warm the in-memory state is
+    // authoritative and DB re-loading would discard unperssited mid-iteration orders.
+    if (!isOrderBookWarm(sessionId)) {
+      restoreOrderBook(sessionId);
     }
 
     // Load previous summaries for final report if continuing

@@ -154,3 +154,25 @@ export const marketPrices = sqliteTable('market_prices', {
   volume: integer('volume').notNull().default(0),
 });
 
+/** Persists open (good-till-cancelled) orders in the Order Book across server restarts. */
+export const orderBook = sqliteTable('order_book', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  agentId: text('agent_id').notNull(),
+  /** 'buy' or 'sell'. */
+  side: text('side').notNull(),
+  /** Item type: food, tools, luxury_goods, raw_materials. */
+  itemType: text('item_type').notNull(),
+  /** Limit price in fiat. */
+  price: real('price').notNull(),
+  /** Original order quantity. */
+  quantity: integer('quantity').notNull(),
+  /** Quantity already filled (for partial fills). */
+  filledQuantity: integer('filled_quantity').notNull().default(0),
+  /** Iteration when the order was placed. */
+  iterationPlaced: integer('iteration_placed').notNull(),
+  /** 'open' | 'filled' | 'cancelled'. */
+  status: text('status').notNull().default('open'),
+  createdAt: text('created_at').notNull(),
+});
+
