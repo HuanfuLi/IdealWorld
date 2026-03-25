@@ -519,12 +519,15 @@ export function resolveActionQueue(input: PhysicsQueueInput): PhysicsQueueOutput
   // must NOT apply its own starvation penalty — that would cause double-counting.
   const foodConsumed = 0;
 
+  // NOTE: Individual resolveAction calls already clamp each delta to ±clampDeltaMax.
+  // Do NOT re-clamp the sum here — that would cap a 3-action queue to the same range
+  // as a single action, making multi-action queues pointless for stat accumulation.
   return {
-    wealthDelta: clampDelta(wealthDelta),
-    healthDelta: clampDelta(healthDelta),
-    happinessDelta: clampDelta(happinessDelta),
-    cortisolDelta: clampDelta(cortisolDelta),
-    dopamineDelta: clampDelta(dopamineDelta),
+    wealthDelta,
+    healthDelta,
+    happinessDelta,
+    cortisolDelta,
+    dopamineDelta,
     actionsAttempted: queue.length,
     actionsExecuted: executedActions.length,
     interrupted,

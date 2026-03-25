@@ -102,7 +102,7 @@ export function getRoleTier(role: string): RoleTier {
  * handled automatically by the Passive Metabolism system each iteration.
  */
 const BASE_ACTIONS: readonly ActionCode[] = [
-  'REST', 'PRODUCE_AND_SELL',
+  'WORK', 'REST', 'PRODUCE_AND_SELL',
   'POST_BUY_ORDER', 'POST_SELL_ORDER',
   'APPLY_FOR_JOB', 'WORK_AT_ENTERPRISE', 'QUIT_JOB',
   'STEAL', 'HELP', 'INVEST', 'NONE',

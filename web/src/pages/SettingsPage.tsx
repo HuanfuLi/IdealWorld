@@ -380,7 +380,7 @@ const SettingsPage = () => {
 
           {/* Vertex API note */}
           {provider === 'vertex' && (
-            <div style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.2)', padding: '1rem', borderRadius: '8px', color: '#93c5fd', display: 'flex', gap: '0.75rem', fontSize: '0.9rem', marginTop: '1rem' }}>
+            <div style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.2)', padding: '1rem', borderRadius: '8px', color: 'var(--color-info)', display: 'flex', gap: '0.75rem', fontSize: '0.9rem', marginTop: '1rem' }}>
               <Server size={20} style={{ flexShrink: 0 }} />
               <div>
                 <strong>Uses Application Default Credentials (ADC)</strong>. Configure via <code>gcloud auth application-default login</code> in your terminal. Project ID and Location will be inferred automatically if left blank.
@@ -535,7 +535,7 @@ const SettingsPage = () => {
             )}
           </div>
           <button className="btn-primary" onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving...' : 'Save Settings'}
+            {saving ? 'Applying...' : 'Apply Configuration'}
           </button>
         </div>
       </div>
@@ -587,7 +587,7 @@ const SettingsPage = () => {
               padding: '1rem 1.25rem',
               fontSize: '0.78rem',
               lineHeight: 1.65,
-              color: '#e2e8f0',
+              color: 'var(--text-main)',
 
               fontFamily: 'monospace',
               overflowX: 'auto',

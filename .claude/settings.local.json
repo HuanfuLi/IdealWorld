@@ -7,7 +7,10 @@
       "Bash(npm run:*)",
       "Bash(find:*)",
       "Bash(cmd /c \"npm run build -w server\" 2>&1)",
-      "Bash(cmd /c \"npm run build -w web\" 2>&1)"
+      "Bash(cmd /c \"npm run build -w web\" 2>&1)",
+      "Bash(grep:*)",
+      "Bash(grep -n \"#[0-9a-fA-F]\\\\{3,6\\\\}\" \"/c/Users/16079/Code/IdealWorld/web/src/pages/Simulation.tsx\")",
+      "Skill(gsd:execute-phase)"
     ]
   }
 }

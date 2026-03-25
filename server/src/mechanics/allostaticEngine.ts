@@ -252,8 +252,6 @@ export interface AllostaticTickInput {
    * this engine does NOT generate Cortisol, only responds to it.
    */
   cortisol: number;
-  /** Prior allostatic state (restored from DB or initialised). */
-  state: AllostaticState;
   /**
    * D2: Current dopamine level (0–100).
    * When ≤ 30, adds +4 cortisol feedback (anhedonia→anxiety loop):
@@ -443,7 +441,7 @@ export function runFullMetabolicTick(input: FullMetabolicTickInput): FullMetabol
 
   // Task 2: Allostatic load pipeline
   const engine = new AllostaticEngine(input.allostaticState);
-  const allostatic = engine.tick({ cortisol: input.cortisol, state: input.allostaticState });
+  const allostatic = engine.tick({ cortisol: input.cortisol });
 
   return {
     satietyCost: met.satietyCost,

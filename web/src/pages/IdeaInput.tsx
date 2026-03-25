@@ -45,7 +45,7 @@ const IdeaInput = () => {
           fontSize: '3rem',
           fontWeight: 'bold',
           marginBottom: '1rem',
-          background: 'linear-gradient(135deg, var(--color-bright) 0%, #4f46e5 100%)',
+          background: 'linear-gradient(135deg, var(--color-bright) 0%, var(--primary) 100%)',
           WebkitBackgroundClip: 'text',
           WebkitTextFillColor: 'transparent',
           display: 'flex',
