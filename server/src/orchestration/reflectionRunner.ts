@@ -71,6 +71,15 @@ export async function runReflection(sessionId: string): Promise<void> {
         const { pass1 } = parseAgentReflection(raw);
         pass1Map.set(agent.id, pass1);
 
+        // Broadcast BEFORE DB insert — frontend always receives pass1 even if DB fails
+        reflectionManager.broadcast(sessionId, {
+          type: 'agent-reflection',
+          pass: 1,
+          agentId: agent.id,
+          agentName: agent.name,
+          content: pass1,
+        });
+
         await db.insert(reflections).values({
           id: uuidv4(),
           sessionId,
@@ -80,18 +89,22 @@ export async function runReflection(sessionId: string): Promise<void> {
           createdAt: new Date().toISOString(),
         });
 
-        reflectionManager.broadcast(sessionId, {
-          type: 'agent-reflection',
-          pass: 1,
-          agentId: agent.id,
-          agentName: agent.name,
-          content: pass1,
-        });
-
         return { agentName: agent.name, role: agent.role, pass1 };
       } catch {
-        const fallback = `As ${agent.name}, I lived through this society and experienced its challenges firsthand.`;
-        pass1Map.set(agent.id, fallback);
+        // Use actual pass1 from map if LLM succeeded but DB failed; else use fallback
+        const existingPass1 = pass1Map.get(agent.id);
+        const fallback = existingPass1 ?? `As ${agent.name}, I lived through this society and experienced its challenges firsthand.`;
+        if (!existingPass1) {
+          // LLM failed — set fallback in map and broadcast it so the agent appears on frontend
+          pass1Map.set(agent.id, fallback);
+          reflectionManager.broadcast(sessionId, {
+            type: 'agent-reflection',
+            pass: 1,
+            agentId: agent.id,
+            agentName: agent.name,
+            content: fallback,
+          });
+        }
         return { agentName: agent.name, role: agent.role, pass1: fallback };
       }
     });
@@ -158,6 +171,15 @@ export async function runReflection(sessionId: string): Promise<void> {
         const raw = await citizenProv.chat(messages, { model: settings.citizenAgentModel });
         const { pass2 } = parseAgentReflection2(raw);
 
+        // Broadcast BEFORE DB insert — frontend always receives pass2 even if DB fails
+        reflectionManager.broadcast(sessionId, {
+          type: 'agent-reflection',
+          pass: 2,
+          agentId: agent.id,
+          agentName: agent.name,
+          content: pass2,
+        });
+
         // Store pass2 as a second reflection entry with insights field marking it
         await db.insert(reflections).values({
           id: uuidv4(),
@@ -166,14 +188,6 @@ export async function runReflection(sessionId: string): Promise<void> {
           content: pass2,
           insights: 'pass2',
           createdAt: new Date().toISOString(),
-        });
-
-        reflectionManager.broadcast(sessionId, {
-          type: 'agent-reflection',
-          pass: 2,
-          agentId: agent.id,
-          agentName: agent.name,
-          content: pass2,
         });
       } catch { /* skip pass2 for this agent */ }
     });
