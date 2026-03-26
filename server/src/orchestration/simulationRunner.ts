@@ -492,13 +492,19 @@ function applyMETMetabolism(
     const ammForAutoEat = sessionAMMRegistry.get(sessionId);
     if (ammForAutoEat) {
       const availableWealth = agent.currentWealth + state.wealthDelta;
-      // Attempt full purchase; fall back to maximum buyable if AMM reserves are insufficient.
-      const requestedUnits = foodToConsume;
       const maxBuyable = ammForAutoEat.maxBuyableFood();
-      const unitsToAttempt = ammForAutoEat.fiatCostForFood(requestedUnits) !== null
-        ? requestedUnits
-        : Math.min(requestedUnits, maxBuyable);
-      if (unitsToAttempt > 0) {
+
+      // Cascading fallback: try decreasing amounts until one is affordable and executable.
+      // This prevents starvation when the agent has some wealth but can't afford full need.
+      const amountsToTry = [
+        foodToConsume,                          // First: full request
+        Math.min(foodToConsume, maxBuyable),    // Second: limited by AMM reserves
+        Math.max(0.5, maxBuyable * 0.5),        // Third: half of max available
+        maxBuyable * 0.25,                      // Fourth: quarter
+        0.1,                                    // Fifth: tiny amount
+      ].filter((amt, idx, arr) => arr.indexOf(amt) === idx && amt > 0);
+
+      for (const unitsToAttempt of amountsToTry) {
         const fiatCost = ammForAutoEat.fiatCostForFood(unitsToAttempt);
         if (fiatCost !== null && availableWealth >= fiatCost) {
           const receipt = ammForAutoEat.executeBuy(fiatCost, iterationNumber);
@@ -508,6 +514,7 @@ function applyMETMetabolism(
             state.wealthDelta -= fiatCost;
             foodToConsume = Math.max(0, foodToConsume - foodFromAMM);
             state.events.push(`Auto-bought ${foodFromAMM.toFixed(1)} food from AMM for ${fiatCost.toFixed(1)} fiat (metabolic need)`);
+            break;  // CRITICAL: exit on first success to prevent multi-purchase
           }
         }
       }

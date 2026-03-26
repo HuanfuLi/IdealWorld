@@ -45,6 +45,8 @@
  * STANDALONE: Do NOT import simulationRunner.ts. Integration is deferred.
  */
 
+import { distributeProRata } from '@idealworld/shared';
+
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 /** Demurrage tax rate per macro-cycle. */
@@ -531,15 +533,22 @@ export function computeDemurrageCycle(
     taxPoolCollected += tax;
   }
 
-  // Step 2: Compute UBI per agent from the redistributable pool
+  // Step 2: Compute UBI per agent from the redistributable pool (integer-safe)
   const redistributablePool = taxPoolCollected * Math.min(1, Math.max(0, ubiAllocation));
-  const ubiPerAgent = redistributablePool / livingAgentCount;
+  // Use floor to get an integer pool, then distribute remainder fairly via pro-rata
+  const totalPoolInt = Math.floor(redistributablePool);
+  const weights = agents.map(() => 1);  // Equal weights: each living agent gets one share
+  const ubiShares = distributeProRata(totalPoolInt, weights);  // Sums exactly to totalPoolInt
+  // ubiPerAgent for interface compat: average share (may be fractional for display only)
+  const ubiPerAgent = livingAgentCount > 0 ? totalPoolInt / livingAgentCount : 0;
 
   // Step 3: Compute net delta per agent (UBI received − tax paid)
   const netDeltas = new Map<string, number>();
-  for (const agent of agents) {
+  for (let i = 0; i < agents.length; i++) {
+    const agent = agents[i];
     const tax = taxMap.get(agent.agentId) ?? 0;
-    netDeltas.set(agent.agentId, ubiPerAgent - tax);
+    const ubiReceived = ubiShares[i] ?? 0;
+    netDeltas.set(agent.agentId, ubiReceived - tax);
   }
 
   return {

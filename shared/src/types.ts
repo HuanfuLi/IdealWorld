@@ -429,3 +429,5 @@ export {
   ITEM_PROPERTIES,
 } from './economyTypes.js';
 
+export { distributeProRata } from './math.js';
+
