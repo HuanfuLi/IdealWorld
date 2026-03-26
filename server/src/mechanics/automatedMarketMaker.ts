@@ -527,8 +527,8 @@ export function computeDemurrageCycle(
   const taxMap = new Map<string, number>();
 
   for (const agent of agents) {
-    // Tax cannot exceed agent's total wealth (no negative balance from tax)
-    const tax = Math.min(agent.wealth, agent.wealth * taxRate);
+    // Since taxRate ∈ [0, 1], agent.wealth * taxRate ≤ agent.wealth always (no clamp needed)
+    const tax = agent.wealth * taxRate;
     taxMap.set(agent.agentId, tax);
     taxPoolCollected += tax;
   }

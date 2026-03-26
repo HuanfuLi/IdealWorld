@@ -258,6 +258,11 @@ export interface AllostaticTickInput {
    * chronic low-reward state amplifies stress, modelling poverty/disengagement.
    */
   dopamine?: number;
+  /**
+   * Guard flag: set to true if dopamine feedback was already applied this iteration
+   * (e.g., in a retry scenario). Prevents indefinite stacking of the cortisol bonus.
+   */
+  dopamineFeedbackApplied?: boolean;
 }
 
 export interface AllostaticTickOutput {
@@ -311,12 +316,17 @@ export class AllostaticEngine {
    * PURE COMPUTATION per call — mutation is isolated to this instance.
    */
   tick(input: AllostaticTickInput): AllostaticTickOutput {
-    const { cortisol, dopamine } = input;
+    const { cortisol, dopamine, dopamineFeedbackApplied } = input;
 
     // D2: Dopamine anhedonia feedback — low drive amplifies cortisol.
     // When an agent is chronically under-rewarded (dopamine ≤ 30), their
     // stress system remains elevated even without external stressors.
-    const effectiveCortisol = (dopamine !== undefined && dopamine <= 30)
+    // Guard: skip if already applied this iteration to prevent stacking in retries.
+    const effectiveCortisol = (
+      !dopamineFeedbackApplied &&
+      dopamine !== undefined &&
+      dopamine <= 30
+    )
       ? Math.min(100, cortisol + 4)
       : cortisol;
 
@@ -346,8 +356,9 @@ export class AllostaticEngine {
     let healthDelta = 0;
     if (loadOverDiseaseThreshold) {
       healthDelta = -((this.load - physicsConfig.loadDiseaseThreshold) * physicsConfig.healthDecayRate);
-      // Floor at -2 per tick to prevent single-tick death from extreme load
-      healthDelta = Math.max(-2, healthDelta);
+      // Clamp to [-100, 0]: upper bound prevents positive healing from stress,
+      // lower bound prevents single-tick death even at extreme allostatic load
+      healthDelta = Math.max(-100, Math.min(0, healthDelta));
     }
 
     return {
