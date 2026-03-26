@@ -467,8 +467,9 @@ function applyMETMetabolism(
     totalSatietyCost += metResult.satietyCost;
   }
 
-  // Use Math.round — ceil would charge agents up to 2× for fractional costs (e.g. 1.05 → 2).
-  const satietyCost = Math.max(1, Math.round(totalSatietyCost));
+  // Keep fractional — rounding here destroys 0.1-0.3 fiat per agent per iteration.
+  // Math.ceil would charge agents up to 2× for fractional costs (e.g. 1.05 → 2).
+  const satietyCost = Math.max(1, totalSatietyCost);
   const metCategory = primaryMetCategory;
 
   // ── Fulfill metabolic demand: inventory first, then AMM auto-buy, then penalties ──
@@ -2660,7 +2661,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
 
         iterTelemetry = {
           iterationNumber: iterNum,
-          totalFiatSupply: Math.round(totalFiatSupply),
+          totalFiatSupply: totalFiatSupply,  // Unrounded for SFC accuracy
+          totalFiatSupplyRounded: Math.round(totalFiatSupply),  // Rounded for UI display
           ammFoodReserve_Y: Math.round((sessionAMMForTelemetry?.currentFoodReserve ?? 0) * 100) / 100,
           ammFiatReserve_X: Math.round(sessionAMMForTelemetry?.currentFiatReserve ?? 0),
           ammSpotPrice_Food: Math.round((sessionAMMForTelemetry?.spotPrice ?? 0) * 100) / 100,

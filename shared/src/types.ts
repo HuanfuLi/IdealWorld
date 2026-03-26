@@ -226,8 +226,10 @@ export interface ComparisonResult {
  */
 export interface TelemetryLog {
   iterationNumber: number;
-  /** Sum of all living agent wealth + AMM fiat reserve */
+  /** Sum of all living agent wealth + AMM fiat reserve (unrounded for SFC accuracy) */
   totalFiatSupply: number;
+  /** totalFiatSupply rounded for UI display only — do not use in SFC calculations */
+  totalFiatSupplyRounded?: number;
   /** AMM food reserve (Y in x·y=k) */
   ammFoodReserve_Y: number;
   /** AMM fiat reserve (X in x·y=k) */
