@@ -533,10 +533,10 @@ export function computeDemurrageCycle(
     taxPoolCollected += tax;
   }
 
-  // Step 2: Compute UBI per agent from the redistributable pool (integer-safe)
+  // Step 2: Compute UBI per agent from the redistributable pool
   const redistributablePool = taxPoolCollected * Math.min(1, Math.max(0, ubiAllocation));
-  // Use floor to get an integer pool, then distribute remainder fairly via pro-rata
-  const totalPoolInt = Math.floor(redistributablePool);
+  // Keep fractional — distributeProRata handles fractional totals correctly, no remainder is lost
+  const totalPoolInt = redistributablePool;
   const weights = agents.map(() => 1);  // Equal weights: each living agent gets one share
   const ubiShares = distributeProRata(totalPoolInt, weights);  // Sums exactly to totalPoolInt
   // ubiPerAgent for interface compat: average share (may be fractional for display only)
