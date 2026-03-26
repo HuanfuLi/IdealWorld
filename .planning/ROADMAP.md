@@ -40,7 +40,7 @@
 
 **Impact:** Fixes will restore SFC invariant, preventing 60-120% economy loss over 100 iterations.
 
-**Plans:** 2 plans
+**Plans:** 3 plans
 - [x] 04-01-PLAN.md — SFC Critical Fixes & Math Utility (completed 2026-03-25)
   - Task 0: Create distributeProRata() utility (prerequisite)
   - Tasks 1-3: Fix critical SFC violations (BUG-01, BUG-02, BUG-03)
@@ -50,3 +50,29 @@
   - Task 0: Install Vitest + configure test runner
   - Tasks 1-3: Create unit tests, SFC audit, edge case tests
   - Task 4: Execute full test suite and validate (20 tests, 0 failures)
+- [x] 04-03-PLAN.md — Hidden Rounding Elimination (completed 2026-03-25)
+  - Task 0: Remove Math.round() from satiety costs and SFC telemetry (BUG-07a, BUG-07b)
+  - Task 1: Remove Math.floor() from UBI pool (BUG-07c; Math.floor retained — distributeProRata integer constraint)
+  - Task 2: Audit and annotate display rounding separation
+  - Task 3: Create sfc-unrounded.test.ts with 6 invariant tests (26 total, all passing)
+
+**NEW DISCOVERY:** After 04-01/04-02 execution, 500 fiat leaked in iteration 1 due to hidden rounding in intermediate calculations (not just the original 6 bugs). Plan 04-03 fixes this systemic rounding issue.
+
+---
+
+## Phase 5: Complete Rounding Elimination & SFC Precision Hardening
+
+**Goal:** Eliminate all rounding from economic calculation paths. Phase 4 fixed visible bugs but left systematic rounding that masks incremental fiat losses. 500 fiat leaked in iteration 1 due to Math.round() on SFC telemetry plus precision loss in satiety, UBI, and wage calculations. Complete overhaul to separate "calculation precision" (fractional) from "display rounding" (UI only).
+
+**Requirements:**
+- **ROUND-01:** Remove Math.round() from SFC telemetry line 2663 (masks drift detection)
+- **ROUND-02:** Use fractional satiety costs (line 471, prevents 5+ fiat loss/iteration)
+- **ROUND-03:** Distribute fractional UBI remainder (line 539, prevents 10+ fiat loss/iteration)
+- **ROUND-04:** Verify wage payment truncation doesn't lose fiat (line 2029-2038)
+- **ROUND-05:** Verify AMM food floor doesn't violate invariant (line 844/884)
+- **ROUND-06:** Audit display rounding is truly display-only (lines 151-153, 2565)
+- **ROUND-07:** Create comprehensive SFC test tracking unrounded fiat to ±$0.001 tolerance
+
+**Impact:** Eliminates systematic fiat leakage from rounding. Restores SFC invariant to true zero-sum (within machine epsilon).
+
+**Plans:** (Not yet created - awaiting user approval to proceed with implementation)
