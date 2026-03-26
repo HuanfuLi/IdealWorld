@@ -148,6 +148,7 @@ function computeStats(agents: Agent[], iterationNumber: number): IterationStats 
   const dopArr = alive.map(a => a.currentStats.dopamine ?? 0);
   return {
     iterationNumber,
+    // Display rounding only; underlying wealth preserved unrounded in agent.currentStats.wealth
     avgWealth: Math.round(wArr.reduce((s, v) => s + v, 0) / alive.length),
     avgHealth: Math.round(hArr.reduce((s, v) => s + v, 0) / alive.length),
     avgHappiness: Math.round(hapArr.reduce((s, v) => s + v, 0) / alive.length),
@@ -2562,7 +2563,8 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       {
         const totalWorked = [...weekStateMap.values()].filter(ws => ws.workedEnterpriseId !== null).length;
         const unemployedAgents = aliveAgents.filter(a => !employmentRegistry.has(a.id));
-        const avgUnemployedWealth = unemployedAgents.length > 0
+        // Display rounding only; underlying agent wealth remains unrounded
+      const avgUnemployedWealth = unemployedAgents.length > 0
           ? Math.round(unemployedAgents.reduce((s, a) => s + a.currentStats.wealth, 0) / unemployedAgents.length)
           : 0;
         const bankruptcyNote = bankruptciesThisIter > 0
