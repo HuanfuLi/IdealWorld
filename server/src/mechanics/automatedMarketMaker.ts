@@ -82,6 +82,8 @@ export interface DemurrageResult {
   netDeltas: Map<string, number>;
   /** Total fiat collected as tax. */
   taxPoolCollected: number;
+  /** Fractional amount left undistributed after flooring the UBI pool to an integer. */
+  ubiFractionalRemainder: number;
   /** UBI per agent paid out. */
   ubiPerAgent: number;
   /** Number of living agents in the cycle. */
@@ -517,6 +519,7 @@ export function computeDemurrageCycle(
     return {
       netDeltas: new Map(),
       taxPoolCollected: 0,
+      ubiFractionalRemainder: 0,
       ubiPerAgent: 0,
       livingAgentCount: 0,
     };
@@ -539,6 +542,7 @@ export function computeDemurrageCycle(
   // The sub-unit fractional remainder stays in the tax pool (treasury) — not lost, just not redistributed.
   // distributeProRata(fractional) creates fiat (floor-loop overruns) and must not receive fractional input.
   const totalPoolInt = Math.floor(redistributablePool);
+  const ubiFractionalRemainder = redistributablePool - totalPoolInt;
   const weights = agents.map(() => 1);  // Equal weights: each living agent gets one share
   const ubiShares = distributeProRata(totalPoolInt, weights);  // Sums exactly to totalPoolInt
   // ubiPerAgent for interface compat: average share (may be fractional for display only)
@@ -556,6 +560,7 @@ export function computeDemurrageCycle(
   return {
     netDeltas,
     taxPoolCollected,
+    ubiFractionalRemainder,
     ubiPerAgent,
     livingAgentCount,
   };

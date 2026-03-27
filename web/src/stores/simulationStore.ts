@@ -418,7 +418,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
     });
     if (!res.ok) {
       set({ error: `Continue failed: ${res.status}`, isComplete: true });
-      return;
+      return () => {};
     }
     return get().connectSSE(sessionId);
   },

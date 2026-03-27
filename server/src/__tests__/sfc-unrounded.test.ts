@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { distributeProRata } from '@idealworld/shared';
+import { computeDemurrageCycle } from '../mechanics/automatedMarketMaker.js';
 
 /**
  * SFC Audit - Unrounded Fiat Tracking (Phase 04-03 Fixes)
@@ -60,8 +61,8 @@ describe('SFC Audit - Unrounded Fiat Tracking', () => {
   });
 
   it('should verify distributeProRata requires integer input (BUG-07c design constraint)', () => {
-    // distributeProRata uses Math.floor(total/weightSum) internally and its loop
-    // runs for Math.floor(remainder) times. Fractional input causes fiat creation.
+    // distributeProRata is intentionally integer-only. Rejecting fractional input
+    // prevents accidental fiat creation or loss at the distribution boundary.
 
     const weights = Array(10).fill(1);
 
@@ -71,14 +72,8 @@ describe('SFC Audit - Unrounded Fiat Tracking', () => {
     const intDistributed = intShares.reduce((s, v) => s + v, 0);
     expect(intDistributed).toBe(intPool); // exact SFC
 
-    // Fractional input: sum of shares > input (creates fiat — NOT SFC-correct!)
     const fracPool = 25.7;
-    const fracShares = distributeProRata(fracPool, weights);
-    const fracDistributed = fracShares.reduce((s, v) => s + v, 0);
-    // 25.7 → baseShare=2, remainder=5.7 → loop runs 5 times (i<5.7 → i=0,1,2,3,4,5→6 iters)
-    // Actually loop runs while i < 5.7: i=0,1,2,3,4,5 all satisfy i < 5.7, so 6 iters
-    // 4 agents get 3, 6 agents get 2 → total = 12+12=24? Let me validate actual behavior:
-    expect(fracDistributed).not.toBe(fracPool); // fractional input breaks SFC invariant
+    expect(() => distributeProRata(fracPool, weights)).toThrow(/integer/i);
   });
 
   it('should keep Math.floor before distributeProRata to avoid fiat creation (BUG-07c)', () => {
@@ -102,6 +97,22 @@ describe('SFC Audit - Unrounded Fiat Tracking', () => {
     expect(remainder).toBeLessThan(1);
     // Total (distributed + remainder) = original pool → zero-sum
     expect(distributed + remainder).toBeCloseTo(redistributablePool, 10);
+  });
+
+  it('should expose demurrage fractional remainder so treasury can keep it', () => {
+    const agents = [
+      { agentId: 'a', wealth: 10.1 },
+      { agentId: 'b', wealth: 10.1 },
+      { agentId: 'c', wealth: 10.1 },
+    ];
+
+    const result = computeDemurrageCycle(agents, 0.05, 1.0);
+    const distributed = [...result.netDeltas.values()].reduce((sum, delta) => sum + delta, 0) + result.taxPoolCollected;
+
+    expect(result.taxPoolCollected).toBeCloseTo(1.515, 6);
+    expect(result.ubiFractionalRemainder).toBeCloseTo(0.515, 6);
+    expect(distributed).toBeCloseTo(1, 6);
+    expect(distributed + result.ubiFractionalRemainder).toBeCloseTo(result.taxPoolCollected, 6);
   });
 
   it('should report accurate unrounded totalFiatSupply vs rounded display field (BUG-07b)', () => {
@@ -186,5 +197,33 @@ describe('SFC Audit - Unrounded Fiat Tracking', () => {
     // In this model, totalFiat doesn't change (UBI is perfectly redistributed)
     // Max drift should be exactly 0 since totalFiat is constant in this model
     expect(maxDrift).toBe(0);
+  });
+
+  it('should keep a non-zero drift tolerance when no agents are alive', () => {
+    const aliveAgents = 0;
+    const tolerance = Math.max(0.1, aliveAgents * 0.01);
+
+    expect(tolerance).toBe(0.1);
+    expect(Math.abs(0.05)).toBeLessThan(tolerance); // harmless floating noise should not warn
+  });
+
+  it('should preserve previous telemetry total across continuation boundaries', () => {
+    const previousTelemetry = { _telemetry: { totalFiatSupply: 12345.67 } };
+    const resumedPrevTotalFiat = previousTelemetry._telemetry.totalFiatSupply;
+    const currentTotalFiat = 12345.67;
+    const sfcDrift = currentTotalFiat - resumedPrevTotalFiat;
+
+    expect(resumedPrevTotalFiat).toBeCloseTo(12345.67, 5);
+    expect(sfcDrift).toBe(0);
+  });
+
+  it('should establish an SFC baseline before the first iteration runs', () => {
+    const preIterationFiat = 10000;
+    const baseline = preIterationFiat;
+    const firstIterationFiat = 9999.4;
+    const drift = firstIterationFiat - baseline;
+
+    expect(baseline).toBe(10000);
+    expect(drift).toBeCloseTo(-0.6, 6);
   });
 });

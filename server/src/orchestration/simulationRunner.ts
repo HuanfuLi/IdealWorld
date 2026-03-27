@@ -239,6 +239,25 @@ const sessionStateTreasury = new Map<string, number>();
 // D4: Last iteration's physics trace log — injected into next iteration's resolution prompt.
 const sessionLastPhysicsTraces = new Map<string, string>();
 
+function computeSystemFiatTotal(
+  agents: Agent[],
+  primaryAMM: AutomatedMarketMaker | undefined,
+  multiAMMs: Map<MultiAMMItemType, AutomatedMarketMaker> | undefined,
+  treasury: number,
+  wealthOverrides?: Map<string, number>,
+): number {
+  const agentFiat = agents
+    .filter(agent => agent.isAlive)
+    .reduce((sum, agent) => sum + (wealthOverrides?.get(agent.id) ?? agent.currentStats.wealth), 0);
+  const multiAMMFiat = multiAMMs
+    ? [...multiAMMs.values()].reduce((sum, pool) => sum + pool.currentFiatReserve, 0)
+    : 0;
+  return agentFiat
+    + (primaryAMM?.currentFiatReserve ?? 0)
+    + multiAMMFiat
+    + treasury;
+}
+
 /**
  * Returns the telemetry log array for a session.
  *
@@ -1183,6 +1202,7 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       const prevIters = await db.select({
         iterationNumber: iterationsTable.iterationNumber,
         stateSummary: iterationsTable.stateSummary,
+        statistics: iterationsTable.statistics,
       }).from(iterationsTable)
         .where(eq(iterationsTable.sessionId, sessionId))
         .orderBy(asc(iterationsTable.iterationNumber));
@@ -1192,7 +1212,33 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       // Set previousSummary to last existing iteration's summary
       if (prevIters.length > 0) {
         previousSummary = prevIters[prevIters.length - 1].stateSummary;
+        try {
+          const prevStats = JSON.parse(prevIters[prevIters.length - 1].statistics) as { _telemetry?: TelemetryLog };
+          sfcPrevTotalFiat = prevStats._telemetry?.totalFiatSupply ?? null;
+        } catch {
+          sfcPrevTotalFiat = null;
+        }
+        try {
+          const firstStats = JSON.parse(prevIters[0].statistics) as { _telemetry?: TelemetryLog };
+          const baselineFiat = firstStats._telemetry?.totalFiatSupply;
+          if (baselineFiat !== undefined) {
+            sessionSFCTracking.set(sessionId, { initialFiat: baselineFiat });
+          }
+        } catch {
+          // Fall back to runtime baseline below if historical telemetry is unavailable.
+        }
       }
+    }
+
+    if (!sessionSFCTracking.has(sessionId)) {
+      sessionSFCTracking.set(sessionId, {
+        initialFiat: computeSystemFiatTotal(
+          agents,
+          sessionAMMRegistry.get(sessionId),
+          sessionMultiAMMRegistry.get(sessionId),
+          sessionStateTreasury.get(sessionId) ?? 0,
+        ),
+      });
     }
 
     // Snapshot economy state for controlled variable locking (skills/inventory)
@@ -2260,12 +2306,15 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           }
         }
         // SFC fix: When ubiAllocation < 1.0, the un-redistributed portion of the tax
-        // pool would vanish from the economy. Route it to the treasury instead.
-        if (sessionPolicy.ubi_allocation < 1.0) {
-          const unredistributed = demurrage.taxPoolCollected * (1 - Math.min(1, Math.max(0, sessionPolicy.ubi_allocation)));
-          if (unredistributed > 0) {
+        // pool would vanish from the economy. The floored UBI pool also leaves a
+        // sub-unit remainder that must stay in treasury rather than disappear.
+        {
+          const clampedUbiAllocation = Math.min(1, Math.max(0, sessionPolicy.ubi_allocation));
+          const unredistributed = demurrage.taxPoolCollected * (1 - clampedUbiAllocation);
+          const treasuryCredit = unredistributed + demurrage.ubiFractionalRemainder;
+          if (treasuryCredit > 0) {
             const treasury = sessionStateTreasury.get(sessionId) ?? 0;
-            sessionStateTreasury.set(sessionId, treasury + unredistributed);
+            sessionStateTreasury.set(sessionId, treasury + treasuryCredit);
           }
         }
       }
@@ -2500,16 +2549,17 @@ export async function runSimulation(sessionId: string, totalIterations: number):
         if (survivorUpdates.length > 0) {
           // BUG-12/14 fix: Use distributeProRata for integer-safe equal distribution
           // to prevent float drift (e.g., 100 / 3 = 33.33... × 3 = 99.999...).
+          const integerPool = Math.floor(seizedWealthPool);
+          const fractionalRemainder = seizedWealthPool - integerPool;
           const equalShares = distributeProRata(
-            Math.floor(seizedWealthPool),
+            integerPool,
             survivorUpdates.map(() => 1),
           );
-          // Fractional remainder (seizedWealthPool - Math.floor(seizedWealthPool))
-          // is too small to matter SFC-wise; route to first survivor.
+          // Preserve the fractional remainder by routing it to the first survivor.
           const seizedUBI = seizedWealthPool / survivorUpdates.length; // for display only
           for (let i = 0; i < survivorUpdates.length; i++) {
             const update = survivorUpdates[i];
-            const share = equalShares[i] ?? 0;
+            const share = (equalShares[i] ?? 0) + (i === 0 ? fractionalRemainder : 0);
             update.wealth = clampWealth(update.wealth + share);
             const actionRow = actionRowByAgentId.get(update.id);
             if (actionRow?.outcome) {
@@ -2532,6 +2582,11 @@ export async function runSimulation(sessionId: string, totalIterations: number):
             narrativeSummary: `⚖️ State enforcement: ${seizedWealthPool.toFixed(1)} fiat redistributed equally among ${survivorUpdates.length} survivors (+${seizedUBI.toFixed(1)}/citizen).`,
             lifecycleEvents: [],
           });
+        } else {
+          // If everyone died this iteration, keep confiscated fiat in the treasury
+          // rather than dropping it from the closed-loop economy.
+          const treasury = sessionStateTreasury.get(sessionId) ?? 0;
+          sessionStateTreasury.set(sessionId, treasury + seizedWealthPool);
         }
       }
 
@@ -2616,13 +2671,15 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       {
         const sessionAMMForTelemetry = sessionAMMRegistry.get(sessionId);
         const multiAMMsForTelemetry = sessionMultiAMMRegistry.get(sessionId);
-        const multiAMMFiatTotal = multiAMMsForTelemetry
-          ? [...multiAMMsForTelemetry.values()].reduce((sum, pool) => sum + pool.currentFiatReserve, 0)
-          : 0;
-        const totalFiatSupply = statUpdates.reduce((sum, u) => sum + u.wealth, 0)
-          + (sessionAMMForTelemetry?.currentFiatReserve ?? 0)
-          + multiAMMFiatTotal
-          + (sessionStateTreasury.get(sessionId) ?? 0);
+        const treasury = sessionStateTreasury.get(sessionId) ?? 0;
+        const finalWealthByAgentId = new Map(statUpdates.map(update => [update.id, update.wealth]));
+        const totalFiatSupply = computeSystemFiatTotal(
+          agents,
+          sessionAMMForTelemetry,
+          multiAMMsForTelemetry,
+          treasury,
+          finalWealthByAgentId,
+        );
         const totalCaloriesBurned = [...weekStateMap.values()].reduce((sum, ws) => sum + ws.caloriesBurned, 0);
         const totalCaloriesProduced = [...weekStateMap.values()].reduce((sum, ws) => sum + ws.caloriesProduced, 0);
         const totalFailedActions = [...weekStateMap.values()].reduce((sum, ws) => sum + ws.failedActionCount, 0);
@@ -2679,12 +2736,11 @@ export async function runSimulation(sessionId: string, totalIterations: number):
           averageDopamine,
         };
         // Phase A: SFC drift check — warn if unaccounted fiat appears or disappears.
-        // Tolerance is ±0.01 per agent per iteration to absorb minimal IEEE-754 rounding.
+        // Keep a floor tolerance so extinction or tiny populations do not generate
+        // meaningless warnings from sub-cent floating-point noise.
         if (sfcPrevTotalFiat !== null) {
           const sfcDrift = totalFiatSupply - sfcPrevTotalFiat;
-          const tolerance = aliveAgents.length * 0.01;
-          // Only flag unexpected drift — legitimate fiat growth from WORK wages is much larger,
-          // so we bound by a fraction of per-agent rounding budget, not absolute change.
+          const tolerance = Math.max(0.1, aliveAgents.length * 0.01);
           if (Math.abs(sfcDrift) > tolerance) {
             const agentNote = aliveAgents.length === 0 ? 'with 0 alive agents' : `with ${aliveAgents.length} alive agents`;
             console.warn(`[SFC] iter=${iterNum}: drift=${sfcDrift.toFixed(6)} ${agentNote} — possible unaccounted fiat creation or destruction`);
@@ -2781,13 +2837,12 @@ export async function runSimulation(sessionId: string, totalIterations: number):
       {
         const sfcAMM = sessionAMMRegistry.get(sessionId);
         const sfcMultiAMMs = sessionMultiAMMRegistry.get(sessionId);
-        const sfcMultiAMMFiat = sfcMultiAMMs
-          ? [...sfcMultiAMMs.values()].reduce((sum, pool) => sum + pool.currentFiatReserve, 0)
-          : 0;
-        const sfcActual = agents.filter(a => a.isAlive).reduce((sum, a) => sum + a.currentStats.wealth, 0)
-          + (sfcAMM?.currentFiatReserve ?? 0)
-          + sfcMultiAMMFiat
-          + (sessionStateTreasury.get(sessionId) ?? 0);
+        const sfcActual = computeSystemFiatTotal(
+          agents,
+          sfcAMM,
+          sfcMultiAMMs,
+          sessionStateTreasury.get(sessionId) ?? 0,
+        );
 
         let sfcEntry = sessionSFCTracking.get(sessionId);
         if (!sfcEntry) {

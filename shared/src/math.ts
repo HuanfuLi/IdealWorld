@@ -4,34 +4,45 @@
  */
 
 /**
- * Distribute an integer total fairly across recipients, preserving exactly
- * the total by distributing remainder to the first N recipients.
+ * Distribute an integer total across recipients in proportion to `weights`.
  *
- * Example: distributeProRata(100, [1, 1, 1]) returns [34, 33, 33]
- *   Base share: 100 / 3 = 33.333...
- *   Floor shares: [33, 33, 33] = 99
- *   Remainder: 100 - 99 = 1
- *   Distribute remainder to first agent: [34, 33, 33] ✓
+ * Each recipient first receives the floored weighted share, then any remainder
+ * is distributed one unit at a time from left to right. This guarantees:
+ *   1. sum(shares) === total
+ *   2. no recipient receives more than one unit above its floored weighted share
  *
- * @param total - Total fiat to distribute (must be integer)
- * @param weights - Array of numeric weights (all >= 1)
+ * Example: distributeProRata(100, [3, 1, 1]) returns [60, 20, 20]
+ *
+ * @param total - Total fiat to distribute (must be a non-negative integer)
+ * @param weights - Array of non-negative numeric weights
  * @returns Array of integer shares, one per weight, summing to total
  */
 export function distributeProRata(total: number, weights: number[]): number[] {
   if (weights.length === 0) return [];
+  if (!Number.isFinite(total) || total < 0) {
+    throw new Error('distributeProRata total must be a non-negative finite number');
+  }
+  if (!Number.isInteger(total)) {
+    throw new Error('distributeProRata total must be an integer');
+  }
   if (total === 0) return weights.map(() => 0);
 
-  // Sum weights to compute base share
-  const weightSum = weights.reduce((a, b) => a + b, 0);
-  const baseShare = Math.floor(total / weightSum);
+  const sanitizedWeights = weights.map(weight => {
+    if (!Number.isFinite(weight) || weight < 0) {
+      throw new Error('distributeProRata weights must be non-negative finite numbers');
+    }
+    return weight;
+  });
 
-  // Allocate base share to each recipient
-  const shares = weights.map(() => baseShare);
+  const weightSum = sanitizedWeights.reduce((a, b) => a + b, 0);
+  if (weightSum === 0) return weights.map(() => 0);
 
-  // Distribute remainder fairly: one unit to the first N recipients
-  const remainder = total - baseShare * weightSum;
-  for (let i = 0; i < remainder; i++) {
-    shares[i % weights.length]++;
+  const shares = sanitizedWeights.map(weight => Math.floor(total * (weight / weightSum)));
+  let remainder = total - shares.reduce((sum, share) => sum + share, 0);
+
+  for (let i = 0; i < shares.length && remainder > 0; i++) {
+    shares[i]++;
+    remainder--;
   }
 
   return shares;

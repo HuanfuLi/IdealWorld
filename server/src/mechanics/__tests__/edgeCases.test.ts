@@ -33,6 +33,16 @@ describe('Edge Cases - BUG-02, BUG-03, BUG-05, BUG-06', () => {
       expect(ubiShares[2]).toBe(33);
       expect(ubiShares.reduce((a, b) => a + b, 0)).toBe(100);
     });
+
+    it('should honor unequal weights without losing fiat', () => {
+      const shares = distributeProRata(100, [3, 1, 1]);
+      expect(shares).toEqual([60, 20, 20]);
+      expect(shares.reduce((a, b) => a + b, 0)).toBe(100);
+    });
+
+    it('should reject fractional totals instead of minting or leaking fiat', () => {
+      expect(() => distributeProRata(25.7, [1, 1, 1])).toThrow(/integer/i);
+    });
   });
 
   describe('BUG-03: Zero-Wealth Starvation Cascade', () => {
